@@ -1,0 +1,3 @@
+# Byte fidelity matters here: assets/ must stay identical to the Go project
+# and goldens are hashed. Never let Git convert line endings.
+* -text
