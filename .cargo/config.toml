@@ -1,0 +1,5 @@
+# cmake 4.x removed compatibility with CMake < 3.5; the libopus bundled in
+# audiopus_sys still declares an older minimum. This is the documented
+# escape hatch and only affects vendored C builds.
+[env]
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"

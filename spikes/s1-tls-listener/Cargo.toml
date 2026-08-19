@@ -1,0 +1,21 @@
+[package]
+name = "s1-tls-listener"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wirepod-proto = { path = "../../crates/wirepod-proto" }
+tokio = { version = "1", features = ["full"] }
+tonic = "0.12"
+axum = "0.7"
+tower = { version = "0.4", features = ["util"] }
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http = "1"
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
+rustls-pemfile = "2"
+tokio-stream = "0.1"
+futures-util = "0.3"
+mdns-sd = "0.11"

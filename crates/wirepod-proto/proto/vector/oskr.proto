@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package Anki.Vector.oskr;
+
+option go_package = "github.com/fforchino/vector-go-sdk-oskrpb-extensions/pkg/oskrpb";
+
+service OSKRService {
+  rpc GetWifiSignalStrength (WifiSignalStrengthRequest) returns (WifiSignalStrengthResponse);
+}
+
+message WifiSignalStrengthRequest {
+}
+
+message WifiSignalStrengthResponse {
+  int32 signal_strength = 1;
+}
