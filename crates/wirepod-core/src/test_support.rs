@@ -9,11 +9,12 @@
 //! `eventReceiver` interface (`server.go:637`) and the `enableImageStreaming`
 //! function variable (`server.go:670`).
 
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use crate::robot::conn::{
@@ -21,6 +22,7 @@ use crate::robot::conn::{
     FrameOutcome, FrameSink, FrameStream, ProtocolResult, ProtocolVerdict, RobotConn,
     RobotConnFactory, StatusCode, StimEvent,
 };
+use crate::robot::meter::CamMeter;
 
 /// One call a [`FakeRobotConn`] recorded.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -470,11 +472,68 @@ impl FakeFrameStreamHandle {
     }
 }
 
+/// One recorded camera call, stamped with its position in the fake's shared
+/// order counter.
+///
+/// The stamp is what lets a test place a call against something that is not a
+/// call, through [`RecordingCamera::stamp`]: the interesting question in a
+/// handoff is whether the replacement's enable was still in flight when the
+/// departing handler queued its release, and neither of those is visible in a
+/// list of flags alone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CameraCall {
+    /// The flag the caller passed.
+    pub on: bool,
+    /// Where this call sits in the fake's order counter.
+    pub order: u64,
+}
+
+/// A one-shot hold on the fake's next enable call.
+///
+/// The camera announces that it has arrived and then waits to be let go, so a
+/// test can park a handler inside the RPC while it holds the camera operation
+/// lock. Both halves store their permit, so neither side has to reach its await
+/// first.
+#[derive(Clone, Debug)]
+pub struct CameraGate {
+    entered: Arc<Notify>,
+    released: Arc<Notify>,
+}
+
+impl CameraGate {
+    fn new() -> Self {
+        Self {
+            entered: Arc::new(Notify::new()),
+            released: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Resolves once the gated call has arrived.
+    pub async fn wait_entered(&self) {
+        self.entered.notified().await;
+    }
+
+    /// Lets the gated call carry on.
+    pub fn release(&self) {
+        self.released.notify_one();
+    }
+}
+
 struct CameraState {
-    calls: Vec<bool>,
+    calls: Vec<CameraCall>,
+    next_order: u64,
+    enable_gate: Option<CameraGate>,
     enable_delay: Duration,
     disable_delay: Duration,
     result: Result<(), ConnError>,
+}
+
+impl CameraState {
+    fn stamp(&mut self) -> u64 {
+        let order = self.next_order;
+        self.next_order += 1;
+        order
+    }
 }
 
 /// A [`CameraControl`] that records the on and off calls in the order they
@@ -502,11 +561,29 @@ impl RecordingCamera {
         Self {
             state: Arc::new(Mutex::new(CameraState {
                 calls: Vec::new(),
+                next_order: 0,
+                enable_gate: None,
                 enable_delay: Duration::ZERO,
                 disable_delay: Duration::ZERO,
                 result: Ok(()),
             })),
         }
+    }
+
+    /// Holds the next enable call until the returned gate releases it.
+    ///
+    /// Exactly one call is held, so a later enable runs normally. A gate that is
+    /// never released is how a test drives the enable deadline.
+    pub fn arm_enable_gate(&self) -> CameraGate {
+        let gate = CameraGate::new();
+        self.lock().enable_gate = Some(gate.clone());
+        gate
+    }
+
+    /// Takes the next number in the same order counter the calls are stamped
+    /// from, so a test can place its own event among them.
+    pub fn stamp(&self) -> u64 {
+        self.lock().stamp()
     }
 
     /// Makes an enable take `delay` before it is recorded.
@@ -530,14 +607,19 @@ impl RecordingCamera {
         self
     }
 
-    /// The recorded calls, in the order they landed.
+    /// The flags of the recorded calls, in the order they landed.
     pub fn calls(&self) -> Vec<bool> {
+        self.lock().calls.iter().map(|call| call.on).collect()
+    }
+
+    /// The recorded calls with their order stamps.
+    pub fn call_log(&self) -> Vec<CameraCall> {
         self.lock().calls.clone()
     }
 
     /// The flag of the call that landed last, if any.
     pub fn last_call(&self) -> Option<bool> {
-        self.lock().calls.last().copied()
+        self.lock().calls.last().map(|call| call.on)
     }
 
     fn lock(&self) -> MutexGuard<'_, CameraState> {
@@ -548,19 +630,26 @@ impl RecordingCamera {
 #[async_trait]
 impl CameraControl for RecordingCamera {
     async fn enable_image_streaming(&self, on: bool) -> Result<(), ConnError> {
-        let delay = {
-            let state = self.lock();
-            if on {
+        let (delay, gate) = {
+            let mut state = self.lock();
+            let delay = if on {
                 state.enable_delay
             } else {
                 state.disable_delay
-            }
+            };
+            let gate = if on { state.enable_gate.take() } else { None };
+            (delay, gate)
         };
+        if let Some(gate) = gate {
+            gate.entered.notify_one();
+            gate.released.notified().await;
+        }
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;
         }
         let mut state = self.lock();
-        state.calls.push(on);
+        let order = state.stamp();
+        state.calls.push(CameraCall { on, order });
         state.result.clone()
     }
 }
@@ -568,6 +657,10 @@ impl CameraControl for RecordingCamera {
 #[derive(Debug, Default)]
 struct SinkState {
     frames: Vec<Vec<u8>>,
+    outcomes: Vec<FrameOutcome>,
+    scripted: VecDeque<FrameOutcome>,
+    meter: Option<Arc<CamMeter>>,
+    readings: Vec<(u64, u64)>,
     closed: bool,
 }
 
@@ -595,29 +688,70 @@ impl RecordingSink {
             SinkLog { state },
         )
     }
+
+    /// Records what `meter` reads at the moment each frame is handed over.
+    ///
+    /// This is how a test sees that the pump counts a frame before the sink ever
+    /// touches it, which is the ordering Go relies on at `server.go:770-776`.
+    #[must_use]
+    pub fn watching(self, meter: Arc<CamMeter>) -> Self {
+        self.state
+            .lock()
+            .expect("recording sink mutex poisoned")
+            .meter = Some(meter);
+        self
+    }
 }
 
 #[async_trait]
 impl FrameSink for RecordingSink {
     async fn send(&mut self, jpeg: &[u8]) -> FrameOutcome {
         let mut state = self.state.lock().expect("recording sink mutex poisoned");
-        if state.closed {
+        let outcome = if state.closed {
+            FrameOutcome::Closed
+        } else {
+            state.scripted.pop_front().unwrap_or(FrameOutcome::Sent)
+        };
+        if outcome == FrameOutcome::Closed {
+            state.closed = true;
             return FrameOutcome::Closed;
         }
+        if let Some(reading) = state.meter.as_ref().map(|meter| meter.read()) {
+            state.readings.push(reading);
+        }
         state.frames.push(jpeg.to_vec());
-        FrameOutcome::Sent
+        state.outcomes.push(outcome);
+        outcome
     }
 }
 
 impl SinkLog {
-    /// Every frame written so far.
+    /// Every frame handed to the sink so far, including the ones it reported as
+    /// skipped, because a skipped frame did reach the sink and only produced
+    /// nothing on the wire.
     pub fn frames(&self) -> Vec<Vec<u8>> {
         self.lock().frames.clone()
     }
 
-    /// How many frames have been written.
+    /// How many frames have been handed over.
     pub fn frame_count(&self) -> usize {
         self.lock().frames.len()
+    }
+
+    /// What the sink answered for each of those frames.
+    pub fn outcomes(&self) -> Vec<FrameOutcome> {
+        self.lock().outcomes.clone()
+    }
+
+    /// What the watched meter read as each frame was handed over.
+    pub fn readings(&self) -> Vec<(u64, u64)> {
+        self.lock().readings.clone()
+    }
+
+    /// Queues the answer for one later frame, in order. Frames past the end of
+    /// the queue are sent normally.
+    pub fn script(&self, outcome: FrameOutcome) {
+        self.lock().scripted.push_back(outcome);
     }
 
     /// Makes every later send report [`FrameOutcome::Closed`].

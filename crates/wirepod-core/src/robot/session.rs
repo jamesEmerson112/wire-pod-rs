@@ -9,8 +9,16 @@
 //! Both wrap a [`std::sync::Mutex`] and are `Send + Sync`. No method awaits, no
 //! method takes a closure, and every method returns owned values, so a guard has
 //! nowhere to escape to.
+//!
+//! [`SdkSession`] is the per-robot record those two hang off, together with the
+//! camera operation lock the guard in [`crate::robot::cam`] holds across the
+//! settle and the enable RPC.
 
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
+
+use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
+use tokio_util::sync::CancellationToken;
 
 use crate::esn::Generation;
 
@@ -26,8 +34,16 @@ pub struct CamOwner {
 struct CamState {
     last_issued: Generation,
     /// The registry entry: `Some` while some handler owns the feed.
-    current: Option<Generation>,
+    current: Option<CamEntry>,
     streaming: bool,
+}
+
+/// The owning handler's generation and the token that stops it, which is Go's
+/// `camStream{gen, cancel}` (`robot.go:39-45`).
+#[derive(Debug)]
+struct CamEntry {
+    generation: Generation,
+    cancel: CancellationToken,
 }
 
 impl CamOwner {
@@ -38,17 +54,22 @@ impl CamOwner {
 
     /// Makes the caller the owner, displacing any previous one.
     ///
-    /// Returns the new generation and whether a live owner was displaced. The
-    /// caller pays the settle only when it displaced someone, because the robot
+    /// Returns the new generation and the displaced owner's cancellation token,
+    /// which the caller cancels once this lock is gone. Handing the token back
+    /// rather than a bare "someone was displaced" flag is what keeps the read of
+    /// the previous owner inside the same critical section as the claim, exactly
+    /// as `claimCamStream` reads `prev` under `robotsMu` and cancels it after
+    /// the unlock (`robot.go:105-116`). Reading the previous owner in a second
+    /// call would let two claims race and cancel each other's replacement.
+    ///
+    /// A returned token also means the caller pays the settle, because the robot
     /// needs a moment to drop the camera feed that was just cancelled.
-    /// Cancelling the displaced owner is the caller's job and arrives with the
-    /// camera guard in C6.
-    pub fn claim(&self) -> (Generation, bool) {
+    pub fn claim(&self, cancel: CancellationToken) -> (Generation, Option<CancellationToken>) {
         let mut state = self.lock();
-        let displaced = state.current.is_some();
+        let displaced = state.current.take().map(|entry| entry.cancel);
         let generation = state.last_issued.next();
         state.last_issued = generation;
-        state.current = Some(generation);
+        state.current = Some(CamEntry { generation, cancel });
         state.streaming = true;
         (generation, displaced)
     }
@@ -58,7 +79,7 @@ impl CamOwner {
     /// turns the camera off underneath the handler that displaced it.
     pub fn release(&self, generation: Generation) -> bool {
         let mut state = self.lock();
-        if state.current != Some(generation) {
+        if state.current.as_ref().map(|entry| entry.generation) != Some(generation) {
             return false;
         }
         state.current = None;
@@ -66,13 +87,24 @@ impl CamOwner {
         true
     }
 
-    /// Clears the streaming flag but keeps the owner entry.
+    /// Clears the streaming flag and cancels the owner, but keeps the entry.
     ///
     /// This mirrors `stopCamStream` (`robot.go:136-144`), which deliberately
     /// does not delete the registry entry: the departing handler's own release
     /// is what deletes it and issues the disable, under the operation lock.
+    /// Clearing the flag alone would not end the feed, because a handler only
+    /// samples it after a receive returns and a robot sending no frames never
+    /// returns one, so the token is cancelled too. The cancel happens once the
+    /// state lock is released, as Go cancels after its unlock.
     pub fn stop(&self) {
-        self.lock().streaming = false;
+        let owner = {
+            let mut state = self.lock();
+            state.streaming = false;
+            state.current.as_ref().map(|entry| entry.cancel.clone())
+        };
+        if let Some(cancel) = owner {
+            cancel.cancel();
+        }
     }
 
     /// Whether a feed is marked as running.
@@ -82,7 +114,7 @@ impl CamOwner {
 
     /// The generation that currently owns the feed, if any.
     pub fn current(&self) -> Option<Generation> {
-        self.lock().current
+        self.lock().current.as_ref().map(|entry| entry.generation)
     }
 
     fn lock(&self) -> MutexGuard<'_, CamState> {
@@ -232,6 +264,77 @@ impl EventOwner {
     fn lock(&self) -> MutexGuard<'_, EventState> {
         // Poisoning is ignored, for the reason given on `CamOwner::lock`.
         self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// Everything the SDK app keeps per robot for the duration of a connection.
+///
+/// The two ownership state machines are synchronous, so a handler can read them
+/// without a runtime. The camera operation lock is the one piece that has to be
+/// asynchronous, because it is genuinely held across the settle and the enable
+/// RPC exactly as Go holds a `sync.Mutex` across the same work
+/// (`server.go:684-695`, `server.go:700-707`).
+///
+/// Lock order is fixed: the camera operation lock first, ownership state second.
+/// Nothing here takes the ownership lock before the operation lock, which is the
+/// rule Go writes out at `robot.go:64-66`.
+#[derive(Debug)]
+pub struct SdkSession {
+    /// Camera ownership, preemptive.
+    pub cam: CamOwner,
+    /// Stim stream ownership, exclusive. The receive loop takes an `Arc` of it
+    /// into its own task, so it is shared rather than owned inline.
+    pub events: Arc<EventOwner>,
+    cam_op: AsyncMutex<()>,
+    last_touch: Mutex<Instant>,
+}
+
+impl Default for SdkSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SdkSession {
+    /// A session for a robot that has just connected.
+    pub fn new() -> Self {
+        Self {
+            cam: CamOwner::new(),
+            events: Arc::new(EventOwner::new()),
+            cam_op: AsyncMutex::new(()),
+            last_touch: Mutex::new(Instant::now()),
+        }
+    }
+
+    /// Marks the robot as used now, which is what resets the idle timer.
+    ///
+    /// The sweeper that reads this arrives with the registry, and so does the
+    /// injectable clock; until then the reading is a plain [`Instant`].
+    pub fn touch(&self) {
+        *self.lock_touch() = Instant::now();
+    }
+
+    /// When the robot was last used.
+    pub fn last_touch(&self) -> Instant {
+        *self.lock_touch()
+    }
+
+    /// Takes this robot's camera operation lock.
+    ///
+    /// Held across "claim ownership and turn the camera on" and across "give
+    /// ownership back and turn the camera off", so a departing handler's disable
+    /// cannot land between a replacement's claim and its enable and leave the
+    /// camera off under a live feed (`robot.go:52-61`). One lock per robot, so
+    /// an unresponsive robot cannot stall another robot's camera.
+    pub(crate) async fn lock_cam_op(&self) -> AsyncMutexGuard<'_, ()> {
+        self.cam_op.lock().await
+    }
+
+    fn lock_touch(&self) -> MutexGuard<'_, Instant> {
+        // Poisoning is ignored, for the reason given on `CamOwner::lock`.
+        self.last_touch
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }

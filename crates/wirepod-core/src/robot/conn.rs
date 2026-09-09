@@ -323,6 +323,13 @@ pub struct CameraFrame {
 pub enum FrameOutcome {
     /// The frame was written.
     Sent,
+    /// The frame could not be turned into a part and nothing was written, but
+    /// the feed is healthy and the pump carries on. This is Go's `continue` on
+    /// an undecodable image (`server.go:777-782`), which is a crash fix: a
+    /// truncated frame used to reach the encoder as a nil image and panic the
+    /// process. The frame is still counted by the meter, because it crossed the
+    /// wire.
+    Skipped,
     /// The client is gone; the pump should stop.
     Closed,
 }

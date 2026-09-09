@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 
+use tokio_util::sync::CancellationToken;
 use wirepod_core::{CamOwner, Esn, EventOwner, Generation};
 
 #[test]
@@ -26,9 +27,9 @@ fn the_first_issued_generation_is_one_and_generations_order() {
     assert!(Generation::first() < Generation::first().next());
 
     let cam = CamOwner::new();
-    let (first, _) = cam.claim();
+    let (first, _) = cam.claim(CancellationToken::new());
     assert_eq!(first, Generation::first());
-    let (second, _) = cam.claim();
+    let (second, _) = cam.claim(CancellationToken::new());
     assert_eq!(second, first.next());
 
     let events = EventOwner::new();

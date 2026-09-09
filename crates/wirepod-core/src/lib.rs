@@ -1,7 +1,7 @@
 //! Core domain state for the wire-pod SDK app: robot identity, the injectable
 //! timing constants, Go-compatible number formatting, the robot seam, the
-//! per-robot stream ownership state machines, the stim receive loop and the
-//! never-pruned camera meters.
+//! per-robot stream ownership state machines, the stim receive loop, the camera
+//! guard and frame pump, and the never-pruned camera meters.
 //!
 //! The seam in [`robot::conn`] is expressed in domain types, so this crate
 //! depends on neither `wirepod-proto` nor tonic. `wirepod-vector` implements it
@@ -28,10 +28,10 @@ pub mod timings;
 pub use crate::esn::{Esn, Generation};
 pub use crate::gofmt::{GoJsonError, go_format_f32, go_json_f64};
 pub use crate::robot::{
-    BatteryLevel, BatteryReading, CamMeter, CamMeters, CamOwner, CameraControl, CameraFrame,
-    ConnError, ConnTarget, EVENT_CONNECTION_ID, EVENT_WHITELIST, EventItem, EventLoopExit,
-    EventOwner, EventReceiver, FrameOutcome, FrameSink, FrameStream, ProtocolResult,
-    ProtocolVerdict, RobotConn, RobotConnFactory, StatusCode, StimEvent, StimSample,
-    run_event_stream,
+    BatteryLevel, BatteryReading, CamGuard, CamMeter, CamMeters, CamOwner, CameraControl,
+    CameraFrame, ConnError, ConnTarget, EVENT_CONNECTION_ID, EVENT_WHITELIST, EventItem,
+    EventLoopExit, EventOwner, EventReceiver, FrameOutcome, FrameSink, FrameStream, ProtocolResult,
+    ProtocolVerdict, PumpExit, RobotConn, RobotConnFactory, SdkSession, StatusCode, StimEvent,
+    StimSample, cam_stream_pump, run_event_stream, start_cam_stream,
 };
 pub use crate::timings::Timings;
