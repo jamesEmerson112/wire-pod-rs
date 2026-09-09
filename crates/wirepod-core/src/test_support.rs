@@ -53,6 +53,7 @@ type FrameStreamResult = Result<Box<dyn FrameStream>, ConnError>;
 
 struct FakeRobotState {
     battery: Result<BatteryReading, ConnError>,
+    battery_delay: Duration,
     protocol: Result<ProtocolVerdict, ConnError>,
     event_streams: Vec<ReceiverResult>,
     camera_feeds: Vec<FrameStreamResult>,
@@ -82,6 +83,7 @@ impl FakeRobotConn {
         Self {
             state: Mutex::new(FakeRobotState {
                 battery: Ok(BatteryReading::default()),
+                battery_delay: Duration::ZERO,
                 protocol: Ok(ProtocolVerdict {
                     result: ProtocolResult::Success,
                     host_version: 0,
@@ -98,6 +100,17 @@ impl FakeRobotConn {
     #[must_use]
     pub fn with_battery(self, battery: Result<BatteryReading, ConnError>) -> Self {
         self.lock().battery = battery;
+        self
+    }
+
+    /// Makes `battery_state` take `delay` before it answers.
+    ///
+    /// A delay no test can afford to wait out is how a robot that is powered
+    /// off but whose IP still routes is driven: Go's connect-time liveness
+    /// check has no deadline, so it hangs there forever (`robot.go:365`).
+    #[must_use]
+    pub fn with_battery_delay(self, delay: Duration) -> Self {
+        self.lock().battery_delay = delay;
         self
     }
 
@@ -155,9 +168,15 @@ impl CameraControl for FakeRobotConn {
 #[async_trait]
 impl RobotConn for FakeRobotConn {
     async fn battery_state(&self) -> Result<BatteryReading, ConnError> {
-        let mut state = self.lock();
-        state.calls.push(RobotCall::BatteryState);
-        state.battery.clone()
+        let delay = {
+            let mut state = self.lock();
+            state.calls.push(RobotCall::BatteryState);
+            state.battery_delay
+        };
+        if !delay.is_zero() {
+            tokio::time::sleep(delay).await;
+        }
+        self.lock().battery.clone()
     }
 
     async fn protocol_version(
@@ -199,9 +218,48 @@ impl RobotConn for FakeRobotConn {
     }
 }
 
+/// A one-shot hold on the next call of some kind.
+///
+/// The held call announces that it has arrived and then waits to be let go, so
+/// a test can park a caller inside an RPC or a dial while it holds a lock. Both
+/// halves store their permit, so neither side has to reach its await first.
+#[derive(Clone, Debug)]
+pub struct Gate {
+    entered: Arc<Notify>,
+    released: Arc<Notify>,
+}
+
+/// The name the camera fakes have always used for a [`Gate`].
+pub type CameraGate = Gate;
+
+impl Gate {
+    fn new() -> Self {
+        Self {
+            entered: Arc::new(Notify::new()),
+            released: Arc::new(Notify::new()),
+        }
+    }
+
+    /// Resolves once the gated call has arrived.
+    pub async fn wait_entered(&self) {
+        self.entered.notified().await;
+    }
+
+    /// Lets the gated call carry on.
+    pub fn release(&self) {
+        self.released.notify_one();
+    }
+
+    async fn pass(&self) {
+        self.entered.notify_one();
+        self.released.notified().await;
+    }
+}
+
 struct FakeFactoryState {
     result: Result<Arc<dyn RobotConn>, ConnError>,
     targets: Vec<ConnTarget>,
+    gate: Option<Gate>,
 }
 
 /// A [`RobotConnFactory`] that hands out one configured connection, or fails,
@@ -217,6 +275,7 @@ impl FakeConnFactory {
             state: Mutex::new(FakeFactoryState {
                 result: Ok(conn),
                 targets: Vec::new(),
+                gate: None,
             }),
         }
     }
@@ -228,8 +287,21 @@ impl FakeConnFactory {
             state: Mutex::new(FakeFactoryState {
                 result: Err(err),
                 targets: Vec::new(),
+                gate: None,
             }),
         }
+    }
+
+    /// Holds the next dial until the returned gate releases it.
+    ///
+    /// Exactly one dial is held, so a dial for another serial runs normally
+    /// while the held one is parked. That is what makes the per-serial connect
+    /// lock observable: the second caller for the held serial waits, and a
+    /// caller for any other serial does not.
+    pub fn arm_connect_gate(&self) -> Gate {
+        let gate = Gate::new();
+        self.lock().gate = Some(gate.clone());
+        gate
     }
 
     /// How many dials have been attempted.
@@ -250,9 +322,15 @@ impl FakeConnFactory {
 #[async_trait]
 impl RobotConnFactory for FakeConnFactory {
     async fn connect(&self, target: &ConnTarget) -> Result<Arc<dyn RobotConn>, ConnError> {
-        let mut state = self.lock();
-        state.targets.push(target.clone());
-        state.result.clone()
+        let gate = {
+            let mut state = self.lock();
+            state.targets.push(target.clone());
+            state.gate.take()
+        };
+        if let Some(gate) = gate {
+            gate.pass().await;
+        }
+        self.lock().result.clone()
     }
 }
 
@@ -501,37 +579,6 @@ pub struct CameraCall {
     pub order: u64,
 }
 
-/// A one-shot hold on the fake's next call of one flag.
-///
-/// The camera announces that it has arrived and then waits to be let go, so a
-/// test can park a handler inside the RPC while it holds the camera operation
-/// lock. Both halves store their permit, so neither side has to reach its await
-/// first.
-#[derive(Clone, Debug)]
-pub struct CameraGate {
-    entered: Arc<Notify>,
-    released: Arc<Notify>,
-}
-
-impl CameraGate {
-    fn new() -> Self {
-        Self {
-            entered: Arc::new(Notify::new()),
-            released: Arc::new(Notify::new()),
-        }
-    }
-
-    /// Resolves once the gated call has arrived.
-    pub async fn wait_entered(&self) {
-        self.entered.notified().await;
-    }
-
-    /// Lets the gated call carry on.
-    pub fn release(&self) {
-        self.released.notify_one();
-    }
-}
-
 struct CameraState {
     calls: Vec<CameraCall>,
     next_order: u64,
@@ -671,8 +718,7 @@ impl CameraControl for RecordingCamera {
             (delay, gate)
         };
         if let Some(gate) = gate {
-            gate.entered.notify_one();
-            gate.released.notified().await;
+            gate.pass().await;
         }
         if !delay.is_zero() {
             tokio::time::sleep(delay).await;

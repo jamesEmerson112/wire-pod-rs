@@ -15,7 +15,7 @@
 //! settle and the enable RPC.
 
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Instant;
+use std::time::Duration;
 
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use tokio_util::sync::CancellationToken;
@@ -316,18 +316,23 @@ pub struct SdkSession {
     pub events: Arc<EventOwner>,
     esn: Esn,
     cam_op: AsyncMutex<()>,
-    last_touch: Mutex<Instant>,
+    last_touch: Mutex<Duration>,
 }
 
 impl SdkSession {
     /// A session for the robot with this serial, which has just connected.
+    ///
+    /// The idle clock starts at zero rather than at a reading of its own,
+    /// because a session has no clock to read: the registry owns the
+    /// [`Clock`](crate::clock::Clock) and stamps the session with
+    /// [`SdkSession::touch`] as it inserts the entry.
     pub fn new(esn: Esn) -> Self {
         Self {
             cam: CamOwner::new(),
             events: Arc::new(EventOwner::new()),
             esn,
             cam_op: AsyncMutex::new(()),
-            last_touch: Mutex::new(Instant::now()),
+            last_touch: Mutex::new(Duration::ZERO),
         }
     }
 
@@ -340,17 +345,30 @@ impl SdkSession {
         &self.esn
     }
 
-    /// Marks the robot as used now, which is what resets the idle timer.
+    /// Marks the robot as used at `now`, which is what resets the idle timer.
     ///
-    /// The sweeper that reads this arrives with the registry, and so does the
-    /// injectable clock; until then the reading is a plain [`Instant`].
-    pub fn touch(&self) {
-        *self.lock_touch() = Instant::now();
+    /// `now` is a reading of the registry's [`Clock`](crate::clock::Clock)
+    /// rather than an [`Instant`](std::time::Instant), so a test drives the
+    /// 300 second rule by moving a [`ManualClock`](crate::clock::ManualClock)
+    /// instead of by waiting. This is the only thing that resets the timer, as
+    /// Go's one write of `robots[robotIndex].ConnTimer = 0` in the `/api-sdk/*`
+    /// preamble is (`server.go:65`).
+    pub fn touch(&self, now: Duration) {
+        *self.lock_touch() = now;
     }
 
-    /// When the robot was last used.
-    pub fn last_touch(&self) -> Instant {
+    /// The clock reading of the last [`SdkSession::touch`].
+    pub fn last_touch(&self) -> Duration {
         *self.lock_touch()
+    }
+
+    /// How long the robot has gone untouched as of `now`.
+    ///
+    /// A reading from before the last touch, which a
+    /// [`ManualClock`](crate::clock::ManualClock) can be set to produce, counts
+    /// as no idle time at all rather than wrapping.
+    pub fn idle_for(&self, now: Duration) -> Duration {
+        now.saturating_sub(self.last_touch())
     }
 
     /// Takes this robot's camera operation lock.
@@ -364,7 +382,7 @@ impl SdkSession {
         self.cam_op.lock().await
     }
 
-    fn lock_touch(&self) -> MutexGuard<'_, Instant> {
+    fn lock_touch(&self) -> MutexGuard<'_, Duration> {
         // Poisoning is ignored, for the reason given on `CamOwner::lock`.
         self.last_touch
             .lock()

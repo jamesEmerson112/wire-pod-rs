@@ -14,15 +14,17 @@
 //! from plain `#[test]` functions with no runtime. The crate-level `deny` below
 //! makes that a compile error rather than a review comment.
 //!
-//! The rest of the crate's eventual responsibility (config, path resolution,
-//! the logger ring, the jdocs and session-cert stores, and the registry)
-//! arrives in later commits.
+//! [`state::AppState`] is the one shared value the handlers read, replacing
+//! Go's roughly thirty unsynchronized globals. The rest of the crate's
+//! eventual responsibility (config, path resolution, the logger ring, and the
+//! jdocs and session-cert stores) arrives in later commits.
 #![deny(clippy::await_holding_lock)]
 
 pub mod clock;
 pub mod esn;
 pub mod gofmt;
 pub mod robot;
+pub mod state;
 pub mod store;
 #[cfg(feature = "test-util")]
 pub mod test_support;
@@ -34,10 +36,12 @@ pub use crate::gofmt::{GoJsonError, go_format_f32, go_json_f64};
 pub use crate::robot::{
     BatteryLevel, BatteryReading, CamGuard, CamMeter, CamMeters, CamOwner, CameraControl,
     CameraFrame, ConnError, ConnTarget, EVENT_CONNECTION_ID, EVENT_WHITELIST, EventItem,
-    EventLoopExit, EventOwner, EventReceiver, FrameOutcome, FrameSink, FrameStream, ProtocolResult,
-    ProtocolVerdict, PumpExit, RobotConn, RobotConnFactory, SdkSession, StatusCode, StimEvent,
-    StimSample, cam_stream_pump, run_event_stream, start_cam_stream,
+    EventLoopExit, EventOwner, EventReceiver, FrameOutcome, FrameSink, FrameStream, GetRobotError,
+    ProtocolResult, ProtocolVerdict, PumpExit, RobotConn, RobotConnFactory, RobotEntry,
+    RobotRegistry, SdkSession, StatusCode, StimEvent, StimSample, cam_stream_pump,
+    run_event_stream, start_cam_stream,
 };
+pub use crate::state::{AppState, AppStateBuilder};
 pub use crate::store::{
     BotInfo, BotInfoRobot, BotInfoWire, BotStatus, BotStatusKind, PingerState, RobotWire,
 };

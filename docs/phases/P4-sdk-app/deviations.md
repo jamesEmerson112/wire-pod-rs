@@ -411,6 +411,23 @@ never records a `false` after that claim.
 
 ---
 
+## 16. `disconnect` turns a still-claimed camera off after the settle
+
+Go's `removeRobot` (`robot.go:455-480`) cancels the camera and stim contexts, sleeps three
+seconds and drops the entry. It never sends `EnableImageStreaming(false)` itself: the disable is
+left to the departing `/cam-stream` handler, whose deferred `finishCamStream` runs because a
+goroutine always runs to completion. If that handler is already gone, nothing turns the camera
+off and the robot streams to nobody until the next claim.
+
+The Rust registry's `disconnect` follows Go's order, and then, after the settle, issues one
+best-effort `enable_image_streaming(false)` when `cam.current()` is still `Some`. The call is
+bounded by `timings.enable` and its result is discarded, which is how Go treats the result of its
+own enable at `server.go:673-678`. The effect on the wire is one extra RPC in the case where Go
+would have left the camera on. The registry test
+`disconnect_stops_both_streams_pays_the_settle_and_keeps_the_meter` pins it.
+
+---
+
 ## Additional recorded differences
 
 **`run_event_stream` selects on the cancellation token.** Go's loop relies on the receiver
@@ -463,6 +480,7 @@ never pushes to.
    own quantisation tables.
 6. Jdoc hash parity against the live Go-produced hash for ESN 00303f28. That is P1's critical
    gate, and the slice touches no hashing at all.
-7. The Ubuntu CI run. The workflow triggers only on push and pull request, and nothing in this
-   work is pushed, so the Linux half of the matrix stays unverified until the user asks for a
-   push.
+7. The Ubuntu CI run for the Rust slice itself. The first green run on both runners was on the
+   C3 commit (`5f7170f`, run 34305117622, 2026-09-09), after the toolchain file gained `rustfmt`
+   and `clippy`. The core and vector commits after it stay unverified on Linux until they are
+   pushed.
