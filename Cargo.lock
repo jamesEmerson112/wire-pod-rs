@@ -4085,6 +4085,17 @@ version = "0.1.0"
 [[package]]
 name = "wirepod-vector"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "tonic",
+ "tracing",
+ "wirepod-core",
+ "wirepod-proto",
+ "wirepod-vector",
+]
 
 [[package]]
 name = "wit-parser"

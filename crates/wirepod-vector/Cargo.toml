@@ -3,3 +3,26 @@ name = "wirepod-vector"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[features]
+# Exposes `test_support::spawn_fake_robot` to other crates, and to this crate's
+# own integration tests through the self dev-dependency below.
+test-util = []
+
+[dependencies]
+async-trait.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tracing.workspace = true
+wirepod-core.workspace = true
+wirepod-proto.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tokio-util.workspace = true
+# Same mechanism `wirepod-core` uses: the loopback fake lives in `src/` behind a
+# feature so that `wirepod-server`'s tests can reach it too, and listing this
+# crate as its own dev-dependency is what turns the feature on for the test
+# build only.
+wirepod-vector = { workspace = true, features = ["test-util"] }
