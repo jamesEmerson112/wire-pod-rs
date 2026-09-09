@@ -14,6 +14,8 @@
 //! [`crate::router`]'s middleware has already unescaped each segment, so
 //! `GET /api-sdk/deb%75g` reaches the `debug` arm rather than the catch-all.
 
+pub mod cam;
+pub mod disconnect;
 pub mod net_probe;
 pub mod sdk_info;
 pub mod stim;
@@ -135,8 +137,11 @@ async fn dispatch(state: &Arc<AppState>, path: &str, form: &Form) -> Response {
             }
         }
 
-        // In the slice, landing in C12. Same stub, same reason.
-        "stop_cam_stream" | "disconnect" => reply::not_found(),
+        // `as_deref().ok()` is `Ok` for both of these: neither path is
+        // preamble-exempt, so a failed connect was answered above and never
+        // reaches the switch. Each handler documents the unreachable `None`.
+        "stop_cam_stream" => cam::stop(robot.as_deref().ok()),
+        "disconnect" => disconnect::handle(state, robot.as_deref().ok()).await,
 
         // Go's `default`, which is also where its other 36 arms land while they
         // are deferred.

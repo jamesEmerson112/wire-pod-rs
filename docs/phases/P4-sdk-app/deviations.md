@@ -643,6 +643,71 @@ a genuine setup error is logged rather than written to the body and that the cla
 and `a_begin_straight_after_a_stop_is_admitted` pins that a stop frees the stream for the next
 begin. The abandoned-open arm itself has no test: reaching it needs an open held across a stop, and
 asserting the outcome would be asserting the absence of a log line.
+## 21. `disconnect` stops no per-robot timer, because there is none to stop
+
+**Go.** Every connect spawns one `connTimer` goroutine per robot, addressed by the robot's
+position in the `robots` slice (`pkg/wirepod/sdkapp/robot.go:399`). `removeRobot` with the source
+`"server"`, which is exactly what `/api-sdk/disconnect` passes (`server.go:606`), appends that
+position to a package-level `timerStopIndexes` (`robot.go:461-464`); the goroutine notices its own
+index in that list on its next one second tick, removes it again and returns
+(`robot.go:433-445`). The whole mechanism is by position, and `removeRobot` rebuilds the slice by
+filtering (`robot.go:457-460`), so every surviving robot's goroutine keeps the position it was
+started with while the slice under it has shifted. Its range guard runs once before the loop
+(`robot.go:425-427`) and never again, so after a removal a surviving goroutine reads
+`robots[ind].ConnTimer` and calls `removeRobot(robots[ind].ESN, "connTimer")` (`robot.go:446-448`)
+against whichever robot now occupies that position, or past the end of the slice. The stop list is
+matched by position too, so a robot appended at a freed index can have its timer stopped by an
+entry left behind for the robot that vacated it.
+
+**Rust.** There is no per-robot task and no index. The idle rule is
+`RobotRegistry::idle_candidates`, a pure function over each entry's `last_touch`, and the
+directory is keyed by `Esn`. `RobotRegistry::disconnect` therefore removes the entry and stops the
+two streams, and has nothing else to stop.
+
+**Why.** Keying on the serial rather than on a slice position is what makes the removal
+self-contained, and it is the same decision that made the connect lock per-ESN (deviation 8). It
+removes the three failure modes above rather than reproducing them, which is safe because none of
+them is a behaviour anything can depend on: a robot dropped by the wrong timer, or a timer
+stopped for the wrong robot, is a reconnect on the next request either way, and the out-of-range
+read is a panic.
+
+**What is still missing.** The sweeper that will call `evict_idle` is Tier C and does not exist
+yet, so nothing acts on the idle rule at all; that is already recorded under "Additional recorded
+differences". Once it lands it must stay keyed by serial.
+
+**Where tested.** `crates/wirepod-core/tests/registry.rs` covers the idle rule and the disconnect
+independently of any timer. At the HTTP layer,
+`crates/wirepod-server/tests/lifecycle.rs::disconnect_then_conn_test_dials_a_fresh_connection`
+pins that a disconnected robot reconnects on the next request, which is the only part of Go's
+timer bookkeeping a client can observe.
+
+---
+
+## 22. `disconnect` does not clear `BcAssumption`, because the flag does not exist yet
+
+**Go.** `removeRobot` sets `robots[ind].BcAssumption = false` between stopping the two streams and
+sleeping the settle (`robot.go:471`). The flag is set by `/api-sdk/assume_behavior_control`
+(`bcassume.go:32`), cleared by `/api-sdk/release_behavior_control` (`server.go:330`), and polled
+every 500 ms by the goroutine that holds the `BehaviorControl` stream open (`bcassume.go:80-88`),
+which is how that stream is told to let go. Clearing it inside `removeRobot` is what stops a
+behaviour-control stream from surviving a disconnect.
+
+**Rust.** `RobotEntry` has no such field and `RobotRegistry::disconnect` clears nothing. Both
+behaviour-control routes are deferred to P4 and answer the stub 404 (deviation 6), so nothing
+sets the flag and there is nothing to clear.
+
+**Why.** The flag is only meaningful next to the stream it controls, and inventing a field for a
+route that is not in the slice would be state with no writer and no reader.
+
+**Consequence to remember.** This is a note for whoever lands
+`assume_behavior_control`. Whatever holds that claim has to be released by
+`RobotRegistry::disconnect`, in the same place the two stream stops are, or a `BehaviorControl`
+stream outlives the disconnect that was supposed to end it and the robot stays under SDK control
+with no connection behind it. Go's unguarded `bool` is not the shape to copy; the two stream
+owners in `robot/session.rs` are, since both already cancel as well as clearing a flag.
+
+**Where recorded.** Here. No test pins it, because the routes that would set the flag are not in
+the slice.
 
 ---
 
