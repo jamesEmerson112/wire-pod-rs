@@ -3,3 +3,4 @@ target/
 spikes/**/vendor/
 *.log
 dump.txt
+docs/
