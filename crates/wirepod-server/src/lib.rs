@@ -16,8 +16,13 @@
 //! which [`form`] reproduces: the dashboard POSTs `serial` in the query and
 //! other parameters in a urlencoded body, so both have to be read.
 //!
-//! The TLS listener, the tonic services, mDNS and the restart supervisor are
-//! the rest of this crate's eventual responsibility and arrive with P1.
+//! [`serve::serve_plain`] serves that router on a listener the caller has
+//! already bound, until a [`CancellationToken`] fires. It is the seed of P1's
+//! supervisor and nothing more: the TLS listener, the tonic services, mDNS and
+//! the restart supervisor are the rest of this crate's eventual responsibility
+//! and arrive with P1.
+//!
+//! [`CancellationToken`]: tokio_util::sync::CancellationToken
 #![deny(clippy::await_holding_lock)]
 
 pub mod api;
@@ -28,6 +33,7 @@ pub mod mux;
 pub mod reply;
 pub mod router;
 pub mod sdkapp;
+pub mod serve;
 #[cfg(feature = "test-util")]
 pub mod test_support;
 
@@ -36,3 +42,4 @@ pub use crate::router::{
     CONN_CHECK_PORT, DEFAULT_WEB_PORT, ListenerSpec, build_router, listener_specs,
 };
 pub use crate::sdkapp::SLICE_ROUTES;
+pub use crate::serve::serve_plain;

@@ -43,6 +43,10 @@ tonic-build = "0.12"
 # none.
 tower = { version = "0.4", features = ["util"] }
 tracing = "0.1"
+# The trial binary's log sink. Default features plus `env-filter` is exactly the
+# feature set already resolved in `Cargo.lock`, where `extism` pulls the same
+# crate in, so declaring it here activates no package the lock does not carry.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 walkdir = "2"
 wirepod-core = { path = "crates/wirepod-core" }
 wirepod-proto = { path = "crates/wirepod-proto" }

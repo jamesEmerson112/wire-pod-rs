@@ -17,8 +17,12 @@ http-body-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 # `net_probe` times its round trip and `begin_event_stream` detaches its
-# receiver, so the handlers need `tokio::time::timeout` and `tokio::spawn`.
-tokio.workspace = true
+# receiver, so the handlers need `tokio::time::timeout` and `tokio::spawn`, and
+# `serve_plain` takes a `tokio::net::TcpListener`. `io-util` is on top of the
+# workspace list for `tests/serve_plain.rs`, which writes a request to a socket
+# by hand; it activates no dependency `Cargo.lock` does not already carry,
+# because tonic enables the same feature.
+tokio = { workspace = true, features = ["io-util"] }
 # `CancellationToken`, which is what a `stop_event_stream` cancels. Default
 # features only: `rt` would activate the optional `futures-util` dependency and
 # change the lock.

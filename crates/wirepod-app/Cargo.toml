@@ -7,3 +7,17 @@ license.workspace = true
 [[bin]]
 name = "chipper"
 path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true
+# `signal` is on top of the workspace list, for the Ctrl-C that stops the trial
+# server. It activates `mio`, `libc`, `signal-hook-registry` and `windows-sys`,
+# all four of which are already in `Cargo.lock` as tokio's dependencies, so the
+# resolved package set is unchanged.
+tokio = { workspace = true, features = ["signal"] }
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+wirepod-core.workspace = true
+wirepod-server.workspace = true
+wirepod-vector.workspace = true

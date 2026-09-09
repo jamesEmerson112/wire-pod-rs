@@ -144,6 +144,23 @@ impl RobotConn for TonicRobotConn {
             Ok(pb::protocol_version_response::Result::Success) => ProtocolResult::Success,
             _ => ProtocolResult::Unsupported,
         };
+        // The one place the verdict is visible. `deviations.md` lists whether
+        // this robot answers `SUCCESS` or `UNSUPPORTED` to
+        // `client_version = 5, min_host_version = 0` as an open question, and
+        // nothing can answer it from a response body, because every caller
+        // discards the verdict on purpose. So it is logged. This is the line
+        // `RUNBOOK-SDK-TRIAL.md` tells the operator to read, and the reason the
+        // trial binary turns this crate up to debug.
+        //
+        // The target is this module rather than the `sdkapp` the two ported Go
+        // log lines use, because this is a diagnostic of the port's own and not
+        // a line the Go server writes. That is also what puts it behind
+        // `wirepod_vector=debug` rather than behind an `sdkapp` directive.
+        tracing::debug!(
+            ?result,
+            host_version = response.host_version,
+            "protocol version verdict, which every caller discards"
+        );
         Ok(ProtocolVerdict {
             result,
             host_version: response.host_version,

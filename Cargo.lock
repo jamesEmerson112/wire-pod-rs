@@ -4021,6 +4021,16 @@ dependencies = [
 [[package]]
 name = "wirepod-app"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "wirepod-core",
+ "wirepod-server",
+ "wirepod-vector",
+]
 
 [[package]]
 name = "wirepod-audio"
