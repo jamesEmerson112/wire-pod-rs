@@ -322,16 +322,16 @@ leaves the handler owning a feed that is not running, and the ownership is given
 the handler's deferred `finishCamStream` eventually runs.
 
 **Rust.** `start_cam_stream` bounds the enable with `timings.enable` and reads its result. On a
-failure or an expiry it runs the same generation-checked release the guard would have run, which
-also issues the disable, and returns the error. A start that returns an error leaves no owner
-behind and hands out no `CamGuard`.
+failure or an expiry it hands the feed back through the guard's own `finish`, which runs the
+generation-checked release and issues the disable, and returns the error. A start that returns an
+error leaves no owner behind and hands out no `CamGuard`.
 
-**Why.** The `CamGuard` is `#[must_use]` and has an explicit `finish`, so there is no deferred
-cleanup to fall back on: returning an error while keeping the claim would leak ownership with
-nothing left holding the guard that could release it. Releasing on the error path reaches the
-same end state Go reaches through its defer, one step earlier. The release is generation-checked,
-so a start whose enable failed after a replacement already took the feed changes nothing and
-issues no disable.
+**Why.** Releasing on the error path reaches the same end state Go reaches through its defer, one
+step earlier. The guard's `Drop` would reach it too, because the guard is a local of
+`start_cam_stream` and is dropped either way, but going through `finish` explicitly is what keeps
+the release and the disable inside a single hold of the camera operation lock, which the drop path
+cannot manage. The release is generation-checked, so a start whose enable failed after a
+replacement already took the feed changes nothing and issues no disable.
 
 **Consequence to remember.** The disable is issued on this path where Go issues none, because Go
 never learns the enable failed. It is one extra `EnableImageStreaming(false)` to a robot that has
@@ -363,6 +363,46 @@ codes it has names for.
 **Where recorded.** Here, and on the doc comment of `StatusCode::from_wire` in
 `crates/wirepod-core/src/robot/conn.rs`. There is no test, because the value the test would need
 cannot arrive from tonic.
+
+---
+
+## 15. The camera guard cleans up when it is dropped
+
+**Go.** `camStreamHandler` runs in a goroutine, and a goroutine always runs to completion. Its
+`defer finishCamStream(robotObj, gen)` at `pkg/wirepod/sdkapp/server.go:737` therefore always
+runs, whatever the handler returns through. A browser that goes away cancels `r.Context()`, which
+is what ends the frame loop, but it does not stop the goroutine, so the cleanup still happens.
+
+**Rust.** An axum handler is a future, and a future is dropped outright when the request is
+aborted. `CamGuard` therefore does its cleanup from `Drop` as well as from `finish`. The drop
+performs the same generation-checked release, synchronously, and if that release succeeded it
+spawns a task that takes the camera operation lock and issues `EnableImageStreaming(false)` on the
+same `timings.enable` deadline. With no runtime available to spawn onto it logs a warning and
+stops. `finish` remains the explicit path and the guard remains `#[must_use]`.
+
+**Why.** Without it, a handler future dropped between the claim and the enable leaves the feed
+claimed by a generation nobody holds, with a cancellation token nothing will ever cancel and a
+robot whose camera may stay on. The next claim displaces the stale entry, so the state is
+recoverable, but until then the robot reports as streaming and burns power for nothing. The guard
+is built immediately after the claim for the same reason: the settle and the enable are both
+awaits, and a guard constructed after them cannot give back a claim taken before them.
+
+**Consequence to remember.** The drop path releases outside the operation lock, because `Drop`
+cannot await one. A replacement that claims in the window between that release and the spawned
+disable has its camera switched off underneath it. The explicit `finish` holds the lock across
+both steps and has no such window, so the exposure is confined to the abort path.
+
+A second consequence lands on the failed-enable path in deviation 13. That path now hands the feed
+back through `finish`, so a robot that answers neither the enable nor the disable costs two
+`timings.enable` deadlines before the handler answers, where Go answers as soon as `CameraFeed`
+returns an error (`server.go:743-746`) and lets its deferred cleanup run afterwards. That is
+accepted for this slice: the deadline is five seconds, both calls go to a robot that has already
+stopped answering, and nothing else is waiting on the handler.
+
+**Where tested.** `crates/wirepod-core/tests/cam_ownership.rs` drops a start inside the settle,
+drops a start parked inside the enable, and drops a live guard. Each case asserts that the claim
+is gone synchronously and that the camera log ends with a `false` once the spawned disable has
+run.
 
 ---
 

@@ -501,7 +501,7 @@ pub struct CameraCall {
     pub order: u64,
 }
 
-/// A one-shot hold on the fake's next enable call.
+/// A one-shot hold on the fake's next call of one flag.
 ///
 /// The camera announces that it has arrived and then waits to be let go, so a
 /// test can park a handler inside the RPC while it holds the camera operation
@@ -536,6 +536,7 @@ struct CameraState {
     calls: Vec<CameraCall>,
     next_order: u64,
     enable_gate: Option<CameraGate>,
+    disable_gate: Option<CameraGate>,
     enable_delay: Duration,
     disable_delay: Duration,
     result: Result<(), ConnError>,
@@ -576,6 +577,7 @@ impl RecordingCamera {
                 calls: Vec::new(),
                 next_order: 0,
                 enable_gate: None,
+                disable_gate: None,
                 enable_delay: Duration::ZERO,
                 disable_delay: Duration::ZERO,
                 result: Ok(()),
@@ -590,6 +592,17 @@ impl RecordingCamera {
     pub fn arm_enable_gate(&self) -> CameraGate {
         let gate = CameraGate::new();
         self.lock().enable_gate = Some(gate.clone());
+        gate
+    }
+
+    /// Holds the next disable call until the returned gate releases it.
+    ///
+    /// The mirror of [`RecordingCamera::arm_enable_gate`], and what parks a
+    /// departing handler inside its disable while it still holds the camera
+    /// operation lock. Exactly one call is held.
+    pub fn arm_disable_gate(&self) -> CameraGate {
+        let gate = CameraGate::new();
+        self.lock().disable_gate = Some(gate.clone());
         gate
     }
 
@@ -650,7 +663,11 @@ impl CameraControl for RecordingCamera {
             } else {
                 state.disable_delay
             };
-            let gate = if on { state.enable_gate.take() } else { None };
+            let gate = if on {
+                state.enable_gate.take()
+            } else {
+                state.disable_gate.take()
+            };
             (delay, gate)
         };
         if let Some(gate) = gate {

@@ -9,16 +9,21 @@
 //! camera, and the new owner's feed dies.
 //!
 //! The Rust shape is a `#[must_use]` [`CamGuard`] with an explicit
-//! [`CamGuard::finish`], because `Drop` cannot be async and spawning from `Drop`
-//! is a known hazard. `Drop` only logs a leak, so the compiler warning plus the
-//! runtime log are together the closest safe analogue of Go's
-//! `defer finishCamStream`.
+//! [`CamGuard::finish`] and a `Drop` that cleans up whatever `finish` did not.
+//! Go can lean on `defer finishCamStream` because a goroutine always runs to
+//! completion, whereas an axum handler future is dropped outright when the
+//! browser aborts the request. A guard that only logged on drop would therefore
+//! leak the claim, with a cancellation token nobody holds and a robot whose
+//! camera stays on, so the drop path does the work rather than reporting it.
 //!
 //! The frame pump is deliberately smaller than Go's loop: it takes a
 //! [`FrameSink`] rather than an HTTP response, and the multipart framing and the
 //! quality-50 JPEG re-encode stay with the route, which is deferred until a
 //! codec is in the lock file. The sink therefore receives the bytes the robot
 //! sent.
+
+use std::fmt;
+use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
@@ -36,14 +41,31 @@ use crate::timings::Timings;
 /// nothing and issues no disable, so it cannot turn the camera off underneath
 /// the handler that replaced it.
 ///
-/// The guard names no session on purpose. It carries only the generation, so it
-/// is `'static` and moves into a spawned handler task without an `Arc` clone of
-/// its own; the task passes its own `&SdkSession` back in at `finish`.
+/// The guard owns the session it was claimed from rather than being handed one
+/// back at `finish`. Generations are numbered per session, so `Generation(1)`
+/// exists on every robot, and a guard that named no session could release a
+/// different robot's feed.
+///
+/// The switch is an `Arc<dyn CameraControl>` rather than an
+/// `Arc<dyn RobotConn>`: it is all the guard needs, and a caller holding an
+/// `Arc<dyn RobotConn>` reaches it with a single upcast coercion.
 #[must_use = "the camera stays claimed and the robot's camera stays on until the guard is finished"]
-#[derive(Debug)]
 pub struct CamGuard {
+    session: Arc<SdkSession>,
+    camera: Arc<dyn CameraControl>,
+    timings: Timings,
     generation: Generation,
     finished: bool,
+}
+
+impl fmt::Debug for CamGuard {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CamGuard")
+            .field("esn", &self.session.esn())
+            .field("generation", &self.generation)
+            .field("finished", &self.finished)
+            .finish_non_exhaustive()
+    }
 }
 
 impl CamGuard {
@@ -59,26 +81,70 @@ impl CamGuard {
     /// was issued. Both steps run under the robot's camera operation lock, which
     /// is what makes the ownership check and the RPC atomic against a
     /// replacement taking over (`server.go:700-707`).
-    pub async fn finish(
-        mut self,
-        session: &SdkSession,
-        camera: &dyn CameraControl,
-        timings: &Timings,
-    ) -> bool {
+    ///
+    /// The guard is only marked finished once both steps have run, so a `finish`
+    /// future dropped while it was still queued on the operation lock falls back
+    /// to the drop path rather than leaving the claim behind.
+    pub async fn finish(mut self) -> bool {
+        let released = {
+            let _op = self.session.lock_cam_op().await;
+            let released = self.session.cam.release(self.generation);
+            if released {
+                // Go's `enableImageStreaming` discards the RPC result entirely
+                // (`server.go:673-678`), and there is nothing a departing
+                // handler could do with it anyway.
+                let _ = enable_image_streaming(self.camera.as_ref(), &self.timings, false).await;
+            }
+            released
+        };
         self.finished = true;
-        let _op = session.lock_cam_op().await;
-        release_and_disable(session, camera, timings, self.generation).await
+        released
     }
 }
 
 impl Drop for CamGuard {
+    /// The cleanup for a guard whose handler never reached [`CamGuard::finish`],
+    /// which is what an aborted browser request looks like.
+    ///
+    /// The release is synchronous and generation-checked, so the claim and its
+    /// cancellation token are gone by the time the drop returns even on a thread
+    /// with no runtime. The disable cannot be, because `Drop` is not async, so it
+    /// is spawned. That leaves the release outside the operation lock, which is
+    /// the one property the explicit path keeps: a replacement claiming in the
+    /// window between the release and the spawned disable would have its camera
+    /// switched off underneath it. The window exists only on the abort path and
+    /// is the price of cleaning up at all.
     fn drop(&mut self) {
-        if !self.finished {
-            tracing::error!(
-                target: "sdkapp",
-                "camera guard dropped without finish; the robot keeps the feed claimed and its camera on"
-            );
+        if self.finished || !self.session.cam.release(self.generation) {
+            return;
         }
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!(
+                target: "sdkapp",
+                esn = %self.session.esn(),
+                "camera guard dropped outside a runtime; the robot's camera may be left on"
+            );
+            return;
+        };
+        let session = Arc::clone(&self.session);
+        let camera = Arc::clone(&self.camera);
+        let timings = self.timings;
+        handle.spawn(async move {
+            let _op = session.lock_cam_op().await;
+            match enable_image_streaming(camera.as_ref(), &timings, false).await {
+                Ok(()) => tracing::debug!(
+                    target: "sdkapp",
+                    esn = %session.esn(),
+                    "camera guard dropped without a finish; the camera was turned off"
+                ),
+                Err(err) => tracing::warn!(
+                    target: "sdkapp",
+                    esn = %session.esn(),
+                    %err,
+                    "camera guard dropped without a finish; turning the camera off failed"
+                ),
+            }
+        });
     }
 }
 
@@ -90,6 +156,10 @@ impl Drop for CamGuard {
 /// taken under the ownership lock and cancelled once that lock is gone, as Go
 /// cancels `prev` after its unlock (`robot.go:105-116`).
 ///
+/// The guard is built in the same breath as the claim, before anything is
+/// awaited. Everything after the claim can be dropped underneath this future,
+/// and only a guard that already exists can give the claim back when it is.
+///
 /// The settle is paid only when a live owner was displaced, because it exists to
 /// let the robot drop the `CameraFeed` that was just cancelled and a first claim
 /// on an idle robot has nothing to wait for (`server.go:688-692`).
@@ -98,28 +168,34 @@ impl Drop for CamGuard {
 /// `context.WithTimeout` Go wraps the RPC in so that a robot which has stopped
 /// answering cannot park the caller in the very call meant to free it
 /// (`server.go:671`). A failed enable hands the feed straight back through the
-/// same generation-checked release the guard would have done, so a start that
-/// returns an error leaves no owner behind; Go reaches the same place by
-/// discarding the error and letting its deferred `finishCamStream` run.
+/// guard's own [`CamGuard::finish`], so a start that returns an error leaves no
+/// owner behind; Go reaches the same place by discarding the error and letting
+/// its deferred `finishCamStream` run.
 pub async fn start_cam_stream(
-    session: &SdkSession,
-    camera: &dyn CameraControl,
+    session: Arc<SdkSession>,
+    camera: Arc<dyn CameraControl>,
     timings: &Timings,
     cancel: CancellationToken,
 ) -> Result<CamGuard, ConnError> {
-    let _op = session.lock_cam_op().await;
+    let op = session.lock_cam_op().await;
     let (generation, displaced) = session.cam.claim(cancel);
+    let guard = CamGuard {
+        session: Arc::clone(&session),
+        camera: Arc::clone(&camera),
+        timings: *timings,
+        generation,
+        finished: false,
+    };
     if let Some(displaced) = displaced {
         displaced.cancel();
         tokio::time::sleep(timings.settle).await;
     }
-    match enable_image_streaming(camera, timings, true).await {
-        Ok(()) => Ok(CamGuard {
-            generation,
-            finished: false,
-        }),
+    let enabled = enable_image_streaming(camera.as_ref(), timings, true).await;
+    drop(op);
+    match enabled {
+        Ok(()) => Ok(guard),
         Err(err) => {
-            release_and_disable(session, camera, timings, generation).await;
+            guard.finish().await;
             Err(err)
         }
     }
@@ -182,26 +258,6 @@ pub async fn cam_stream_pump(
             Err(err) => return PumpExit::StreamError(err),
         }
     }
-}
-
-/// Gives the feed back if `generation` still holds it, and disables the camera
-/// when it did.
-///
-/// The caller must already hold the robot's camera operation lock.
-async fn release_and_disable(
-    session: &SdkSession,
-    camera: &dyn CameraControl,
-    timings: &Timings,
-    generation: Generation,
-) -> bool {
-    if !session.cam.release(generation) {
-        return false;
-    }
-    // Go's `enableImageStreaming` discards the RPC result entirely
-    // (`server.go:673-678`), and there is nothing a departing handler could do
-    // with it anyway.
-    let _ = enable_image_streaming(camera, timings, false).await;
-    true
 }
 
 /// The camera switch on a deadline, with an expiry that reads exactly like the

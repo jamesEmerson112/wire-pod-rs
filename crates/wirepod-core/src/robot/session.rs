@@ -20,7 +20,7 @@ use std::time::Instant;
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use tokio_util::sync::CancellationToken;
 
-use crate::esn::Generation;
+use crate::esn::{Esn, Generation};
 
 /// Camera ownership for one robot. Preemptive: a new claim displaces whatever
 /// handler held the feed and reports that it did so, and only the current owner
@@ -314,25 +314,30 @@ pub struct SdkSession {
     /// Stim stream ownership, exclusive. The receive loop takes an `Arc` of it
     /// into its own task, so it is shared rather than owned inline.
     pub events: Arc<EventOwner>,
+    esn: Esn,
     cam_op: AsyncMutex<()>,
     last_touch: Mutex<Instant>,
 }
 
-impl Default for SdkSession {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl SdkSession {
-    /// A session for a robot that has just connected.
-    pub fn new() -> Self {
+    /// A session for the robot with this serial, which has just connected.
+    pub fn new(esn: Esn) -> Self {
         Self {
             cam: CamOwner::new(),
             events: Arc::new(EventOwner::new()),
+            esn,
             cam_op: AsyncMutex::new(()),
             last_touch: Mutex::new(Instant::now()),
         }
+    }
+
+    /// The serial this session belongs to.
+    ///
+    /// Generations are numbered per session, so anything holding one has to be
+    /// able to say which robot it holds it for; the registry keys on the same
+    /// value.
+    pub fn esn(&self) -> &Esn {
+        &self.esn
     }
 
     /// Marks the robot as used now, which is what resets the idle timer.
