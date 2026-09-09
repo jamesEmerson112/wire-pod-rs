@@ -428,6 +428,33 @@ would have left the camera on. The registry test
 
 ---
 
+## 17. `serde_json` does not escape `<`, `>` and `&` where Go's `json.Marshal` does
+
+**Go.** `encoding/json` escapes those three characters inside strings unless the caller turns it
+off with `Encoder.SetEscapeHTML(false)`, which nothing in wire-pod does. Both writers on this
+surface therefore escape: `json.Marshal(vars.BotInfo)` for `/api-sdk/get_sdk_info`
+(`server.go:190`) and `json.NewEncoder(w).Encode` for `/api/get_bot_status`
+(`webserver.go:308`). Verified by running the two calls against the string `a<b>c&d`, which both
+render as `a\u003cb\u003ec\u0026d`.
+
+**Rust.** `serde_json` has no such option and emits those characters literally, so a string
+carrying one of them produces a body that differs from Go's byte for byte.
+
+**Why it is accepted.** Nothing that reaches either body can contain them. `/api-sdk/get_sdk_info`
+serialises a serial, an IPv4 address, a base64 GUID and a boolean; base64's alphabet is
+`A-Za-z0-9+/=`. `/api/get_bot_status` serialises a serial, an IPv4 address, one of three fixed
+status words and an integer. Only a hand-edited bot-info file could produce a difference, and the
+half that matters, the GUID the robot authenticates with, would already be invalid.
+
+**Consequence to remember.** Any later route that serialises free text, a robot name or an LLM
+reply through `serde_json` will differ from Go on those three characters. The fix, if one is ever
+needed, is a custom `serde_json::ser::Formatter`, not a post-hoc string replace.
+
+**Where recorded.** Here. No test pins it, because pinning it would mean asserting the difference
+rather than the contract.
+
+---
+
 ## Additional recorded differences
 
 **`run_event_stream` selects on the cancellation token.** Go's loop relies on the receiver

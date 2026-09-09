@@ -4069,6 +4069,17 @@ dependencies = [
 [[package]]
 name = "wirepod-server"
 version = "0.1.0"
+dependencies = [
+ "axum",
+ "http",
+ "http-body-util",
+ "serde_json",
+ "tokio",
+ "tower 0.4.13",
+ "tracing",
+ "wirepod-core",
+ "wirepod-server",
+]
 
 [[package]]
 name = "wirepod-setup"

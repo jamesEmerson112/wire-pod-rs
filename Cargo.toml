@@ -28,9 +28,14 @@ tokio-stream = "0.1"
 tokio-util = "0.7"
 tonic = "0.12"
 tonic-build = "0.12"
-tower = "0.4"
+# `util` is what `ServiceExt::oneshot` lives behind, which is how the router
+# tests call the router without binding a port. `tonic` already enables it, so
+# every package it pulls is in `Cargo.lock` already and turning it on here adds
+# none.
+tower = { version = "0.4", features = ["util"] }
 tracing = "0.1"
 walkdir = "2"
 wirepod-core = { path = "crates/wirepod-core" }
 wirepod-proto = { path = "crates/wirepod-proto" }
+wirepod-server = { path = "crates/wirepod-server" }
 wirepod-vector = { path = "crates/wirepod-vector" }

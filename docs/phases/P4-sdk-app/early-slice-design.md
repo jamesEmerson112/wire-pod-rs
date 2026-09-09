@@ -203,6 +203,33 @@ docs/phases/P4-sdk-app/gofmt-probe/{main.go,expected.txt}
 docs/phases/pending-upstream.md       four kercre123 commits classified; plus a "local branches" section for feature/vector-brain-dashboard and the stash
 ```
 
+### What C10 built, where it differs from the block above
+
+Four notes, so that the layout above stays the plan's text and the differences stay visible.
+
+`literals.rs` is `crates/wirepod-server/src/literals.rs` rather than `sdkapp/literals.rs`. Its
+constants cover all three surfaces, not just `sdkapp`: the `/api/*` CORS values and its `not
+found` body, the root file server's `404 page not found` body and its four headers, and the 301
+link text. Reaching them through `crate::sdkapp::literals` from `api` and `router` would have
+been the wrong shape.
+
+`crates/wirepod-server/src/test_support.rs` is new, behind the same `test-util` feature
+`wirepod-core` and `wirepod-vector` use, with the same self dev-dependency. It holds `TestServer`,
+which builds an `AppState` over core's fakes and a `ManualClock` and hands back the router; the
+free `send_to`, which drives a router through `tower::ServiceExt::oneshot`; the `request` builder;
+and `Reply`, a collected response. Four test binaries needed the same three helpers, and an
+integration-test binary cannot import another one.
+
+There is no `crates/wirepod-server/src/state.rs`. The axum state is `Arc<wirepod_core::AppState>`
+directly, so a server-side wrapper would be a newtype with nothing in it. P1 is the first plausible
+reason to add one, when the supervisor's cancellation token and the mDNS handle need somewhere to
+live that is not core.
+
+`sdkapp/net_probe.rs`, `sdkapp/stim.rs` and `sdkapp/cam.rs` do not exist yet; their routes are
+marked arms in `sdkapp/mod.rs` and land with C11 and C12. `begin_cam_stream` needs no module
+because Go's arm is a no-op whose only statement is commented out. `tests/live_seam.rs` lands with
+C11 for the same reason.
+
 ## Lock ordering and the `await_holding_lock` rule
 
 `crates/wirepod-core/src/lib.rs` carries `#![deny(clippy::await_holding_lock)]`. The
