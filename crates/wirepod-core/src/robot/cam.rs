@@ -110,10 +110,16 @@ impl Drop for CamGuard {
     /// cancellation token are gone by the time the drop returns even on a thread
     /// with no runtime. The disable cannot be, because `Drop` is not async, so it
     /// is spawned. That leaves the release outside the operation lock, which is
-    /// the one property the explicit path keeps: a replacement claiming in the
-    /// window between the release and the spawned disable would have its camera
-    /// switched off underneath it. The window exists only on the abort path and
-    /// is the price of cleaning up at all.
+    /// the one property the explicit path keeps.
+    ///
+    /// The spawned task closes the gap that opens up instead of leaving it. It
+    /// takes the operation lock and re-reads ownership before it issues
+    /// anything, so a replacement that claimed while the disable was still
+    /// queued keeps its camera; a replacement that claims later queues on that
+    /// same lock and turns the camera back on after the disable. Either order
+    /// therefore ends with the camera on for whoever owns the feed, which is the
+    /// invariant Go's generation check protects when a departing handler races a
+    /// replacement (`robot.go:121-131`).
     fn drop(&mut self) {
         if self.finished || !self.session.cam.release(self.generation) {
             return;
@@ -131,6 +137,14 @@ impl Drop for CamGuard {
         let timings = self.timings;
         handle.spawn(async move {
             let _op = session.lock_cam_op().await;
+            if session.cam.current().is_some() {
+                tracing::debug!(
+                    target: "sdkapp",
+                    esn = %session.esn(),
+                    "camera guard dropped without a finish; a new owner claimed the feed, so the camera was left on"
+                );
+                return;
+            }
             match enable_image_streaming(camera.as_ref(), &timings, false).await {
                 Ok(()) => tracing::debug!(
                     target: "sdkapp",

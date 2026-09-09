@@ -38,6 +38,10 @@ const CEILING: Duration = Duration::from_secs(2);
 /// How long the ownership probe waits for the lock it expects to be free.
 const PROBE_WAIT: Duration = Duration::from_millis(500);
 
+/// Long enough for a task the drop path spawned to have been polled, and far
+/// enough inside the ceiling that it never decides a test.
+const SPAWN_WINDOW: Duration = Duration::from_millis(50);
+
 /// The robot this machine actually has.
 fn session() -> Arc<SdkSession> {
     Arc::new(SdkSession::new(Esn::new("00303f28")))
@@ -747,6 +751,67 @@ async fn a_guard_dropped_without_finish_releases_and_disables() {
 
     until(|| camera.last_call() == Some(false)).await;
     assert_eq!(camera.calls(), vec![true, false]);
+}
+
+/// The drop path releases the claim synchronously but can only spawn the
+/// disable, so a replacement can claim in between. The spawned task re-reads
+/// ownership under the operation lock and leaves the camera alone when it finds
+/// a new owner, which is the same protection Go's generation check gives a
+/// departing handler that raced a replacement (`robot.go:121-131`).
+#[tokio::test]
+async fn a_dropped_guard_leaves_a_new_owners_camera_alone() {
+    let session = session();
+    let camera = RecordingCamera::new();
+    let control = control(&camera);
+    let timings = timings();
+
+    let guard_a = within(start_cam_stream(
+        Arc::clone(&session),
+        Arc::clone(&control),
+        &timings,
+        CancellationToken::new(),
+    ))
+    .await
+    .expect("the claim failed");
+    let generation_a = guard_a.generation();
+    drop(guard_a);
+
+    // Nothing between the drop and this claim yields, so the spawned disable has
+    // not been polled yet and the replacement lands in exactly the window the
+    // drop path opens.
+    let guard_b = within(start_cam_stream(
+        Arc::clone(&session),
+        control,
+        &timings,
+        CancellationToken::new(),
+    ))
+    .await
+    .expect("the replacement claim failed");
+    assert_ne!(
+        guard_b.generation(),
+        generation_a,
+        "the replacement reused the dropped generation"
+    );
+    assert_eq!(
+        camera.calls(),
+        vec![true, true],
+        "the spawned disable ran before the replacement claimed"
+    );
+
+    within(tokio::time::sleep(SPAWN_WINDOW)).await;
+    assert_eq!(
+        camera.calls(),
+        vec![true, true],
+        "the dropped guard turned the camera off under the new owner"
+    );
+    assert_eq!(
+        session.cam.current(),
+        Some(guard_b.generation()),
+        "the spawned disable took the new owner's claim with it"
+    );
+
+    assert!(within(guard_b.finish()).await);
+    assert_eq!(camera.calls(), vec![true, true, false]);
 }
 
 /// The probabilistic form of Go's 60 iterations. The deterministic

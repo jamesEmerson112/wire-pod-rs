@@ -388,9 +388,13 @@ is built immediately after the claim for the same reason: the settle and the ena
 awaits, and a guard constructed after them cannot give back a claim taken before them.
 
 **Consequence to remember.** The drop path releases outside the operation lock, because `Drop`
-cannot await one. A replacement that claims in the window between that release and the spawned
-disable has its camera switched off underneath it. The explicit `finish` holds the lock across
-both steps and has no such window, so the exposure is confined to the abort path.
+cannot await one, so the release and the disable are not the single atomic step that `finish`
+makes them. The spawned disable closes that gap rather than living with it: it takes the operation
+lock and re-reads ownership before issuing anything, so a replacement that claimed while the
+disable was still queued keeps its camera, and a replacement that claims later queues on the same
+lock and turns the camera back on afterwards. Either order ends with the camera on for whoever
+owns the feed. What the split release still costs is a brief moment where the feed reads as
+unclaimed while the previous owner's camera is still on, which the explicit `finish` never shows.
 
 A second consequence lands on the failed-enable path in deviation 13. That path now hands the feed
 back through `finish`, so a robot that answers neither the enable nor the disable costs two
@@ -402,7 +406,8 @@ stopped answering, and nothing else is waiting on the handler.
 **Where tested.** `crates/wirepod-core/tests/cam_ownership.rs` drops a start inside the settle,
 drops a start parked inside the enable, and drops a live guard. Each case asserts that the claim
 is gone synchronously and that the camera log ends with a `false` once the spawned disable has
-run.
+run. A fourth case claims with a new owner in the window the drop opens and asserts the camera log
+never records a `false` after that claim.
 
 ---
 
