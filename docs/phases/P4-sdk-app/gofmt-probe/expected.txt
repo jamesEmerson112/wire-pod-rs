@@ -1,0 +1,47 @@
+f32v	float32(0)	0
+f32v	float32(math.Copysign(0, -1))	-0
+f32v	float32(1)	1
+f32v	float32(0.1)	0.1
+f32v	float32(0.75)	0.75
+f32v	float32(0.5325)	0.5325
+f32v	float32(5e-05)	5e-05
+f32v	float32(0.0001)	0.0001
+f32v	float32(0.001)	0.001
+f32v	float32(1.5)	1.5
+f32v	float32(2.5)	2.5
+f32v	float32(-0.25)	-0.25
+f32v	float32(100000)	100000
+f32v	float32(999999)	999999
+f32v	float32(1e6)	1e+06
+f32v	float32(1.5e6)	1.5e+06
+f32v	float32(1234567)	1.234567e+06
+f32v	float32(123456789)	1.2345679e+08
+f32v	float32(1e20)	1e+20
+f32v	float32(1e21)	1e+21
+f32v	float32(1e22)	1e+22
+f32v	float32(math.MaxFloat32)	3.4028235e+38
+f32v	float32(math.SmallestNonzeroFloat32)	1e-45
+f32v	float32(math.Inf(1))	+Inf
+f32v	float32(math.Inf(-1))	-Inf
+f32v	float32(math.NaN())	NaN
+f64json	float64(0)	0
+f64json	float64(math.Copysign(0, -1))	-0
+f64json	float64(13)	13
+f64json	float64(13.482)	13.482
+f64json	float64(14.0)	14
+f64json	float64(0.1)	0.1
+f64json	float64(-0.5)	-0.5
+f64json	float64(0.000001)	0.000001
+f64json	float64(1e-6)	0.000001
+f64json	float64(1e-7)	1e-7
+f64json	float64(1e17)	100000000000000000
+f64json	float64(1e20)	100000000000000000000
+f64json	float64(1e21)	1e+21
+f64json	float64(123456789012345678)	123456789012345680
+f64json	float64(1.5e300)	1.5e+300
+f64json	float64(5e-324)	5e-324
+f64json	float64(math.MaxFloat64)	1.7976931348623157e+308
+f64json	float64(1.0000000000000002)	1.0000000000000002
+f64json	NaN	ERROR: json: unsupported value: NaN
+f64json	+Inf	ERROR: json: unsupported value: +Inf
+f64json	-Inf	ERROR: json: unsupported value: -Inf
