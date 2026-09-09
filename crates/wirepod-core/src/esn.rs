@@ -5,7 +5,7 @@ use std::fmt;
 /// A robot serial number in canonical form: trimmed and ASCII-lowercased.
 ///
 /// Go stores `strings.TrimSpace(strings.ToLower(serial))` and then compares
-/// every lookup with `strings.EqualFold` (`robot.go:335`, `robot.go:411`).
+/// every lookup with `strings.EqualFold` (`robot.go:335`, `robot.go:414`).
 /// Normalizing once on construction gives `Eq` and `Hash` the same behavior,
 /// so an ESN-keyed map matches the Go lookups without a custom comparator.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -69,8 +69,13 @@ impl Generation {
     }
 
     /// The generation issued after this one.
+    ///
+    /// The increment wraps, because Go's `camGen++` on a `uint64` wraps rather
+    /// than panicking and nothing in the port should differ from it. Reaching
+    /// the wrap needs 2^64 claims, so the only real effect is that a debug
+    /// build cannot panic here where a release build would not.
     pub const fn next(self) -> Self {
-        Self(self.0 + 1)
+        Self(self.0.wrapping_add(1))
     }
 
     /// True for any generation that has actually been issued.

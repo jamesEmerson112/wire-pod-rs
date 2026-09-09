@@ -100,6 +100,12 @@ impl CamMeters {
     }
 
     fn lock(&self) -> MutexGuard<'_, HashMap<Esn, Arc<CamMeter>>> {
-        self.meters.lock().expect("cam meters mutex poisoned")
+        // Poisoning is ignored on purpose, as it is for the ownership state.
+        // Go's mutex has no such concept, and a panic elsewhere must not turn
+        // every later meter read into a panic of its own. The map is only ever
+        // inserted into, so a panic cannot leave it half-updated.
+        self.meters
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }

@@ -279,6 +279,39 @@ by a failing parity diff later.
 
 ---
 
+## 12. `Esn` trims where Go's `EqualFold` does not
+
+**Go.** Every serial lookup is `strings.EqualFold(serial, robot.ESN)`, in `getRobot`
+(`robot.go:414`), in `removeRobot` (`robot.go:459`) and in each of the small accessors.
+`EqualFold` folds case but does not trim, so a `serial` form value that arrives with a leading or
+trailing space matches nothing. In `getRobot` that falls through to `newRobot`, whose own
+`EqualFold` scan of the bot info file fails the same way and returns
+`error: robot not found in SDK info file`. The serial that Go stores on the robot record is
+already trimmed, because `newRobot` writes `strings.TrimSpace(strings.ToLower(serial))`
+(`robot.go:335`).
+
+**Rust.** `Esn::new` trims and ASCII-lowercases once on construction, and every lookup is then a
+plain equality or hash comparison. A serial with surrounding whitespace therefore finds the robot
+in Rust where Go would answer that it was not found.
+
+**Why.** Normalizing on construction is what makes `Eq` and `Hash` agree with `EqualFold` without
+a custom comparator on every map, and the alternative would be to carry the untrimmed string and
+compare case-insensitively at each of the nine call sites. The stored keys agree either way,
+because Go trims before it stores, so the difference is confined to a request whose `serial` has
+whitespace around it. The web UI sends the serial from the bot info file and never adds
+whitespace, so nothing in the shipped client can reach the case.
+
+There is a second, smaller difference in the same method. Rust lowercases ASCII only, where Go's
+`strings.ToLower` is Unicode aware. Serials are hexadecimal, so no serial the robots produce
+contains a character the two treat differently.
+
+**Where tested.** `crates/wirepod-core/tests/identity.rs` asserts the trimming, the case folding
+and that both reach `Hash`, which is what makes an ESN-keyed map stand in for the `EqualFold`
+scans. No test asserts the Go behaviour, because reproducing it would mean building the deviation
+into the type.
+
+---
+
 ## Additional recorded differences
 
 **`run_event_stream` selects on the cancellation token.** Go's loop relies on the receiver
@@ -296,6 +329,15 @@ exposure is bounded by the number of distinct serials ever requested, which is s
 not survive into the P10 soak. The asymmetry that `/cam-stream` never resets the idle timer while
 every `/api-sdk/*` request does is implemented and tested now, so the rule is pinned even though
 nothing acts on it.
+
+**Shortest float digits round half to even.** This is a parity item rather than a difference, and
+it is recorded because it is invisible until it is wrong. When a value sits exactly halfway
+between the two shortest digit strings of a given width, both round-trip, and Go's `strconv`
+takes the one whose last digit is even (`strconv/ftoaryu.go`, `ryuDigits32`) while Rust's
+shortest formatter takes the larger one. `go_format_f32` and `go_json_f64` reproduce Go's choice,
+and the rule is pinned by the `math.Float32frombits` and `math.Float64frombits` cases in the
+gofmt probe, which are written as bit patterns because a decimal literal for them would beg the
+question.
 
 ---
 

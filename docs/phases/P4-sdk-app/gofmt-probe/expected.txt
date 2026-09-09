@@ -24,6 +24,10 @@ f32v	float32(math.SmallestNonzeroFloat32)	1e-45
 f32v	float32(math.Inf(1))	+Inf
 f32v	float32(math.Inf(-1))	-Inf
 f32v	float32(math.NaN())	NaN
+f32v	math.Float32frombits(0x3ee90000)	0.45507812
+f32v	math.Float32frombits(0x4a2e4051)	2.8549322e+06
+f32v	math.Float32frombits(0xca2e4051)	-2.8549322e+06
+f32v	math.Float32frombits(0x4a24586d)	2.6926352e+06
 f64json	float64(0)	0
 f64json	float64(math.Copysign(0, -1))	-0
 f64json	float64(13)	13
@@ -42,6 +46,9 @@ f64json	float64(1.5e300)	1.5e+300
 f64json	float64(5e-324)	5e-324
 f64json	float64(math.MaxFloat64)	1.7976931348623157e+308
 f64json	float64(1.0000000000000002)	1.0000000000000002
+f64json	math.Float64frombits(0x42ba3969c09532d0)	28833889686834.812
+f64json	math.Float64frombits(0x42e2d93924dc6844)	165793407361858.12
+f64json	math.Float64frombits(0xc2ee0c6f8a839d14)	-264310078315752.62
 f64json	NaN	ERROR: json: unsupported value: NaN
 f64json	+Inf	ERROR: json: unsupported value: +Inf
 f64json	-Inf	ERROR: json: unsupported value: -Inf

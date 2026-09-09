@@ -2,7 +2,7 @@
 // wire-pod must reproduce byte for byte:
 //
 //  1. fmt.Sprintf("%v", x) for float32 values, as used by the Go server's
-//     get_stim_status handler and the custom_eye_color echo.
+//     get_stim_status handler, which passes stimState's float32 to fmt.Fprint.
 //  2. encoding/json marshaling of float64 values, as used by net_probe's rttMs
 //     field.
 //
@@ -60,6 +60,16 @@ func main() {
 		{"float32(math.Inf(1))", float32(math.Inf(1))},
 		{"float32(math.Inf(-1))", float32(math.Inf(-1))},
 		{"float32(math.NaN())", float32(math.NaN())},
+		// Exact halfway ties. Two digit strings of the same shortest length
+		// both round-trip, and strconv picks the one whose last digit is even
+		// (ftoaryu.go, ryuDigits32). Rust's shortest formatter picks the larger
+		// one instead, so these four are the cases that catch a port that took
+		// Rust's answer unchanged. They are written as bit patterns because a
+		// decimal literal for them would beg the question.
+		{"math.Float32frombits(0x3ee90000)", math.Float32frombits(0x3ee90000)},
+		{"math.Float32frombits(0x4a2e4051)", math.Float32frombits(0x4a2e4051)},
+		{"math.Float32frombits(0xca2e4051)", math.Float32frombits(0xca2e4051)},
+		{"math.Float32frombits(0x4a24586d)", math.Float32frombits(0x4a24586d)},
 	}
 	for _, c := range f32Cases {
 		fmt.Printf("f32v\t%s\t%v\n", c.lit, c.val)
@@ -84,6 +94,12 @@ func main() {
 		{"float64(5e-324)", float64(5e-324)},
 		{"float64(math.MaxFloat64)", math.MaxFloat64},
 		{"float64(1.0000000000000002)", float64(1.0000000000000002)},
+		// The same halfway ties one width up. encoding/json goes through the
+		// same strconv shortest formatter, so the round-to-even rule reaches
+		// rttMs too.
+		{"math.Float64frombits(0x42ba3969c09532d0)", math.Float64frombits(0x42ba3969c09532d0)},
+		{"math.Float64frombits(0x42e2d93924dc6844)", math.Float64frombits(0x42e2d93924dc6844)},
+		{"math.Float64frombits(0xc2ee0c6f8a839d14)", math.Float64frombits(0xc2ee0c6f8a839d14)},
 	}
 	for _, c := range f64Cases {
 		b, err := json.Marshal(c.val)

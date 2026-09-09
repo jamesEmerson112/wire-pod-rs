@@ -86,7 +86,14 @@ impl CamOwner {
     }
 
     fn lock(&self) -> MutexGuard<'_, CamState> {
-        self.state.lock().expect("cam ownership mutex poisoned")
+        // Poisoning is ignored on purpose. Go's mutex has no such concept, so a
+        // panic anywhere under this lock would otherwise turn every later
+        // request for this robot into a permanent panic where the Go server
+        // carries on. Every method here replaces the whole of the state it
+        // touches, so a half-written value cannot survive a panic.
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -223,6 +230,9 @@ impl EventOwner {
     }
 
     fn lock(&self) -> MutexGuard<'_, EventState> {
-        self.state.lock().expect("event ownership mutex poisoned")
+        // Poisoning is ignored, for the reason given on `CamOwner::lock`.
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }

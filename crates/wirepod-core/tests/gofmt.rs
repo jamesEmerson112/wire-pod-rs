@@ -10,7 +10,23 @@ use wirepod_core::{go_format_f32, go_json_f64};
 
 const EXPECTED: &str = include_str!("../../../docs/phases/P4-sdk-app/gofmt-probe/expected.txt");
 
+/// Parses a `math.Float32frombits(0x...)` or `math.Float64frombits(0x...)`
+/// literal into its raw bits.
+///
+/// The probe writes its exact halfway ties that way on purpose: a decimal
+/// literal for one of them would beg the question the case exists to settle,
+/// because the literal would have to be written in one of the two spellings
+/// under test. Parsing the form generically also means a new tie case in the
+/// probe needs no new arm below.
+fn from_bits_literal(literal: &str, prefix: &str) -> Option<u64> {
+    let hex = literal.strip_prefix(prefix)?.strip_suffix(')')?;
+    u64::from_str_radix(hex, 16).ok()
+}
+
 fn f32_input(literal: &str) -> Option<f32> {
+    if let Some(bits) = from_bits_literal(literal, "math.Float32frombits(0x") {
+        return Some(f32::from_bits(u32::try_from(bits).ok()?));
+    }
     Some(match literal {
         "float32(0)" => 0.0,
         "float32(math.Copysign(0, -1))" => -0.0,
@@ -44,6 +60,9 @@ fn f32_input(literal: &str) -> Option<f32> {
 }
 
 fn f64_input(literal: &str) -> Option<f64> {
+    if let Some(bits) = from_bits_literal(literal, "math.Float64frombits(0x") {
+        return Some(f64::from_bits(bits));
+    }
     Some(match literal {
         "float64(0)" => 0.0,
         "float64(math.Copysign(0, -1))" => -0.0,
