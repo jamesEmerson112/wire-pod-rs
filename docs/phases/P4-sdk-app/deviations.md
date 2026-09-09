@@ -788,6 +788,63 @@ same rendering for a status a robot actually returned.
 
 ---
 
+## 24. The TLS handshake is rustls, not grpc-go's `crypto/tls`
+
+**Go.** The SDK dials with certificate verification switched off. `vector.New` passes
+`client.WithInsecureSkipVerify()`
+(`github.com/fforchino/vector-go-sdk@v0.0.0-20231108155304-62168f3595d6/pkg/vector/vector.go:44`),
+hugh turns that into `&tls.Config{InsecureSkipVerify: true}` with no `RootCAs` and no `ServerName`
+(`github.com/digital-dream-labs/hugh@v0.0.0-20210210154335-f4159b9fcd5f/grpc/client/client.go:124-128`),
+and hands it to `credentials.NewTLS` (`client.go:55-56`). `credentials.NewTLS` then applies its own
+defaults: it appends `h2` to `NextProtos`, raises `MinVersion` to TLS 1.2, and, because the caller
+set no `CipherSuites`, fills the list with every suite `tls.CipherSuites()` reports minus the ones
+RFC 7540 appendix A forbids (`google.golang.org/grpc@v1.82.1/credentials/tls.go:239-255`). The
+target is `robot.IPAddress + ":443"` (`pkg/wirepod/sdkapp/robot.go:336`).
+
+**Rust.** `crates/wirepod-vector/src/tls.rs` builds a rustls `ClientConfig` on the ring provider
+with a `ServerCertVerifier` that returns `ServerCertVerified::assertion()` for every chain,
+`alpn_protocols` set to `h2` alone, and the default protocol versions, which with the `tls12`
+feature are TLS 1.2 and TLS 1.3. `TonicConnFactory::insecure_tls` dials `https://<ip>:443` through
+`Endpoint::connect_with_connector`, because tonic's own `tls` feature would add
+`rustls-native-certs` and its companions to `Cargo.lock` and the slice's lock gate forbids that.
+
+**What is the same.** Certificate verification is off on both sides, for the same unavoidable
+reason: Anki signed the robot's certificate with a key nothing on this machine has, so there is no
+chain to build and no name to match. The offered ALPN list is `h2` on both sides, hugh having added
+nothing for grpc-go to append to. Neither side sends SNI for an IP literal: hugh leaves
+`ServerName` empty and Go's `crypto/tls` fills it from the dial target only when that target is not
+an IP, while rustls sends no SNI extension for a `ServerName::IpAddress`, which is what
+`server_name` resolves a dotted quad to. And the handshake signature is still verified on both
+sides. `InsecureSkipVerify` in Go skips chain building and the hostname match and nothing else, so
+the accept-all verifier delegates `verify_tls12_signature` and `verify_tls13_signature` back to the
+crypto provider rather than asserting them; a verifier that asserted those too would accept a
+handshake Go rejects.
+
+**What differs.** The cipher suites offered, and the floor. Go offers Go's list, which is every
+non-forbidden suite `crypto/tls` knows including the CBC-mode TLS 1.2 suites, and refuses anything
+below TLS 1.2. rustls offers only the suites the ring provider carries, which is AES-GCM and
+ChaCha20-Poly1305 over ECDHE and nothing in CBC mode, and refuses anything below TLS 1.2 because
+rustls 0.23 implements nothing below it. So the intersection with a peer is narrower than Go's on
+TLS 1.2. That matters only if Vector's gateway offers a CBC suite and nothing else, which is not
+known and is the reason the live handshake is still on the "not yet verifiable" list. TLS 1.2 is
+deliberately left enabled for the same reason.
+
+**Why the verifier is not a bug fix.** Accepting every certificate is what makes the connection
+possible at all, and it is what every Vector SDK does. There is no stricter option that still
+works: pinning the robot's certificate would need a copy of it per robot, which nothing on disk
+has, and the escape-pod certificate under `assets/epod/` is the server's own, not the robot's.
+
+**Where tested.** `crates/wirepod-vector/tests/tls.rs` runs the production connector against a fake
+robot serving the vendored `assets/epod/ep.crt`, which is self-signed and trusted by no root store,
+and asserts that the handshake completes, that the accepted chain is that certificate, that ALPN
+settles on `h2`, and that a full `BatteryState` round trip works through the resulting channel. A
+TLS 1.2 only fake proves the 1.2 path, and a dial to a closed port proves the failure still maps to
+`Unavailable` with the status prefix deviation 23 describes. The unit tests in
+`crates/wirepod-vector/src/tls.rs` pin the ALPN list, the verifier's acceptance, and that it still
+reports the provider's signature schemes.
+
+---
+
 ## Additional recorded differences
 
 **`run_event_stream` selects on the cancellation token.** Go's loop relies on the receiver
@@ -835,9 +892,9 @@ These are open questions rather than deviations. Nothing in the slice can settle
 they need either a live robot, a listener on a privileged port, or a CI run on a runner this work
 never pushes to.
 
-1. The rustls handshake and the mDNS registration against the real robot. Both require binding
-   443 and 5353, which means stopping the production Go server and taking the robot offline for
-   about five minutes. `RUNBOOK-S1.md` is the procedure.
+1. The inbound rustls listener and the mDNS registration against the real robot. Both require
+   binding 443 and 5353, which means stopping the production Go server and taking the robot
+   offline for about five minutes. `RUNBOOK-S1.md` is the procedure.
 2. Whether `ProtocolVersion(client_version = 5, min_host_version = 0)` answers `SUCCESS` or
    `UNSUPPORTED` on this robot. The slice does not care, because the verdict is discarded by
    construction, but the answer is unknown.
@@ -856,3 +913,8 @@ never pushes to.
    C3 commit (`5f7170f`, run 34305117622, 2026-09-09), after the toolchain file gained `rustfmt`
    and `clippy`. The core and vector commits after it stay unverified on Linux until they are
    pushed.
+8. The outbound TLS handshake against the robot's own gateway. `TonicConnFactory::insecure_tls`
+   is proven against a loopback fake serving the escape-pod certificate, which settles the
+   verifier, the ALPN and the TLS 1.2 path, but not whether the suites the ring provider offers
+   intersect the ones Vector's gateway accepts. Deviation 24 records why the two lists differ.
+   Nothing short of dialling the robot answers it, and no test does that.

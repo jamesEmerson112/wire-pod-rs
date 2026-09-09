@@ -1,10 +1,17 @@
 //! An in-process fake robot, behind the non-default `test-util` feature.
 //!
-//! It serves the real generated `ExternalInterface` service over plaintext
-//! HTTP/2 on `127.0.0.1:0`, so a test exercises the actual tonic client, the
-//! actual codec and the actual metadata path rather than a hand-written stand
-//! in. Binding an ephemeral loopback port and never `0.0.0.0` is what keeps
-//! Windows Defender from prompting.
+//! It serves the real generated `ExternalInterface` service on `127.0.0.1:0`,
+//! so a test exercises the actual tonic client, the actual codec and the actual
+//! metadata path rather than a hand-written stand in. Binding an ephemeral
+//! loopback port and never `0.0.0.0` is what keeps Windows Defender from
+//! prompting.
+//!
+//! Two transports. [`spawn_fake_robot`] serves plaintext HTTP/2, which is what
+//! most tests want because it isolates the client from the handshake.
+//! [`spawn_fake_robot_tls`] serves TLS with the vendored escape-pod
+//! certificate, which no root store trusts, and is what proves the production
+//! dialler in [`crate::tls`] actually completes a handshake and negotiates
+//! `h2`.
 //!
 //! It lives in `src/` rather than in `tests/` because an integration test
 //! binary is not importable from another crate and `wirepod-server`'s tests
@@ -12,15 +19,19 @@
 //! dev-dependency with `features = ["test-util"]`.
 
 use std::future::Future;
+use std::io;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::task::{Context, Poll};
 
-use tokio::net::TcpListener;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::Stream;
 use tokio_stream::wrappers::{TcpListenerStream, UnboundedReceiverStream};
 use tonic::transport::Server;
+use tonic::transport::server::Connected;
 use tonic::{Request, Response, Status};
 use wirepod_core::ProtocolResult;
 use wirepod_proto::anki::vector::external_interface as pb;
@@ -316,6 +327,10 @@ pub struct FakeRobotHandle {
     frames: Mutex<Option<mpsc::UnboundedSender<Result<pb::CameraFeedResponse, Status>>>>,
     shutdown: Mutex<Option<oneshot::Sender<()>>>,
     served: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The TLS accept loop, which the plaintext fake does not have. It owns the
+    /// listener, so it has to be aborted rather than signalled: the server's
+    /// own shutdown only stops it reading the stream it was given.
+    accepting: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl FakeRobotHandle {
@@ -420,6 +435,9 @@ impl FakeRobotHandle {
 
     /// Stops the server and waits for it to finish.
     pub async fn shutdown(&self) {
+        if let Some(accepting) = lock(&self.accepting).take() {
+            accepting.abort();
+        }
         if let Some(sender) = lock(&self.shutdown).take() {
             let _ = sender.send(());
         }
@@ -430,36 +448,163 @@ impl FakeRobotHandle {
     }
 }
 
-/// Starts a fake robot on an ephemeral loopback port.
+/// The escape-pod certificate the TLS fake serves.
+///
+/// It is the vendored `assets/epod/ep.crt`, byte-identical to the Go server's,
+/// which is self-signed and therefore trusted by no root store on any machine.
+/// That is exactly the property the TLS tests need: a handshake that completes
+/// against it proves the accept-all verifier is doing the accepting.
+const EPOD_CERT: &[u8] = include_bytes!("../../../assets/epod/ep.crt");
+
+/// The private key for [`EPOD_CERT`], vendored as `assets/epod/ep.key`.
+const EPOD_KEY: &[u8] = include_bytes!("../../../assets/epod/ep.key");
+
+/// The TLS versions a fake offers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TlsVersions {
+    /// TLS 1.2 and TLS 1.3, which is what a default rustls server offers and
+    /// what a modern peer settles on as 1.3.
+    Both,
+    /// TLS 1.2 only. grpc-go raises `MinVersion` to TLS 1.2 and stops there
+    /// (`google.golang.org/grpc@v1.82.1/credentials/tls.go:243-245`), and
+    /// Vector's gateway is old, so a client that could not speak 1.2 would fail
+    /// against real hardware while passing every TLS 1.3 test.
+    Tls12Only,
+}
+
+/// The certificate chain the TLS fake presents, in DER.
+///
+/// Exported so a test can assert that the chain the client accepted is this
+/// one, rather than merely that some handshake completed. Parsing lives here
+/// because `rustls-pemfile` is an optional dependency this feature turns on.
+pub fn epod_certificate_chain() -> Vec<rustls::pki_types::CertificateDer<'static>> {
+    rustls_pemfile::certs(&mut &EPOD_CERT[..])
+        .collect::<Result<Vec<_>, _>>()
+        .expect("parse the escape-pod certificate")
+}
+
+/// The rustls server configuration the TLS fake serves.
+fn epod_server_config(versions: TlsVersions) -> Arc<rustls::ServerConfig> {
+    let certs = epod_certificate_chain();
+    let key = rustls_pemfile::private_key(&mut &EPOD_KEY[..])
+        .expect("read the escape-pod key")
+        .expect("the escape-pod key file holds a private key");
+    // The provider is named rather than installed as the process default, for
+    // the same reason `crate::tls` names it: a test binary runs many tests in
+    // one process and installing a global from one of them is a race.
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let builder = rustls::ServerConfig::builder_with_provider(provider);
+    let builder = match versions {
+        TlsVersions::Both => builder.with_safe_default_protocol_versions(),
+        TlsVersions::Tls12Only => builder.with_protocol_versions(&[&rustls::version::TLS12]),
+    }
+    .expect("the ring provider supports the requested protocol versions");
+    let mut config = builder
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .expect("the escape-pod certificate and key agree");
+    config.alpn_protocols = vec![b"h2".to_vec()];
+    Arc::new(config)
+}
+
+/// A handshaken TLS stream, wrapped so tonic will serve it.
+///
+/// tonic implements `Connected` for `tokio_rustls::server::TlsStream` only
+/// under its own `tls` feature, which this workspace cannot enable, so the
+/// newtype supplies the one impl that is missing. The connect info is `()`
+/// because nothing in the slice reads it.
+struct TlsIo(tokio_rustls::server::TlsStream<TcpStream>);
+
+impl Connected for TlsIo {
+    type ConnectInfo = ();
+
+    fn connect_info(&self) -> Self::ConnectInfo {}
+}
+
+impl AsyncRead for TlsIo {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for TlsIo {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.0).poll_shutdown(cx)
+    }
+}
+
+/// The scripted state and the two stream senders a fresh fake starts with.
+struct FakeParts {
+    state: Arc<FakeState>,
+    events: mpsc::UnboundedSender<Result<pb::EventResponse, Status>>,
+    frames: mpsc::UnboundedSender<Result<pb::CameraFeedResponse, Status>>,
+}
+
+fn new_fake() -> FakeParts {
+    let (event_tx, event_rx) = mpsc::unbounded_channel();
+    let (frame_tx, frame_rx) = mpsc::unbounded_channel();
+    FakeParts {
+        state: Arc::new(FakeState {
+            calls: Mutex::new(Vec::new()),
+            battery: Mutex::new(Ok(pb::BatteryStateResponse::default())),
+            protocol: Mutex::new((ProtocolResult::Unsupported, 0)),
+            last_protocol: Mutex::new(None),
+            last_event: Mutex::new(None),
+            events: Mutex::new(Some(event_rx)),
+            frames: Mutex::new(Some(frame_rx)),
+            enables: Mutex::new(Vec::new()),
+        }),
+        events: event_tx,
+        frames: frame_tx,
+    }
+}
+
+/// Binds the one address every fake uses.
+///
+/// `127.0.0.1:0` and never `0.0.0.0`: an ephemeral loopback port raises no
+/// Windows Defender prompt.
+async fn bind_loopback() -> (TcpListener, SocketAddr) {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind loopback");
+    let addr = listener.local_addr().expect("loopback address");
+    (listener, addr)
+}
+
+/// The `ExternalInterface` service a fake serves.
+fn fake_service(state: &Arc<FakeState>) -> ExternalInterfaceServer<FakeRobot> {
+    ExternalInterfaceServer::new(FakeRobot {
+        state: Arc::clone(state),
+    })
+}
+
+/// Starts a fake robot on an ephemeral loopback port, speaking plaintext
+/// HTTP/2.
 ///
 /// Returns the address it bound and the handle that drives it. The caller
 /// should `shutdown` the handle, though dropping it is safe: the task ends when
 /// the runtime does.
 pub async fn spawn_fake_robot() -> (SocketAddr, FakeRobotHandle) {
-    let (event_tx, event_rx) = mpsc::unbounded_channel();
-    let (frame_tx, frame_rx) = mpsc::unbounded_channel();
-    let state = Arc::new(FakeState {
-        calls: Mutex::new(Vec::new()),
-        battery: Mutex::new(Ok(pb::BatteryStateResponse::default())),
-        protocol: Mutex::new((ProtocolResult::Unsupported, 0)),
-        last_protocol: Mutex::new(None),
-        last_event: Mutex::new(None),
-        events: Mutex::new(Some(event_rx)),
-        frames: Mutex::new(Some(frame_rx)),
-        enables: Mutex::new(Vec::new()),
-    });
-
-    // `127.0.0.1:0` and never `0.0.0.0`: an ephemeral loopback port raises no
-    // Windows Defender prompt.
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind loopback");
-    let addr = listener.local_addr().expect("loopback address");
-
+    let parts = new_fake();
+    let (listener, addr) = bind_loopback().await;
     let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let service = ExternalInterfaceServer::new(FakeRobot {
-        state: Arc::clone(&state),
-    });
+    let service = fake_service(&parts.state);
     let served = tokio::spawn(async move {
         let _ = Server::builder()
             .add_service(service)
@@ -470,11 +615,68 @@ pub async fn spawn_fake_robot() -> (SocketAddr, FakeRobotHandle) {
     });
 
     let handle = FakeRobotHandle {
-        state,
-        events: Mutex::new(Some(event_tx)),
-        frames: Mutex::new(Some(frame_tx)),
+        state: parts.state,
+        events: Mutex::new(Some(parts.events)),
+        frames: Mutex::new(Some(parts.frames)),
         shutdown: Mutex::new(Some(shutdown_tx)),
         served: Mutex::new(Some(served)),
+        accepting: Mutex::new(None),
+    };
+    (addr, handle)
+}
+
+/// Starts a fake robot on an ephemeral loopback port, speaking TLS with the
+/// escape-pod certificate and offering `h2`.
+///
+/// The versions are [`TlsVersions::Both`], so a modern client settles on TLS
+/// 1.3. Use [`spawn_fake_robot_tls_with`] to pin 1.2.
+pub async fn spawn_fake_robot_tls() -> (SocketAddr, FakeRobotHandle) {
+    spawn_fake_robot_tls_with(TlsVersions::Both).await
+}
+
+/// [`spawn_fake_robot_tls`] with the offered TLS versions chosen.
+pub async fn spawn_fake_robot_tls_with(versions: TlsVersions) -> (SocketAddr, FakeRobotHandle) {
+    let parts = new_fake();
+    let (listener, addr) = bind_loopback().await;
+    let acceptor = tokio_rustls::TlsAcceptor::from(epod_server_config(versions));
+
+    // The handshake happens in the accept loop rather than inside tonic, so the
+    // stream handed to `serve_with_incoming_shutdown` carries only connections
+    // that already completed one. Each handshake gets its own task, so a client
+    // that opens a socket and then stalls cannot hold up the next one, and a
+    // handshake that fails is dropped rather than surfaced: a test that cared
+    // would see it as a dial error on the client side instead.
+    let (conn_tx, conn_rx) = mpsc::unbounded_channel::<io::Result<TlsIo>>();
+    let accepting = tokio::spawn(async move {
+        while let Ok((tcp, _peer)) = listener.accept().await {
+            let acceptor = acceptor.clone();
+            let conn_tx = conn_tx.clone();
+            tokio::spawn(async move {
+                if let Ok(stream) = acceptor.accept(tcp).await {
+                    let _ = conn_tx.send(Ok(TlsIo(stream)));
+                }
+            });
+        }
+    });
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let service = fake_service(&parts.state);
+    let served = tokio::spawn(async move {
+        let _ = Server::builder()
+            .add_service(service)
+            .serve_with_incoming_shutdown(UnboundedReceiverStream::new(conn_rx), async {
+                let _ = shutdown_rx.await;
+            })
+            .await;
+    });
+
+    let handle = FakeRobotHandle {
+        state: parts.state,
+        events: Mutex::new(Some(parts.events)),
+        frames: Mutex::new(Some(parts.frames)),
+        shutdown: Mutex::new(Some(shutdown_tx)),
+        served: Mutex::new(Some(served)),
+        accepting: Mutex::new(Some(accepting)),
     };
     (addr, handle)
 }

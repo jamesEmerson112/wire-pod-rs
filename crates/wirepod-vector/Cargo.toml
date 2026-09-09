@@ -5,15 +5,22 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-# Exposes `test_support::spawn_fake_robot` to other crates, and to this crate's
-# own integration tests through the self dev-dependency below.
-test-util = []
+# Exposes `test_support::spawn_fake_robot` and its TLS twin to other crates, and
+# to this crate's own integration tests through the self dev-dependency below.
+# The TLS fake is the only thing here that parses PEM, so `rustls-pemfile` is
+# optional and only the test build pulls it in.
+test-util = ["dep:rustls-pemfile"]
 
 [dependencies]
 async-trait.workspace = true
+hyper-util.workspace = true
+rustls.workspace = true
+rustls-pemfile = { workspace = true, optional = true }
 tokio.workspace = true
+tokio-rustls.workspace = true
 tokio-stream.workspace = true
 tonic.workspace = true
+tower.workspace = true
 tracing.workspace = true
 wirepod-core.workspace = true
 wirepod-proto.workspace = true

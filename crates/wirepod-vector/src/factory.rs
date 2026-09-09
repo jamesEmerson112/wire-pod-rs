@@ -1,17 +1,19 @@
 //! Dialling a robot.
 //!
-//! The endpoint is built through an injectable closure so that the loopback
-//! test can point the same client at a fake robot on an ephemeral port without
-//! the factory knowing anything about tests.
+//! Production dials TLS with the accept-all verifier the Go SDK uses, which is
+//! [`crate::tls`]. Tests dial plaintext HTTP/2 through an injected endpoint
+//! builder, so the loopback fake can bind an ephemeral port without the factory
+//! knowing anything about tests.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use tonic::transport::Endpoint;
-use wirepod_core::{ConnError, ConnTarget, RobotConn, RobotConnFactory, StatusCode};
+use wirepod_core::{ConnError, ConnTarget, RobotConn, RobotConnFactory};
 
 use crate::conn::TonicRobotConn;
 use crate::error::{dial_error, endpoint_error};
+use crate::tls::InsecureTlsConnector;
 
 /// Turns a [`ConnTarget`] into the endpoint to dial.
 pub type EndpointBuilder = Box<dyn Fn(&ConnTarget) -> Result<Endpoint, ConnError> + Send + Sync>;
@@ -31,26 +33,20 @@ fn authority(target: &ConnTarget) -> String {
     }
 }
 
-/// The builder a [`TonicConnFactory`] uses when none is injected.
+/// The endpoint the TLS path dials.
 ///
-/// It refuses to dial. The robot presents a self-signed certificate, which the
-/// Go SDK accepts with `client.WithInsecureSkipVerify()`
-/// (`vector-go-sdk@v0.0.0-20231108155304-62168f3595d6/pkg/vector/vector.go:42-48`),
-/// and reproducing that needs tonic's `tls` feature, which pulls `tokio-rustls`
-/// and its companions into tonic's entry in `Cargo.lock`. The slice's lock gate
-/// forbids that, so real-robot TLS is a documented follow-up and the default
-/// path fails loudly rather than silently dialling plaintext to a robot that
-/// would never answer.
-pub fn default_builder() -> EndpointBuilder {
-    Box::new(|target| {
-        Err(ConnError::new(
-            StatusCode::Unavailable,
-            format!(
-                "TLS dialling is not configured yet; no endpoint for {}",
-                authority(target)
-            ),
-        ))
-    })
+/// The scheme is `https` because that is what the connection is and what the
+/// `:scheme` pseudo-header should therefore say; grpc-go sets the same one
+/// whenever transport credentials are configured. tonic does not act on the
+/// scheme here, because the check that rejects an `https` URI without TLS
+/// support lives inside the connector tonic wraps around its own HTTP
+/// connector and is compiled out when tonic's `tls` feature is off
+/// (`tonic-0.12.3/src/transport/channel/service/connector.rs:56-72`). The
+/// handshake is [`InsecureTlsConnector`]'s job instead.
+fn tls_endpoint(target: &ConnTarget) -> Result<Endpoint, ConnError> {
+    let uri = format!("https://{}", authority(target));
+    Endpoint::from_shared(uri.clone())
+        .map_err(|err| endpoint_error(format!("invalid endpoint {uri}: {err}")))
 }
 
 /// A builder that dials plaintext HTTP/2.
@@ -65,9 +61,19 @@ pub fn plaintext_builder() -> EndpointBuilder {
     })
 }
 
+/// How a factory reaches a robot.
+enum Dialer {
+    /// `Endpoint::connect`, over an injected endpoint. Plaintext HTTP/2, which
+    /// only the loopback fake speaks.
+    Plaintext(EndpointBuilder),
+    /// `Endpoint::connect_with_connector`, over the TLS connector the Go SDK
+    /// describes. This is production.
+    Tls(InsecureTlsConnector),
+}
+
 /// Dials robots over gRPC.
 pub struct TonicConnFactory {
-    build: EndpointBuilder,
+    dialer: Dialer,
 }
 
 impl Default for TonicConnFactory {
@@ -77,16 +83,44 @@ impl Default for TonicConnFactory {
 }
 
 impl TonicConnFactory {
-    /// A factory using [`default_builder`].
+    /// The production factory, which is [`Self::insecure_tls`].
     pub fn new() -> Self {
+        Self::insecure_tls()
+    }
+
+    /// A factory that dials TLS on port 443 and accepts the robot's
+    /// self-signed certificate.
+    ///
+    /// The name says `insecure` for the same reason hugh's option is called
+    /// `WithInsecureSkipVerify`: certificate verification is off, deliberately
+    /// and unavoidably, because Anki signed the robot's certificate with a key
+    /// nothing on this machine has. [`crate::tls`] carries the full reasoning.
+    pub fn insecure_tls() -> Self {
         Self {
-            build: default_builder(),
+            dialer: Dialer::Tls(InsecureTlsConnector::new()),
         }
     }
 
-    /// A factory using the given endpoint builder.
+    /// A factory that dials plaintext HTTP/2 through the given endpoint
+    /// builder.
+    ///
+    /// Tests only. Pair it with [`plaintext_builder`].
     pub fn with_endpoint_builder(build: EndpointBuilder) -> Self {
-        Self { build }
+        Self {
+            dialer: Dialer::Plaintext(build),
+        }
+    }
+
+    /// The TLS connector this factory dials with, when it has one.
+    ///
+    /// A caller that wants to reuse the session cache for something other than
+    /// a gRPC channel, such as the `/v1/update_settings` REST call, can clone
+    /// it rather than building a second configuration.
+    pub fn tls_connector(&self) -> Option<&InsecureTlsConnector> {
+        match &self.dialer {
+            Dialer::Tls(connector) => Some(connector),
+            Dialer::Plaintext(_) => None,
+        }
     }
 }
 
@@ -96,9 +130,25 @@ impl RobotConnFactory for TonicConnFactory {
     /// connect-time `BatteryState` liveness check Go performs
     /// (`robot.go:365-369`) belongs to the registry, which is what decides
     /// whether a dialled robot counts as reachable.
+    ///
+    /// Both arms dial eagerly where `grpc.Dial` is lazy
+    /// (`hugh@v0.0.0-20210210154335-f4159b9fcd5f/grpc/client/client.go:87`), so
+    /// an unreachable robot fails here rather than at the first RPC. Deviation
+    /// 23 records what that changes about the error text and what it does not.
     async fn connect(&self, target: &ConnTarget) -> Result<Arc<dyn RobotConn>, ConnError> {
-        let endpoint = (self.build)(target)?;
-        let channel = endpoint.connect().await.map_err(|err| dial_error(&err))?;
+        let channel = match &self.dialer {
+            Dialer::Plaintext(build) => {
+                let endpoint = build(target)?;
+                endpoint.connect().await.map_err(|err| dial_error(&err))?
+            }
+            Dialer::Tls(connector) => {
+                let endpoint = tls_endpoint(target)?;
+                endpoint
+                    .connect_with_connector(connector.clone())
+                    .await
+                    .map_err(|err| dial_error(&err))?
+            }
+        };
         Ok(Arc::new(TonicRobotConn::new(channel, &target.guid)?))
     }
 }
@@ -127,14 +177,27 @@ mod tests {
     }
 
     #[test]
-    fn the_default_builder_refuses_and_names_the_target() {
-        let err = default_builder()(&target("192.168.8.203")).expect_err("no TLS yet");
-        assert_eq!(err.code, StatusCode::Unavailable);
-        assert!(err.desc.contains("192.168.8.203:443"), "{}", err.desc);
+    fn the_tls_endpoint_is_https_on_the_go_port() {
+        let endpoint = tls_endpoint(&target("192.168.8.203")).expect("valid endpoint");
+        assert_eq!(endpoint.uri().scheme_str(), Some("https"));
+        assert_eq!(
+            endpoint.uri().authority().map(|a| a.as_str()),
+            Some("192.168.8.203:443")
+        );
     }
 
     #[test]
     fn the_plaintext_builder_accepts_a_loopback_address() {
         plaintext_builder()(&target("127.0.0.1:51234")).expect("valid endpoint");
+    }
+
+    #[test]
+    fn the_default_factory_is_the_tls_one() {
+        assert!(TonicConnFactory::default().tls_connector().is_some());
+        assert!(
+            TonicConnFactory::with_endpoint_builder(plaintext_builder())
+                .tls_connector()
+                .is_none()
+        );
     }
 }
