@@ -605,6 +605,13 @@ aborts its task, and asserts the join handle reports cancellation, that the robo
 one `ProtocolVersion`, and that the next probe answers normally. Nothing asserts the absent body,
 because asserting it would be asserting the difference rather than the contract.
 
+The reason this difference is accepted is a property of its own, and
+`an_abandoned_probe_leaves_no_rpc_in_flight` is what holds it. The fake robot's call log cannot
+tell a dropped round trip from one that is still parked, because the call is recorded before it
+parks, so that test watches the strong count of the `Arc<dyn RobotConn>` instead and requires it
+back at its settled value once the handler's task is gone. A probe that had been spawned rather
+than awaited inline would still be holding the owned reference `tokio::spawn` forces it to take.
+
 ---
 
 ## 20. A stream setup abandoned by a stop logs nothing where Go logs `context canceled`

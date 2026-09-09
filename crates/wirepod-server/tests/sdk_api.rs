@@ -524,6 +524,39 @@ async fn a_probe_abandoned_by_its_client_leaves_no_second_call_behind() {
 }
 
 #[tokio::test]
+async fn an_abandoned_probe_leaves_no_rpc_in_flight() {
+    let conn = Arc::new(FakeRobotConn::new());
+    let gate = conn.arm_protocol_gate();
+    let server = scripted(Arc::clone(&conn));
+    server
+        .post(&format!("/api-sdk/conn_test?serial={SERIAL}"))
+        .await;
+
+    // The registry entry, the dial seam and this test hold the only references
+    // while nothing is in flight, so any extra one belongs to a round trip.
+    let settled = Arc::strong_count(&conn);
+    let probe = detached(&server, format!("/api-sdk/net_probe?serial={SERIAL}"));
+    gate.wait_entered().await;
+    probe.abort();
+    let _ = probe.await;
+
+    // The call log cannot tell these two apart: the fake records the call
+    // before it parks, so a dropped round trip and one still parked in the gate
+    // both read as exactly one `ProtocolVersion`. The reference count can. The
+    // RPC is awaited inline, so the handler's future owns it and the drop takes
+    // it; a probe that had been spawned instead would still be parked here,
+    // holding the owned `Arc` that `tokio::spawn` forces it to take, and this
+    // would never come back down. That is the property deviation 19 accepts the
+    // missing `Canceled` body for.
+    wait_until("the robot connection to be let go", || {
+        Arc::strong_count(&conn) == settled
+    })
+    .await;
+    gate.release();
+    assert_eq!(Arc::strong_count(&conn), settled);
+}
+
+#[tokio::test]
 async fn cam_on_follows_camera_ownership() {
     let server = scripted(Arc::new(FakeRobotConn::new()));
     server
@@ -809,11 +842,10 @@ async fn the_stim_value_is_the_one_the_receiver_published_and_zeroes_on_a_stop()
     assert!(!reply.body.ends_with('\n'));
     assert_eq!(reply.content_type(), Some(literals::CONTENT_TYPE_TEXT));
 
-    // A reading whose velocity is zero is not a reading at all: proto3 omits a
-    // zero scalar from the text form, and Go's presence test is
-    // `strings.Contains(fmt.Sprint(stimInfo), "velocity")`. So the 0.5 below
-    // is skipped and the 0.1 after it is what lands.
-    handle.send_stim(0.5, 0.0);
+    // A second reading replaces the first and is rendered the same way. The
+    // zero-velocity rule is pinned by a test of its own rather than here,
+    // because waiting for a later value cannot tell a write that was skipped
+    // from one that was overwritten.
     handle.send_stim(0.1, 0.25);
     wait_until("the second published reading", || owner.stim().value == 0.1).await;
     let reply = server
@@ -827,6 +859,53 @@ async fn the_stim_value_is_the_one_the_receiver_published_and_zeroes_on_a_stop()
         .post(&format!("/api-sdk/stop_event_stream?serial={SERIAL}"))
         .await;
     assert_eq!(owner.stim(), StimSample::ZERO);
+    let reply = server
+        .get(&format!("/api-sdk/get_stim_status?serial={SERIAL}"))
+        .await;
+    assert_eq!(reply.body, literals::MUST_START_EVENT_STREAM);
+}
+
+#[tokio::test]
+async fn a_zero_velocity_event_is_not_a_reading() {
+    let (receiver, mut handle) = FakeReceiver::new();
+    let conn = Arc::new(FakeRobotConn::new().with_event_stream(Ok(Box::new(receiver))));
+    let server = scripted(conn);
+
+    server
+        .post(&format!("/api-sdk/begin_event_stream?serial={SERIAL}"))
+        .await;
+    tokio::time::timeout(CEILING, handle.ready())
+        .await
+        .expect("the receiver reached its receive");
+
+    let owner = Arc::clone(&entry(&server).session.events);
+    handle.send_stim(0.75, 0.1);
+    wait_until("the published reading", || owner.stim().value == 0.75).await;
+
+    // proto3 omits a zero scalar from the text form, so Go's presence test,
+    // `strings.Contains(fmt.Sprint(stimInfo), "velocity")` (`server.go:656-659`),
+    // is false for such an event and the value never reaches the state.
+    //
+    // The skipped event is queued last and the clean end of stream behind it is
+    // the barrier. The channel is ordered and the loop drops its receiver only
+    // once it has consumed everything ahead of the end, so an event that had
+    // been published would already have replaced the 0.75 by the time this
+    // resolves.
+    handle.send_stim(0.5, 0.0);
+    handle.end();
+    tokio::time::timeout(CEILING, handle.wait_dropped())
+        .await
+        .expect("the loop drained the queue and returned");
+    assert_eq!(
+        owner.stim(),
+        StimSample::new(0.75, 0.1),
+        "a zero-velocity event is not a reading"
+    );
+
+    // The loop released the claim on its way out, so the status route is back
+    // to the sentinel; the release leaves the reading alone, which is why the
+    // assertion above is made against the owner rather than through the route.
+    assert!(!owner.is_streaming());
     let reply = server
         .get(&format!("/api-sdk/get_stim_status?serial={SERIAL}"))
         .await;

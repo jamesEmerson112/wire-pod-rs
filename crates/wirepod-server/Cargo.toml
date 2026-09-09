@@ -28,9 +28,10 @@ tracing.workspace = true
 wirepod-core.workspace = true
 
 [dev-dependencies]
-tokio.workspace = true
-tokio-util.workspace = true
-tower.workspace = true
+# `tokio`, `tokio-util` and `tower` are deliberately absent: a crate's own
+# `[dependencies]` are linked into its test targets too, so repeating them here
+# would read as a second, independent requirement rather than the same one.
+#
 # The same mechanism `wirepod-core` and `wirepod-vector` use: helpers that both
 # `src` and several integration-test binaries need live in `src/` behind a
 # feature, and listing this crate as its own dev-dependency is what turns that
