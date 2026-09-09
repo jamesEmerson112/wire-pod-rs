@@ -58,8 +58,8 @@ pub fn clean(path: &str) -> Cow<'_, str> {
 /// A segment is left exactly as it arrived in two cases, both of which are
 /// Go's behaviour or indistinguishable from it. `url.PathUnescape` fails on a
 /// `%` that is not followed by two hex digits and `pathUnescape` then keeps the
-/// original (`net/http/routing_tree.go:196-203`). And a segment whose decoded
-/// form carries a byte that cannot be written back into a URI path -- a `/`,
+/// original (`net/http/pattern.go:199-206`). And a segment whose decoded form
+/// carries a byte that cannot be written back into a URI path -- a `/`,
 /// `?`, `#`, `%`, a space, a control byte or anything non-ASCII -- is kept
 /// escaped, because rewriting it would either change the path structure or
 /// produce a URI that will not parse. Go compares the decoded segment against a

@@ -296,6 +296,47 @@ dashboard differences two samples; the Rust code says so in a comment.
 Five of the eight need no async runtime, which is the direct consequence of keeping the ownership
 state machines pure and synchronous on `std::sync::Mutex`.
 
+## The guard each port depends on
+
+A ported test is only worth having if it fails when the property it names is broken, so each of the
+eight was checked by deleting the guard named below, running `cargo test -p wirepod-core`, watching
+the listed test fail, and restoring the file with `git checkout --`. Test files are under
+`crates/wirepod-core/tests/` and guards are under `crates/wirepod-core/src/`.
+
+| Go test | Rust test | Guard whose removal fails it |
+|---|---|---|
+| 1 handoff keeps camera on | `cam_ownership.rs::a_handoff_that_queues_behind_the_replacement_keeps_the_camera_on` | The `let _op = self.session.lock_cam_op().await` that opens `CamGuard::finish`, in `robot/cam.rs` |
+| 2 superseded release ignored | `cam_ownership.rs::release_ignores_a_superseded_owner` | The generation check that returns `false` at the top of `CamOwner::release`, in `robot/session.rs` |
+| 3 never two event owners | `event_ownership.rs::begin_and_stop_cycles_never_stack_receivers` | The `() = cancel.cancelled() => break EventLoopExit::Cancelled` arm of the `select!` in `run_event_stream`, in `robot/events.rs` |
+| 4 stop ends a parked receiver | `event_ownership.rs::stop_ends_a_parked_receiver_promptly` | The same cancellation arm of `run_event_stream` |
+| 5 claim refuses while owned | `event_ownership.rs::claim_refuses_while_owned_and_is_admitted_after_a_stop` | The `if state.current.is_some() { return None }` refusal in `EventOwner::claim`, in `robot/session.rs` |
+| 6 superseded receiver cannot write stim | `event_ownership.rs::a_superseded_receiver_cannot_write_stim` | The generation check that returns `false` at the top of `EventOwner::write_stim`, in `robot/session.rs` |
+| 7 meters per robot, zero for unknown | `cam_meter.rs::meters_keep_robots_apart_and_an_unknown_esn_reads_zero` | The non-inserting `HashMap::get` in `CamMeters::read`, in `robot/meter.rs` |
+| 8 exact totals under concurrency | `cam_meter.rs::the_meter_counts_exactly_under_concurrency` | The two `fetch_add` calls on the `AtomicU64` counters in `CamMeter::record`, in `robot/meter.rs` |
+
+Four of the rows need a word of explanation.
+
+Go test 1 is ported as several interleavings and only the queued one needs the operation lock. The
+first interleaving, `a_handoff_under_a_live_owner_keeps_the_camera_on`, falls to the generation
+check in `CamOwner::release` instead, which is test 2's guard; it is
+`a_handoff_that_queues_behind_the_replacement_keeps_the_camera_on` that asserts a departing
+handler's release is held up while the replacement is inside its enable, so it is the row above.
+Deleting the lock also fails `a_replacement_that_queues_behind_a_disable_keeps_the_camera_on`.
+
+Tests 3 and 4 share one guard, because the fake receiver ignores cancellation entirely and the
+loop's own `select!` is the only thing that can end it. Test 4 sees the failure as a task that
+never exits; test 3 sees it as a live receiver count that never returns to zero. Neither of the
+two nearby guards fails test 3: removing the claim refusal leaves it passing, because each cycle
+claims after a stop and finds the stream free anyway, and making `EventOwner::stop` clone the
+token instead of taking the entry leaves it passing too, because the loop's own
+generation-checked release frees the stream on its way out.
+
+Test 8's guard cannot be removed in the obvious way. Replacing the atomics with plain `u64` fields
+does not compile, because the meter is shared behind an `Arc`, which is the sense in which the Rust
+type system discharges most of what the Go test proves. The check therefore swapped each
+`fetch_add` for a `load` followed by a `store` through the same atomic, which compiles, races, and
+loses the updates the test counts.
+
 ## What the Go tests do not cover
 
 The file and the commit messages both say so. `camStreamHandler` itself, `SdkapiHandler` and

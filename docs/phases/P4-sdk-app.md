@@ -44,4 +44,4 @@ An early slice of this phase is being implemented ahead of P1 through P3. It cov
 
 ## Status
 
-Spec written; early slice in progress.
+Spec written; early slice landed on master through C12 (core, vector, the ten `/api-sdk` slice routes, `/api/get_bot_status`, `/ok`; 207 tests). P4 proper not started.

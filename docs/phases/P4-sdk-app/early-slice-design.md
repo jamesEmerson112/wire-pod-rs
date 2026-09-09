@@ -225,10 +225,18 @@ directly, so a server-side wrapper would be a newtype with nothing in it. P1 is 
 reason to add one, when the supervisor's cancellation token and the mDNS handle need somewhere to
 live that is not core.
 
-`sdkapp/net_probe.rs`, `sdkapp/stim.rs` and `sdkapp/cam.rs` do not exist yet; their routes are
-marked arms in `sdkapp/mod.rs` and land with C11 and C12. `begin_cam_stream` needs no module
-because Go's arm is a no-op whose only statement is commented out. `tests/live_seam.rs` lands with
-C11 for the same reason.
+The core test binaries split further than the block shows. It names seven files under
+`crates/wirepod-core/tests/` and there are eleven, because `identity.rs` (C4, `19fdca4`),
+`cam_pump.rs` (C6, `e159421`), `bot_info.rs` (C7, `5ee3b87`) and `state.rs` (C8, `ad227bd`) each
+took a binary of their own rather than being folded into a neighbour. The split follows the module
+under test, so a failing binary names the module before anything reads the test body.
+
+### What C11 added
+
+`sdkapp/net_probe.rs`, `sdkapp/stim.rs` and `tests/live_seam.rs` landed with C11 (`fa4083e`), and
+`sdkapp/cam.rs` with C12 (`cec8612`), so every file the block names now exists. `begin_cam_stream`
+still needs no module of its own, because Go's arm is a no-op whose only statement is commented
+out.
 
 ### What C12 added beyond the block above
 

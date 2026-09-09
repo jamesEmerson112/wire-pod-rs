@@ -88,7 +88,7 @@ These hold across the three crates that carry P4 slice code, and code added to t
 - `wirepod-core` and `wirepod-server` carry `#![deny(clippy::await_holding_lock)]`. The ownership state machines guard their state with `std::sync::Mutex` and no guard ever crosses an `.await`, which is what lets them be driven from plain `#[test]` functions with no runtime. The one lock that is genuinely held across an await, the per-robot camera op lock, is a `tokio::sync::Mutex`.
 - Every duration the slice waits on is a field of `Timings`, injected through `AppState` rather than read from a constant at the call site. Tests never use tokio's `start_paused`: they run zero settles and millisecond deadlines against the real clock, with a generous ceiling around the assertion so a regression times out instead of hanging.
 - Go's `gen` counter is `Generation` here and its fields are named `generation`, because `gen` is a reserved keyword in edition 2024.
-- Every deliberate difference from the Go server is numbered in `docs/phases/P4-sdk-app/deviations.md`, currently 1 through 22, with what differs, why, and where it is tested. A difference that is not listed there is a bug, not a decision.
+- Every deliberate difference from the Go server is numbered in `docs/phases/P4-sdk-app/deviations.md`, currently 1 through 23, with what differs, why, and where it is tested. A difference that is not listed there is a bug, not a decision.
 
 ### wirepod-proto
 

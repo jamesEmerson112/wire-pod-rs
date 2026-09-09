@@ -8,7 +8,7 @@ The port runs in eleven phases, P0 through P10. This index is the map; each row 
 | P1 | Robot connects & authenticates | not started | [P1-robot-connect-auth.md](P1-robot-connect-auth.md) |
 | P2 | Voice commands | not started | [P2-voice-commands.md](P2-voice-commands.md) |
 | P3 | LLM/KG/weather/commands | not started | [P3-llm-kg-weather-commands.md](P3-llm-kg-weather-commands.md) |
-| P4 | SDK app + web UI + camera | spec written; early slice in progress | [P4-sdk-app.md](P4-sdk-app.md) |
+| P4 | SDK app + web UI + camera | spec written; early slice landed on master through C12 (core, vector, the ten `/api-sdk` slice routes, `/api/get_bot_status`, `/ok`; 207 tests); P4 proper not started | [P4-sdk-app.md](P4-sdk-app.md) |
 | P5 | Watchdog, logger polish, Lua | not started | [P5-watchdog-logger-lua.md](P5-watchdog-logger-lua.md) |
 | P6 | WASM plugins | not started | [P6-wasm-plugins.md](P6-wasm-plugins.md) |
 | P7 | Setup: certs, SSH, BLE | not started | [P7-setup-certs-ssh-ble.md](P7-setup-certs-ssh-ble.md) |

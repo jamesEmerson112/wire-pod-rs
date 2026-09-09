@@ -23,9 +23,15 @@ opened.
 extra open stream per cached connection for no observable benefit, and the robot pays for it.
 The difference is one fewer open stream on the robot per connected serial.
 
-**Where tested.** `crates/wirepod-vector/tests/loopback.rs` asserts that a connect issues
-`BatteryState` and nothing else. The same test asserts the connection id `wirepod` on the stream
-that `begin_event_stream` does open, so the two streams cannot be confused later.
+**Where tested.** Three tests hold the three parts of this, because the factory and the registry
+own different parts of a connect. `crates/wirepod-vector/tests/loopback.rs::connect_issues_no_rpc`
+asserts that building the connection issues no RPC at all, which is where the dead stream would
+have been opened if the port had reproduced it. The liveness call belongs to the registry, so the
+`BatteryState`-and-nothing-else property is
+`crates/wirepod-core/tests/registry.rs::a_connect_issues_only_the_liveness_call_and_caches_the_entry`,
+which asserts the recorded calls are exactly `[BatteryState]`. The connection id `wirepod` is
+pinned by `loopback.rs::the_event_stream_request_is_the_stim_shape` on the stream that
+`begin_event_stream` does open, so the two streams cannot be confused later.
 
 ---
 
@@ -720,6 +726,65 @@ owners in `robot/session.rs` are, since both already cancel as well as clearing 
 
 **Where recorded.** Here. No test pins it, because the routes that would set the flag are not in
 the slice.
+
+---
+
+## 23. A failed dial reads differently after `desc = `
+
+**Go.** Nothing dials at connect time. `newRobot` builds the client through the SDK's
+`vector.New`, which hands the target to hugh's `Client.Connect`, and that calls `grpc.Dial` with no
+`WithBlock`
+(`github.com/digital-dream-labs/hugh@v0.0.0-20210210154335-f4159b9fcd5f/grpc/client/client.go:87`).
+The dial is therefore lazy and an unreachable robot surfaces at the first RPC, which is the
+`BatteryState` liveness check on the next line of `newRobot` (`robot.go:365-369`). What that call
+returns is grpc-go's own text rather than anything wire-pod writes: the pick fails and is wrapped
+as `status.Error(codes.Unavailable, err.Error())`
+(`google.golang.org/grpc@v1.82.1/picker_wrapper.go:176`), the error inside it is the balancer's
+last `transport.ConnectionError`, which prints as `connection error: desc = %q`
+(`google.golang.org/grpc@v1.82.1/internal/transport/transport.go:697-699`), and the quoted string
+is `transport: Error while dialing: ` followed by the dial error
+(`google.golang.org/grpc@v1.82.1/internal/transport/http2_client.go:230`; the lowercase variant on
+line 228 needs `FailOnNonTempDialError`, which nothing here sets). On Windows the dial error itself
+is `dial tcp <addr>: connectex: ` plus the OS sentence, because `net` wraps a failed connect as the
+`connectex` syscall error (`C:/Program Files/Go/src/net/fd_windows.go:155`).
+
+**Rust.** `TonicConnFactory::connect` dials eagerly and maps the failure through `dial_error`
+(`crates/wirepod-vector/src/error.rs:62-70`), which reports `Unavailable` and builds the
+description by walking `tonic::transport::Error`'s `source` chain and joining it with `": "`. The
+chain is walked because `tonic::transport::Error` alone renders as the useless `transport error`
+and only the causes underneath it name the refusal. Against a closed port on this machine the body
+reads `error: rpc error: code = Unavailable desc = transport error: tcp connect error: tcp connect
+error: No connection could be made because the target machine actively refused it. (os error
+10061)`, where the Go server would have written `error: rpc error: code = Unavailable desc =
+connection error: desc = "transport: Error while dialing: dial tcp <addr>: connectex: No connection
+could be made because the target machine actively refused it."`.
+
+**Why.** The half that matters is identical. Both sides answer HTTP 200 with the `error: ` prefix
+(`server.go:61-62`) and both carry the code prefix `rpc error: code = Unavailable desc = ` exactly,
+which is what `ConnError`'s `Display` exists to guarantee and what any consumer keying on the
+status can read. What differs is the free text after it, and that text is assembled by the runtime
+from an operating-system message: grpc-go quotes a `transport: Error while dialing` string, tonic
+and hyper produce a `tcp connect error` chain, and the same Windows sentence sits inside both.
+Reproducing Go's wording would mean hand-writing grpc-go's framing around a `std::io::Error` and
+guessing at how it formats on a platform this port also has to run on, which is a fabricated string
+pretending to be a transport's own.
+
+**Who sees it.** The dashboard, verbatim. `assets/webroot/sdkapp/js/vectorbrain.js:876-880` reads
+the `net_probe` body as text, strips the `error:` prefix and the whitespace after it, and throws
+the remainder as the message; the catch at `vectorbrain.js:1069-1077` stores that message in
+`netError` and `renderNet` prints it in the probe row (`vectorbrain.js:1023`). So the difference is
+visible to a person watching an unreachable robot, as a differently worded reason, not as a
+different verdict.
+
+**Where recorded.** Here. No test pins the wording, deliberately: the string is half operating
+system and half runtime, so an assertion on it would fail on the next tonic or hyper release and on
+any platform whose `connect` failure reads differently, while proving nothing about the contract.
+What is pinned instead is the part that is a contract.
+`crates/wirepod-server/tests/sdk_api.rs::a_failing_dial_reaches_the_body_as_the_grpc_status_text`
+asserts the body starts with `error: rpc error: code = Unavailable desc = ` and matches the
+`ConnError` the fake factory was given, and
+`crates/wirepod-vector/tests/loopback.rs::a_failed_call_renders_the_way_grpc_go_prints_it` pins the
+same rendering for a status a robot actually returned.
 
 ---
 

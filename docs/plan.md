@@ -134,7 +134,7 @@ These entries record what changed during the early Phase 4 slice, which was plan
 the plan text above said, what was done instead, why, and where the decision is recorded. Go
 citations are `path:line` under `C:/Users/voan2/Documents/GitHub/wire-pod/chipper/`, and
 `robot.go`, `server.go` and `jdocspinger.go` without a directory mean `pkg/wirepod/sdkapp/`. The
-numbered deviations from Go live in `docs/phases/P4-sdk-app/deviations.md`, entries 1 to 22, and
+numbered deviations from Go live in `docs/phases/P4-sdk-app/deviations.md`, entries 1 to 23, and
 the per-commit record is the execution log kept with the planning notes outside the repository.
 
 **1. axum 0.7, not axum 0.8.** The crate-choice paragraph above names axum 0.8. `tonic 0.12.3`

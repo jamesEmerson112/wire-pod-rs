@@ -205,8 +205,8 @@ pub async fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
 /// Sends one request through a router and collects the response.
 ///
 /// Free rather than a method because the listener test drives the same router
-/// value once per listener spec, and because C11's live-seam test will build
-/// its router from a different state.
+/// value once per listener spec, and because `tests/live_seam.rs` builds its
+/// router from a different state.
 pub async fn send_to(router: &Router, req: Request) -> Reply {
     let response = router
         .clone()
