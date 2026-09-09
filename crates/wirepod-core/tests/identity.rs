@@ -33,9 +33,15 @@ fn the_first_issued_generation_is_one_and_generations_order() {
     assert_eq!(second, first.next());
 
     let events = EventOwner::new();
-    let first = events.claim().expect("first claim refused");
+    let first = events
+        .claim(CancellationToken::new())
+        .expect("first claim refused");
     assert_eq!(first, Generation::first());
-    events.stop();
-    let second = events.claim().expect("claim after stop refused");
+    events
+        .stop()
+        .expect("stop did not hand back the owner's token");
+    let second = events
+        .claim(CancellationToken::new())
+        .expect("claim after stop refused");
     assert_eq!(second, first.next());
 }

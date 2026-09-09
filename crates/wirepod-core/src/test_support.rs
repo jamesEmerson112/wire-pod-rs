@@ -15,7 +15,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::{Notify, mpsc, oneshot};
-use tokio_util::sync::CancellationToken;
 
 use crate::robot::conn::{
     BatteryReading, CameraControl, CameraFrame, ConnError, ConnTarget, EventItem, EventReceiver,
@@ -311,20 +310,25 @@ type FakeEvent = Result<Option<EventItem>, ConnError>;
 
 /// An [`EventReceiver`] fed from a channel.
 ///
-/// By default it has no idea cancellation exists, so nothing but the stim
-/// loop's own `select!` can end it. That is stronger than what Go's
-/// `fakeReceiver` proves (`sdkapp_test.go:187-214`), which selects on the
-/// context and therefore ends itself.
+/// It has no idea cancellation exists, so nothing but the stim loop's own
+/// `select!` can end it. That is stronger than what Go's `fakeReceiver` proves
+/// (`sdkapp_test.go:187-214`), which selects on the context and therefore ends
+/// itself.
+///
+/// It also signals when it first reaches its receive, which is what lets a test
+/// stop a receiver that is genuinely parked rather than one that has not been
+/// polled yet.
 pub struct FakeReceiver {
     events: mpsc::UnboundedReceiver<FakeEvent>,
-    observed: Option<(CancellationToken, ConnError)>,
     counter: Option<Arc<LiveCounter>>,
+    ready: Option<oneshot::Sender<()>>,
     _dropped: oneshot::Sender<()>,
 }
 
-/// The write end of a [`FakeReceiver`], plus its drop signal.
+/// The write end of a [`FakeReceiver`], plus its readiness and drop signals.
 pub struct FakeReceiverHandle {
     events: mpsc::UnboundedSender<FakeEvent>,
+    ready: Option<oneshot::Receiver<()>>,
     dropped: oneshot::Receiver<()>,
 }
 
@@ -339,30 +343,23 @@ impl FakeReceiver {
         Self::build(Some(counter))
     }
 
-    /// Makes `next` fail with `err` once `token` is cancelled, the way a real
-    /// gRPC receiver reacts to its context going away. Without this the
-    /// receiver ignores cancellation entirely.
-    #[must_use]
-    pub fn observing_cancel(mut self, token: CancellationToken, err: ConnError) -> Self {
-        self.observed = Some((token, err));
-        self
-    }
-
     fn build(counter: Option<Arc<LiveCounter>>) -> (Self, FakeReceiverHandle) {
         if let Some(counter) = counter.as_ref() {
             counter.enter();
         }
         let (events_tx, events_rx) = mpsc::unbounded_channel();
+        let (ready_tx, ready_rx) = oneshot::channel();
         let (dropped_tx, dropped_rx) = oneshot::channel();
         (
             Self {
                 events: events_rx,
-                observed: None,
                 counter,
+                ready: Some(ready_tx),
                 _dropped: dropped_tx,
             },
             FakeReceiverHandle {
                 events: events_tx,
+                ready: Some(ready_rx),
                 dropped: dropped_rx,
             },
         )
@@ -380,15 +377,14 @@ impl Drop for FakeReceiver {
 #[async_trait]
 impl EventReceiver for FakeReceiver {
     async fn next(&mut self) -> Result<Option<EventItem>, ConnError> {
-        match self.observed.clone() {
-            Some((token, err)) => tokio::select! {
-                () = token.cancelled() => Err(err),
-                event = self.events.recv() => event.unwrap_or(Ok(None)),
-            },
-            // No channel left to feed it means the robot went quiet forever,
-            // which is exactly the state Go test 4 parks a receiver in.
-            None => self.events.recv().await.unwrap_or(Ok(None)),
+        // Fired before the first receive is awaited, so a test that waits on it
+        // resumes with this receiver already parked rather than merely spawned.
+        if let Some(ready) = self.ready.take() {
+            let _ = ready.send(());
         }
+        // No channel left to feed it means the robot went quiet forever, which
+        // is exactly the state Go test 4 parks a receiver in.
+        self.events.recv().await.unwrap_or(Ok(None))
     }
 }
 
@@ -411,6 +407,23 @@ impl FakeReceiverHandle {
     /// Queues a receive failure.
     pub fn fail(&self, err: ConnError) {
         self.send(Err(err));
+    }
+
+    /// Resolves once the receiver has reached its first receive, which for the
+    /// stim loop means the loop is parked waiting for an event.
+    ///
+    /// The signal is a oneshot fired by the receiver itself rather than a poll
+    /// of some flag, which is what the parity spec asks for. Calling it a second
+    /// time is a no-op, because the first call takes the channel.
+    ///
+    /// Awaiting this before a stop is what makes the two teardown tests
+    /// meaningful: without it the stop can land before the loop has ever been
+    /// polled, and a loop that only samples cancellation at the top of its
+    /// iteration would pass.
+    pub async fn ready(&mut self) {
+        if let Some(mut ready) = self.ready.take() {
+            let _ = (&mut ready).await;
+        }
     }
 
     /// Resolves once the receiver has been dropped, which for the stim loop

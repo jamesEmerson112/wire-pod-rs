@@ -109,8 +109,14 @@ impl StatusCode {
         }
     }
 
-    /// The code a numeric wire value names. Anything outside the 17 defined
-    /// codes becomes [`StatusCode::Unknown`], which is what grpc-go does too.
+    /// The code a numeric wire value names.
+    ///
+    /// Anything outside the 17 defined codes becomes [`StatusCode::Unknown`].
+    /// That follows tonic, not grpc-go: grpc-go's `Code.String()` renders a
+    /// value outside `0..=16` as `Code(N)` (`codes/code_string.go`), so its text
+    /// would be `Code(42)` where this prints `Unknown`. It is unreachable in
+    /// practice, because the robot is a grpc-go server and only ever sends the
+    /// 17 defined codes. Recorded in `docs/phases/P4-sdk-app/deviations.md`.
     pub const fn from_wire(code: i32) -> Self {
         match code {
             0 => Self::Ok,
@@ -405,7 +411,12 @@ pub trait RobotConn: CameraControl + Send + Sync {
 /// connection is made.
 #[async_trait]
 pub trait RobotConnFactory: Send + Sync {
-    /// Dials `target` and returns a connection that has already answered at
-    /// least one call, so a returned connection means a live robot.
+    /// Dials `target` and returns a connection.
+    ///
+    /// The factory issues no RPC of its own, so a returned connection means the
+    /// channel was built, not that the robot answered. The connect-time
+    /// `BatteryState` liveness check that Go does inline in `newRobot`
+    /// (`robot.go:365`) belongs to the registry, which is where its deadline
+    /// lives too (decision D3); it arrives with the registry in C8.
     async fn connect(&self, target: &ConnTarget) -> Result<Arc<dyn RobotConn>, ConnError>;
 }

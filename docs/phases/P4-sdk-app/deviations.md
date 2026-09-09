@@ -312,6 +312,60 @@ into the type.
 
 ---
 
+## 13. A failed camera enable hands the claim straight back
+
+**Go.** `enableImageStreaming` at `pkg/wirepod/sdkapp/server.go:670-679` calls
+`EnableImageStreaming` and discards both return values, so `startCamStream` cannot tell whether
+the camera actually came on. It claims, settles, calls the switch and returns the generation
+regardless (`server.go:684-695`). A robot that refuses or never answers the enable therefore
+leaves the handler owning a feed that is not running, and the ownership is given back only when
+the handler's deferred `finishCamStream` eventually runs.
+
+**Rust.** `start_cam_stream` bounds the enable with `timings.enable` and reads its result. On a
+failure or an expiry it runs the same generation-checked release the guard would have run, which
+also issues the disable, and returns the error. A start that returns an error leaves no owner
+behind and hands out no `CamGuard`.
+
+**Why.** The `CamGuard` is `#[must_use]` and has an explicit `finish`, so there is no deferred
+cleanup to fall back on: returning an error while keeping the claim would leak ownership with
+nothing left holding the guard that could release it. Releasing on the error path reaches the
+same end state Go reaches through its defer, one step earlier. The release is generation-checked,
+so a start whose enable failed after a replacement already took the feed changes nothing and
+issues no disable.
+
+**Consequence to remember.** The disable is issued on this path where Go issues none, because Go
+never learns the enable failed. It is one extra `EnableImageStreaming(false)` to a robot that has
+just refused or ignored an `EnableImageStreaming(true)`, and it is bounded by the same deadline.
+
+**Where tested.** `crates/wirepod-core/tests/cam_ownership.rs` asserts that an enable which never
+answers maps to `rpc error: code = DeadlineExceeded desc = context deadline exceeded` and that the
+claim is gone afterwards.
+
+---
+
+## 14. An out-of-range gRPC status code renders as `Unknown`, not `Code(N)`
+
+**Go.** `codes.Code.String()` in grpc-go switches on the 17 defined codes and falls through to
+`"Code(" + strconv.FormatInt(int64(c), 10) + ")"` for anything else (`codes/code_string.go`). A
+status carrying code 42 therefore reaches the dashboard as
+`rpc error: code = Code(42) desc = ...`.
+
+**Rust.** `StatusCode::from_wire` maps anything outside `0..=16` to `StatusCode::Unknown`, so the
+same status would render as `rpc error: code = Unknown desc = ...`. That follows tonic, whose
+`Code::from_i32` collapses unrecognised values to `Unknown` before the conversion in
+`wirepod-vector` ever sees them.
+
+**Why.** Reproducing `Code(N)` would mean carrying the raw integer through a type whose whole
+purpose is to name the 17 codes, and tonic has already discarded it by the time the conversion
+runs. The case is unreachable in practice: the peer is a grpc-go server, which only ever sends
+codes it has names for.
+
+**Where recorded.** Here, and on the doc comment of `StatusCode::from_wire` in
+`crates/wirepod-core/src/robot/conn.rs`. There is no test, because the value the test would need
+cannot arrive from tonic.
+
+---
+
 ## Additional recorded differences
 
 **`run_event_stream` selects on the cancellation token.** Go's loop relies on the receiver

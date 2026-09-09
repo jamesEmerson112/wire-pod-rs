@@ -172,9 +172,18 @@ pub struct EventOwner {
 #[derive(Debug, Default)]
 struct EventState {
     last_issued: Generation,
-    current: Option<Generation>,
+    /// The registry entry: `Some` while some receiver owns the stream.
+    current: Option<EventEntry>,
     streaming: bool,
     stim: StimSample,
+}
+
+/// The owning receiver's generation and the token that stops it, which is Go's
+/// `eventStream{gen, cancel}` (`robot.go:190-193`).
+#[derive(Debug)]
+struct EventEntry {
+    generation: Generation,
+    cancel: CancellationToken,
 }
 
 impl EventOwner {
@@ -188,30 +197,43 @@ impl EventOwner {
     /// `None` means the stream is already owned. Folding the "already running"
     /// test into the claim closes the check-then-act window where two
     /// simultaneous begins could both read false.
-    pub fn claim(&self) -> Option<Generation> {
+    ///
+    /// The token is stored in the entry rather than kept by the caller, which is
+    /// what lets [`EventOwner::stop`] read it in the same critical section that
+    /// releases ownership, exactly as `claimEventStream` stores the cancel func
+    /// at `robot.go:226`. A stop that had to find the token somewhere else could
+    /// cancel a receiver that a later claim had already replaced.
+    pub fn claim(&self, cancel: CancellationToken) -> Option<Generation> {
         let mut state = self.lock();
         if state.current.is_some() {
             return None;
         }
         let generation = state.last_issued.next();
         state.last_issued = generation;
-        state.current = Some(generation);
+        state.current = Some(EventEntry { generation, cancel });
         state.streaming = true;
         Some(generation)
     }
 
-    /// Releases ownership, clears the flag and zeroes the reading, in one
-    /// critical section.
+    /// Releases ownership, clears the flag, zeroes the reading and takes the
+    /// owner's token, all in one critical section.
     ///
     /// Releasing here rather than leaving it to the receiver is what lets a
     /// claim arriving immediately after a stop succeed. Zeroing in the same
     /// section means there is no moment where the reading is a stale non-zero
     /// value while the stream is already stopped (`robot.go:253-263`).
-    pub fn stop(&self) {
+    ///
+    /// The token comes back to the caller rather than being cancelled here, so
+    /// the cancel happens once the state lock is released, as `stopEventStream`
+    /// reads `cur` and deletes the entry under `robotsMu` and cancels after the
+    /// unlock (`robot.go:254-262`). `None` means nobody owned the stream.
+    #[must_use = "the receiver stays parked in its receive until the returned token is cancelled"]
+    pub fn stop(&self) -> Option<CancellationToken> {
         let mut state = self.lock();
-        state.current = None;
+        let owner = state.current.take().map(|entry| entry.cancel);
         state.streaming = false;
         state.stim = StimSample::ZERO;
+        owner
     }
 
     /// Drops ownership if `generation` still holds it, and reports whether it
@@ -229,9 +251,14 @@ impl EventOwner {
     /// (`robot.go:258`). The difference is not observable, because
     /// `get_stim_status` reads the value only while the flag is set, but it is
     /// reproduced rather than tidied up.
+    ///
+    /// The entry goes with the release, so the stored token is dropped here too.
+    /// A receiver on its way out has no use for its own cancellation, and
+    /// keeping the token past the release would leave a stop able to cancel a
+    /// stream that no longer exists.
     pub fn release(&self, generation: Generation) -> bool {
         let mut state = self.lock();
-        if state.current != Some(generation) {
+        if state.current.as_ref().map(|entry| entry.generation) != Some(generation) {
             return false;
         }
         state.current = None;
@@ -244,7 +271,7 @@ impl EventOwner {
     /// cannot overwrite the value its replacement just published.
     pub fn write_stim(&self, generation: Generation, sample: StimSample) -> bool {
         let mut state = self.lock();
-        if state.current != Some(generation) {
+        if state.current.as_ref().map(|entry| entry.generation) != Some(generation) {
             return false;
         }
         state.stim = sample;
