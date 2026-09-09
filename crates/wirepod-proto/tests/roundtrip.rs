@@ -21,7 +21,6 @@ fn connection_check_response_roundtrip() {
     let msg = ConnectionCheckResponse {
         frames_received: 42,
         status: "Success".into(),
-        ..Default::default()
     };
     let bytes = msg.encode_to_vec();
     let back = ConnectionCheckResponse::decode(bytes.as_slice()).unwrap();
