@@ -1,0 +1,122 @@
+//! Go float formatting, table-driven from the recorded probe output.
+//!
+//! `docs/phases/P4-sdk-app/gofmt-probe/expected.txt` is the stdout of the Go
+//! program committed beside it, so the expectations are recorded rather than
+//! hand-written. Each line is `section\tinput\toutput`. An input literal this
+//! file does not recognize fails the test, so a new probe line cannot be
+//! silently skipped.
+
+use wirepod_core::{go_format_f32, go_json_f64};
+
+const EXPECTED: &str = include_str!("../../../docs/phases/P4-sdk-app/gofmt-probe/expected.txt");
+
+fn f32_input(literal: &str) -> Option<f32> {
+    Some(match literal {
+        "float32(0)" => 0.0,
+        "float32(math.Copysign(0, -1))" => -0.0,
+        "float32(1)" => 1.0,
+        "float32(0.1)" => 0.1,
+        "float32(0.75)" => 0.75,
+        "float32(0.5325)" => 0.5325,
+        "float32(5e-05)" => 5e-05,
+        "float32(0.0001)" => 0.0001,
+        "float32(0.001)" => 0.001,
+        "float32(1.5)" => 1.5,
+        "float32(2.5)" => 2.5,
+        "float32(-0.25)" => -0.25,
+        "float32(100000)" => 100_000.0,
+        "float32(999999)" => 999_999.0,
+        "float32(1e6)" => 1e6,
+        "float32(1.5e6)" => 1.5e6,
+        "float32(1234567)" => 1_234_567.0,
+        "float32(123456789)" => 123_456_789.0,
+        "float32(1e20)" => 1e20,
+        "float32(1e21)" => 1e21,
+        "float32(1e22)" => 1e22,
+        "float32(math.MaxFloat32)" => f32::MAX,
+        // The smallest positive subnormal, which is Go's SmallestNonzeroFloat32.
+        "float32(math.SmallestNonzeroFloat32)" => f32::from_bits(1),
+        "float32(math.Inf(1))" => f32::INFINITY,
+        "float32(math.Inf(-1))" => f32::NEG_INFINITY,
+        "float32(math.NaN())" => f32::NAN,
+        _ => return None,
+    })
+}
+
+fn f64_input(literal: &str) -> Option<f64> {
+    Some(match literal {
+        "float64(0)" => 0.0,
+        "float64(math.Copysign(0, -1))" => -0.0,
+        "float64(13)" => 13.0,
+        "float64(13.482)" => 13.482,
+        "float64(14.0)" => 14.0,
+        "float64(0.1)" => 0.1,
+        "float64(-0.5)" => -0.5,
+        "float64(0.000001)" => 0.000001,
+        "float64(1e-6)" => 1e-6,
+        "float64(1e-7)" => 1e-7,
+        "float64(1e17)" => 1e17,
+        "float64(1e20)" => 1e20,
+        "float64(1e21)" => 1e21,
+        "float64(123456789012345678)" => 123_456_789_012_345_678.0,
+        "float64(1.5e300)" => 1.5e300,
+        "float64(5e-324)" => 5e-324,
+        "float64(math.MaxFloat64)" => f64::MAX,
+        "float64(1.0000000000000002)" => 1.0000000000000002,
+        "NaN" => f64::NAN,
+        "+Inf" => f64::INFINITY,
+        "-Inf" => f64::NEG_INFINITY,
+        _ => return None,
+    })
+}
+
+#[test]
+fn go_formatting_matches_the_recorded_probe() {
+    let mut f32_cases = 0usize;
+    let mut f64_cases = 0usize;
+
+    for (index, raw) in EXPECTED.lines().enumerate() {
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        if line.is_empty() {
+            continue;
+        }
+        let number = index + 1;
+        let mut columns = line.split('\t');
+        let section = columns.next().unwrap_or_default();
+        let literal = columns
+            .next()
+            .unwrap_or_else(|| panic!("line {number}: missing the input column"));
+        let want = columns
+            .next()
+            .unwrap_or_else(|| panic!("line {number}: missing the output column"));
+        assert!(
+            columns.next().is_none(),
+            "line {number}: more than three columns"
+        );
+
+        match section {
+            "f32v" => {
+                let value = f32_input(literal).unwrap_or_else(|| {
+                    panic!("line {number}: unrecognized f32 literal {literal}; add it to f32_input")
+                });
+                assert_eq!(go_format_f32(value), want, "line {number}: {literal}");
+                f32_cases += 1;
+            }
+            "f64json" => {
+                let value = f64_input(literal).unwrap_or_else(|| {
+                    panic!("line {number}: unrecognized f64 literal {literal}; add it to f64_input")
+                });
+                let got = match go_json_f64(value) {
+                    Ok(text) => text,
+                    Err(error) => format!("ERROR: {error}"),
+                };
+                assert_eq!(got, want, "line {number}: {literal}");
+                f64_cases += 1;
+            }
+            other => panic!("line {number}: unknown section {other}"),
+        }
+    }
+
+    assert!(f32_cases > 0, "the probe file recorded no f32 cases");
+    assert!(f64_cases > 0, "the probe file recorded no f64 cases");
+}
