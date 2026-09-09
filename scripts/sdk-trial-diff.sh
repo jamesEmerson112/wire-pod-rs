@@ -143,6 +143,14 @@ capture() {
 		printf '%s: %s\n' "$f" "${v:--}" >>"$WORK/$tag.f"
 	done
 	normalise_body "$WORK/$tag.b" >"$WORK/$tag.n"
+	# A body the normaliser rewrote has a Content-Length that follows the digits
+	# it rewrote: 127.855 is one byte longer than 18.956, and the first trial
+	# reported every net_probe as a mismatch on that byte alone. Compare the
+	# length of the normalised body instead, which still catches a body that
+	# differs anywhere else.
+	if ! cmp -s "$WORK/$tag.b" "$WORK/$tag.n"; then
+		sed -i "s/^content-length: .*/content-length: <n>+$(wc -c <"$WORK/$tag.n" | tr -d ' ')/" "$WORK/$tag.f"
+	fi
 }
 
 # Prints one field row, and returns 1 when the two sides differ.
