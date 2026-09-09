@@ -1,7 +1,8 @@
 //! Core domain state for the wire-pod SDK app: robot identity, the injectable
 //! timing constants, Go-compatible number formatting, the robot seam, the
 //! per-robot stream ownership state machines, the stim receive loop, the camera
-//! guard and frame pump, and the never-pruned camera meters.
+//! guard and frame pump, the never-pruned camera meters, and the bot-info and
+//! jdocs-pinger stores.
 //!
 //! The seam in [`robot::conn`] is expressed in domain types, so this crate
 //! depends on neither `wirepod-proto` nor tonic. `wirepod-vector` implements it
@@ -14,17 +15,20 @@
 //! makes that a compile error rather than a review comment.
 //!
 //! The rest of the crate's eventual responsibility (config, path resolution,
-//! the logger ring, the jdocs, bot-info and session-cert stores, the registry
-//! and the pinger) arrives in later commits.
+//! the logger ring, the jdocs and session-cert stores, and the registry)
+//! arrives in later commits.
 #![deny(clippy::await_holding_lock)]
 
+pub mod clock;
 pub mod esn;
 pub mod gofmt;
 pub mod robot;
+pub mod store;
 #[cfg(feature = "test-util")]
 pub mod test_support;
 pub mod timings;
 
+pub use crate::clock::{Clock, ManualClock, SystemClock};
 pub use crate::esn::{Esn, Generation};
 pub use crate::gofmt::{GoJsonError, go_format_f32, go_json_f64};
 pub use crate::robot::{
@@ -33,5 +37,8 @@ pub use crate::robot::{
     EventLoopExit, EventOwner, EventReceiver, FrameOutcome, FrameSink, FrameStream, ProtocolResult,
     ProtocolVerdict, PumpExit, RobotConn, RobotConnFactory, SdkSession, StatusCode, StimEvent,
     StimSample, cam_stream_pump, run_event_stream, start_cam_stream,
+};
+pub use crate::store::{
+    BotInfo, BotInfoRobot, BotInfoWire, BotStatus, BotStatusKind, PingerState, RobotWire,
 };
 pub use crate::timings::Timings;
