@@ -7,22 +7,27 @@
 //! that will serve it. Nothing here binds anything; the listeners arrive with
 //! the TLS work in P1.
 //!
-//! Two of Go's mux behaviours have to be built by hand. A subtree pattern such
-//! as `/api-sdk/` matches the bare prefix as well as everything under it, while
-//! axum's wildcard does not match the bare prefix, so each prefix is registered
-//! twice against the same handler. And the bare `/api-sdk`, without the
+//! Three of Go's mux behaviours have to be built by hand. A subtree pattern
+//! such as `/api-sdk/` matches the bare prefix as well as everything under it,
+//! while axum's wildcard does not match the bare prefix, so each prefix is
+//! registered twice against the same handler. The bare `/api-sdk`, without the
 //! trailing slash, never reaches the handler at all: the mux answers a 301 to
-//! `/api-sdk/`.
+//! `/api-sdk/`. And every request path is canonicalised before a pattern is
+//! considered, which [`mux`](crate::mux) reproduces and [`build_router`] runs
+//! as a layer in front of the route table.
 
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::Request;
+use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::any;
+use http::Uri;
 use wirepod_core::AppState;
 
-use crate::{api, conncheck, reply, sdkapp};
+use crate::{api, conncheck, mux, reply, sdkapp};
 
 /// The port `BeginServer` serves the mux from, for the robot's conn check
 /// (`server.go:824`).
@@ -46,6 +51,16 @@ const OK_COLON_80: &str = "/ok:80";
 
 /// The plain conn-check path (`server.go:814`).
 const OK: &str = "/ok";
+
+/// The two subtree prefixes without their trailing slash.
+///
+/// Go's mux answers these with a 301 to the prefix itself, and it does so ahead
+/// of the redirect a path that needed cleaning would otherwise get
+/// (`net/http/server.go:2686-2698`). That order is why `//api-sdk` answers
+/// `Location: /api-sdk/` on the live server rather than `Location: /api-sdk`.
+/// The routes below serve the already-clean form; [`canonicalise`] needs the
+/// list for the other one.
+const BARE_SUBTREE_PREFIXES: [&str; 2] = ["/api-sdk", "/api"];
 
 /// One listener the finished server will bind.
 ///
@@ -85,7 +100,7 @@ pub fn listener_specs() -> [ListenerSpec; 2] {
 
 /// The whole HTTP surface the slice serves.
 pub fn build_router(state: Arc<AppState>) -> Router {
-    Router::new()
+    let routes = Router::new()
         // A Go subtree pattern matches its own bare prefix; axum's wildcard
         // does not, so both forms go to the same handler. `GET /api-sdk/` with
         // an empty rest is a real request: it pays for the preamble with an
@@ -98,7 +113,73 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api", any(moved_to_api))
         .route(OK, any(conncheck::handle))
         .fallback(fallback)
-        .with_state(state)
+        .with_state(state);
+
+    // `Router::layer` wraps each route's own service, so a layer added there
+    // runs *after* the match and cannot change which pattern is chosen. Making
+    // the whole route table the fallback of an empty router and layering that
+    // puts the canonicalisation in front of the match, which is where Go has
+    // it.
+    Router::new()
+        .fallback_service(routes)
+        .layer(middleware::from_fn(canonicalise))
+}
+
+/// Go's `findHandler` preamble: clean the path, answer a 301 when that changed
+/// it, and otherwise route on the unescaped form
+/// (`net/http/server.go:2677-2699`).
+///
+/// The rewrite is what makes the rest of the crate see `r.URL.Path` rather than
+/// the escaped request target. The route table then matches the decoded path,
+/// [`fallback`] compares its literal against the decoded path, and the two
+/// dispatch switches strip their prefix from the decoded path, all of which is
+/// what Go's handlers do by reading `r.URL.Path`.
+///
+/// A path that is not rooted is left alone. The only one HTTP produces is the
+/// `*` of `OPTIONS *`, which Go answers from `globalOptionsHandler` before the
+/// mux ever sees it, so cleaning it here would invent a redirect Go does not
+/// send.
+async fn canonicalise(mut req: Request, next: Next) -> Response {
+    if !req.uri().path().starts_with('/') {
+        return next.run(req).await;
+    }
+
+    if let Cow::Owned(cleaned) = mux::clean(req.uri().path()) {
+        // Go runs the trailing-slash redirect ahead of this one, so a path that
+        // cleans to a bare subtree prefix goes to the prefix with its slash
+        // rather than to the cleaned path.
+        let target = if BARE_SUBTREE_PREFIXES.contains(&cleaned.as_str()) {
+            format!("{cleaned}/")
+        } else {
+            cleaned
+        };
+        return reply::moved_permanently(&target, req.method(), req.uri().query());
+    }
+
+    let decoded = mux::unescape_segments(req.uri().path());
+    if let Some(decoded) = decoded {
+        let rewritten = with_path(req.uri(), &decoded);
+        if let Some(rewritten) = rewritten {
+            *req.uri_mut() = rewritten;
+        }
+    }
+    next.run(req).await
+}
+
+/// The same URI with a different path, or `None` when that will not parse.
+///
+/// [`mux::unescape_segments`] already refuses every byte that would fail here
+/// or change how the path splits into segments, so the `None` is a guard rather
+/// than a case with a behaviour of its own: it leaves the path escaped, which
+/// is what refusing the segment would have done.
+fn with_path(uri: &Uri, path: &str) -> Option<Uri> {
+    let path_and_query = match uri.query() {
+        Some(query) => format!("{path}?{query}"),
+        None => path.to_owned(),
+    };
+    let mut parts = uri.clone().into_parts();
+    parts.path_and_query = Some(path_and_query.parse().ok()?);
+    Uri::from_parts(parts).ok()
 }
 
 /// `/api-sdk` without its trailing slash.
@@ -114,15 +195,43 @@ async fn moved_to_api(req: Request) -> Response {
 /// Everything none of the registered patterns matched.
 ///
 /// Two paths land here. `/ok:80` is a route in Go and is served as one, for the
-/// `matchit` reason above. Everything else is Go's root file server, which for
-/// a path with no file behind it answers `404 page not found\n` with four
-/// headers and no `Cache-Control`. Static file serving itself is P4 work; until
-/// then every path that would have hit a file gets the same 404 a missing file
-/// gets, which is the one thing about this fallback that is a stub rather than
-/// a contract.
+/// `matchit` reason above; the path it is compared against has already been
+/// unescaped by [`canonicalise`], which is what makes `GET /ok%3A80` answer
+/// `ok` as it does on the live Go server. Everything else is Go's root file
+/// server, which for a path with no file behind it answers
+/// `404 page not found\n` with four headers and no `Cache-Control`. Static file
+/// serving itself is P4 work; until then every path that would have hit a file
+/// gets the same 404 a missing file gets, which is the one thing about this
+/// fallback that is a stub rather than a contract.
 async fn fallback(req: Request) -> Response {
     if req.uri().path() == OK_COLON_80 {
         return conncheck::handle(req).await;
     }
     reply::file_not_found()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_bare_prefixes_are_the_registered_subtrees_without_their_slash() {
+        // The middleware and the route table have to name the same two
+        // prefixes, and this is what says so if either side changes.
+        assert_eq!(format!("{}/", BARE_SUBTREE_PREFIXES[0]), sdkapp::PREFIX);
+        assert_eq!(format!("{}/", BARE_SUBTREE_PREFIXES[1]), api::PREFIX);
+    }
+
+    #[test]
+    fn a_rewritten_path_keeps_the_query() {
+        let uri: Uri = "/ok%3A80?runMDNS=true".parse().expect("parse the uri");
+        let rewritten = with_path(&uri, "/ok:80").expect("rewrite the path");
+        assert_eq!(rewritten.path(), "/ok:80");
+        assert_eq!(rewritten.query(), Some("runMDNS=true"));
+
+        let uri: Uri = "/%6Fk".parse().expect("parse the uri");
+        let rewritten = with_path(&uri, "/ok").expect("rewrite the path");
+        assert_eq!(rewritten.to_string(), "/ok");
+        assert_eq!(rewritten.query(), None);
+    }
 }

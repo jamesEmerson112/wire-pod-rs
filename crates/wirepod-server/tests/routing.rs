@@ -5,7 +5,9 @@
 //! than a 404 at request time. Everything after it assumes the build succeeded.
 
 use http::{Method, StatusCode, header};
-use wirepod_server::test_support::{TestServer, one_robot, request, send_to};
+use wirepod_server::test_support::{
+    CACHE_HEADERS, CORS_HEADERS, TestServer, one_robot, request, send_to,
+};
 use wirepod_server::{build_router, listener_specs, literals};
 
 /// Paths the Go server genuinely lacks, so a 404 from the file server is the
@@ -231,4 +233,156 @@ async fn one_router_value_answers_identically_for_every_listener() {
         answers[0], answers[1],
         "the two listeners must serve the union of every route"
     );
+}
+
+#[tokio::test]
+async fn a_path_is_matched_and_dispatched_by_its_unescaped_form() {
+    let server = TestServer::connected(one_robot());
+
+    // Go's routing tree unescapes each segment before it compares it against a
+    // literal pattern (`net/http/routing_tree.go:205-215`), so an escaped colon
+    // still reaches `/ok:80`. Live: 200, `ok`, `Content-Length: 2`.
+    let reply = server.get("/ok%3A80").await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(reply.body, literals::OK);
+
+    // The same rule reaches the plain conn check. Live: 200, `ok`.
+    let reply = server.get("/%6Fk").await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(reply.body, literals::OK);
+
+    // `SdkapiHandler` switches on `r.URL.Path`, which `url.Parse` has decoded,
+    // so an escaped route name is preamble-exempt and reaches the 404 rather
+    // than the doubled connect error. Live: 404, `not found`.
+    let reply = server.get("/api-sdk/deb%75g?serial=bogus").await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+    assert_eq!(reply.body, literals::NOT_FOUND);
+
+    // An escape in the prefix segment reaches the same handler, because the
+    // segment is unescaped before the subtree pattern is tried. Live: 404.
+    let reply = server.get("/api%2Dsdk/debug?serial=bogus").await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+    assert_eq!(reply.body, literals::NOT_FOUND);
+
+    // And a served route is reached the same way, so the decoding is not just
+    // the 404 path.
+    let reply = server.get("/api-sdk/get%5Fsdk%5Finfo").await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert!(
+        reply.body.starts_with(r#"{"global_guid":"#),
+        "{}",
+        reply.body
+    );
+
+    // `%2F` does not create a segment boundary: Go compares the decoded segment
+    // `ok/80` against the patterns and matches none of them. Live: 404,
+    // `404 page not found`.
+    let reply = server.get("/ok%2F80").await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+    assert_eq!(reply.body, literals::FILE_NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_path_that_needs_cleaning_is_a_301_to_the_cleaned_path() {
+    let server = TestServer::connected(one_robot());
+
+    // `http.ServeMux` cleans the path before it routes and answers a 301 when
+    // that changed it (`net/http/server.go:2681`, `:2690-2698`). Live: 301,
+    // `Location: /api-sdk/debug?serial=bogus`, `Content-Length: 62`.
+    let reply = server.get("/api-sdk//debug?serial=bogus").await;
+    assert_eq!(reply.status, StatusCode::MOVED_PERMANENTLY);
+    assert_eq!(
+        reply.header(header::LOCATION),
+        Some("/api-sdk/debug?serial=bogus")
+    );
+    assert_eq!(
+        reply.body,
+        "<a href=\"/api-sdk/debug?serial=bogus\">Moved Permanently</a>.\n\n"
+    );
+    assert_eq!(reply.body.len(), 62);
+
+    // Live: 301, `Location: /api/get_bot_status`, `Content-Length: 54`.
+    let reply = server.get("/api//get_bot_status").await;
+    assert_eq!(reply.status, StatusCode::MOVED_PERMANENTLY);
+    assert_eq!(reply.header(header::LOCATION), Some("/api/get_bot_status"));
+    assert_eq!(reply.body.len(), 54);
+
+    // Dot segments are resolved, and a `..` cannot climb past the root. All
+    // three were probed live with `curl --path-as-is`.
+    for uri in [
+        "/api-sdk/./debug?serial=bogus",
+        "/api-sdk/x/../debug?serial=bogus",
+        "/api-sdk/debug/../debug?serial=bogus",
+    ] {
+        let reply = server.get(uri).await;
+        assert_eq!(reply.status, StatusCode::MOVED_PERMANENTLY, "{uri}");
+        assert_eq!(
+            reply.header(header::LOCATION),
+            Some("/api-sdk/debug?serial=bogus"),
+            "{uri}"
+        );
+    }
+    let reply = server.get("/../ok").await;
+    assert_eq!(reply.header(header::LOCATION), Some("/ok"));
+
+    // Go runs the trailing-slash redirect first, so a path that cleans to a
+    // bare subtree prefix goes to the prefix with its slash rather than to the
+    // cleaned path. Live: `Location: /api-sdk/`, `Content-Length: 44`.
+    for uri in ["//api-sdk", "/api-sdk/."] {
+        let reply = server.get(uri).await;
+        assert_eq!(reply.status, StatusCode::MOVED_PERMANENTLY, "{uri}");
+        assert_eq!(reply.header(header::LOCATION), Some("/api-sdk/"), "{uri}");
+        assert_eq!(reply.body.len(), 44, "{uri}");
+    }
+
+    // A trailing slash survives the clean, so `/ok/` is not `/ok`: it is the
+    // file-server 404. Live: 404, `404 page not found`.
+    let reply = server.get("/ok/").await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+    assert_eq!(reply.body, literals::FILE_NOT_FOUND);
+
+    // An already-clean path is served, not redirected, which is what keeps the
+    // clean check off the hot path for every request the robot actually sends.
+    let reply = server.get("/api-sdk/debug?serial=bogus").await;
+    assert_eq!(reply.status, StatusCode::NOT_FOUND);
+    assert_eq!(reply.body, literals::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn only_the_api_prefix_carries_cors_and_only_the_file_server_caches() {
+    let server = TestServer::connected(one_robot());
+
+    // `apiHandler` sets both CORS headers as its first two statements, so they
+    // are on its 404 as well, and it sets no cache header at all. That pair of
+    // facts is what tells this 404 apart from the file server's.
+    for uri in ["/api/get_bot_status", "/api/no_such_route", "/api/"] {
+        let reply = server.get(uri).await;
+        for name in CORS_HEADERS {
+            assert_eq!(reply.header_str(name), Some(literals::CORS_ANY), "{uri}");
+        }
+        reply.assert_absent(&CACHE_HEADERS, uri);
+    }
+
+    // Nothing wraps `/api-sdk/*` or the conn check, so neither carries a CORS
+    // header or a cache header. This is the half of the split that a mutation
+    // adding `allow_cors` to `sdkapp::handle` would otherwise pass.
+    for uri in [
+        "/api-sdk/conn_test?serial=00303f28",
+        "/api-sdk/does_not_exist?serial=00303f28",
+        "/api-sdk/get_sdk_info",
+        "/ok",
+        "/ok:80",
+    ] {
+        let reply = server.get(uri).await;
+        reply.assert_absent(&CORS_HEADERS, uri);
+        reply.assert_absent(&CACHE_HEADERS, uri);
+    }
+
+    // The file server's 404 is the one response with `Pragma` and `Expires`,
+    // and it has no CORS header either.
+    let reply = server.get("/no-such-path").await;
+    reply.assert_absent(&CORS_HEADERS, "/no-such-path");
+    assert_eq!(reply.header(header::PRAGMA), Some(literals::NO_CACHE));
+    assert_eq!(reply.header(header::EXPIRES), Some(literals::EXPIRES_ZERO));
+    assert_eq!(reply.header(header::CACHE_CONTROL), None);
 }

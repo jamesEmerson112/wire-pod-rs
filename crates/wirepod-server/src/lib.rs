@@ -24,6 +24,7 @@ pub mod api;
 pub mod conncheck;
 pub mod form;
 pub mod literals;
+pub mod mux;
 pub mod reply;
 pub mod router;
 pub mod sdkapp;

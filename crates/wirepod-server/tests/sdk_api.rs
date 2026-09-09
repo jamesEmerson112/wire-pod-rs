@@ -2,7 +2,9 @@
 
 use http::{StatusCode, header};
 use wirepod_core::{BotInfo, Esn};
-use wirepod_server::test_support::{TestServer, no_robots, one_robot, unreachable_error};
+use wirepod_server::test_support::{
+    CACHE_HEADERS, CORS_HEADERS, TestServer, no_robots, one_robot, unreachable_error,
+};
 use wirepod_server::{SLICE_ROUTES, literals};
 
 /// The serial in the fixtures, as the dashboard would send it.
@@ -52,6 +54,10 @@ async fn an_unknown_serial_produces_the_doubled_error_prefix() {
     assert_eq!(reply.content_type(), Some(literals::CONTENT_TYPE_TEXT));
     // The doubling is what the dashboard shows, so it is worth saying twice.
     assert_eq!(reply.body.matches("error: ").count(), 2);
+    // The preamble's error write is a bare `fmt.Fprint`, so this response
+    // carries the sniffed content type and nothing else.
+    reply.assert_absent(&CORS_HEADERS, "the preamble error");
+    reply.assert_absent(&CACHE_HEADERS, "the preamble error");
 
     // `serial=null` is what the dashboard sends when its own `vbEsn` is null,
     // and `serial=` and an absent `serial` are the same empty string. All three
@@ -199,6 +205,12 @@ async fn conn_test_and_begin_cam_stream_answer_their_literals() {
     assert_eq!(reply.status, StatusCode::OK);
     assert_eq!(reply.body, literals::SUCCESS);
     assert_eq!(reply.content_type(), Some(literals::CONTENT_TYPE_TEXT));
+    // Nothing wraps `/api-sdk/*`: the `sdkapp` copy of
+    // `DisableCachingAndSniffing` wraps only the `/sdk-app` file server
+    // (`server.go:811`) and `apiHandler`'s CORS headers are on the other
+    // prefix, so a successful route here carries neither.
+    reply.assert_absent(&CORS_HEADERS, "conn_test");
+    reply.assert_absent(&CACHE_HEADERS, "conn_test");
 
     // The only statement in Go's arm is commented out, so the route is a no-op
     // that answers `done`; the camera is claimed by `/cam-stream` itself.

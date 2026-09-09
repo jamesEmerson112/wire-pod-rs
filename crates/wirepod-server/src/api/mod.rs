@@ -8,9 +8,13 @@
 //! unknown `/api/*` path from a path that missed the prefix entirely and
 //! reached the file server.
 //!
+//! The prefix is stripped from Go's `r.URL.Path`, which is decoded, so this
+//! reads the path [`crate::router`]'s middleware has already unescaped rather
+//! than the escaped request target.
+//!
 //! Twenty-two routes live here. The slice serves `get_bot_status` and stubs the
-//! rest at 404; the stubs are recorded in `deviations.md` and no test asserts
-//! them.
+//! other 21 at 404; the stubs are listed by name in `deviations.md` and no test
+//! asserts them.
 
 pub mod bot_status;
 

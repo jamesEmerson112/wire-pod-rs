@@ -9,6 +9,10 @@
 //! unknown serial answers the doubled connect error at HTTP 200 and never
 //! reaches the 404. Registering the routes individually would 404 first and
 //! lose that ordering.
+//!
+//! The path this handler dispatches on is Go's `r.URL.Path`, which is decoded:
+//! [`crate::router`]'s middleware has already unescaped each segment, so
+//! `GET /api-sdk/deb%75g` reaches the `debug` arm rather than the catch-all.
 
 pub mod sdk_info;
 

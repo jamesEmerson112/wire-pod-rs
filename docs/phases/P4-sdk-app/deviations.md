@@ -174,14 +174,57 @@ The deferred arms, in the order they appear in `pkg/wirepod/sdkapp/server.go`:
 | `/api-sdk/trigger_wake_word` | 609 |
 
 The same rule applies on the `/api/` side. `config-ws/webserver.go` has 22 dispatch arms
-(`webserver.go:32-74`); the slice serves `get_bot_status` and stubs the rest at 404. A bare
+(`webserver.go:32-74`); the slice serves `get_bot_status` and stubs the other 21 at 404. A bare
 `grep -n 'case "'` on that file returns 25 lines, but three of them are the `level` switch inside
 `handleGetLogsJSON` (`webserver.go:292`, `:294`, `:296`) and are not routes; see
 `sdkapp-routes.md`.
 
-`/cam-stream` is a separate case. It is not an `/api-sdk/*` arm; the route, the multipart framing
-and the JPEG re-encode are Tier C, and the ownership, operation lock, settle and byte meter the
-route needs are all in the slice already. See `camstream.md`.
+The deferred `/api/*` arms, in the order they appear in `pkg/wirepod/config-ws/webserver.go`:
+
+| Route | Go line |
+|---|---|
+| `/api/add_custom_intent` | 32 |
+| `/api/edit_custom_intent` | 34 |
+| `/api/get_custom_intents_json` | 36 |
+| `/api/remove_custom_intent` | 38 |
+| `/api/set_weather_api` | 40 |
+| `/api/get_weather_api` | 42 |
+| `/api/set_kg_api` | 44 |
+| `/api/get_kg_api` | 46 |
+| `/api/set_stt_info` | 48 |
+| `/api/get_download_status` | 50 |
+| `/api/get_stt_info` | 52 |
+| `/api/get_config` | 54 |
+| `/api/get_logs` | 56 |
+| `/api/get_debug_logs` | 58 |
+| `/api/get_logs_json` | 60 |
+| `/api/is_running` | 64 |
+| `/api/delete_chats` | 66 |
+| `/api/get_ota` | 68 |
+| `/api/get_version_info` | 70 |
+| `/api/generate_certs` | 72 |
+| `/api/is_api_v3` | 74 |
+
+`/api/is_running` is worth calling out by name. It answers the literal `true` and is the health
+probe every runbook in this repo uses, so it will answer 404 against the Rust server until the
+`/api/*` routes land.
+
+Three more Go routes are registered outside both prefixes and are not carried by the Rust router
+at all, so each of them reaches the file-server fallback rather than the handler Go has:
+
+- `/sdk-app` (`server.go:811`), the `sdkapp` file server. Its 404 is observably not the one the
+  Rust fallback answers: the `sdkapp` copy of `DisableCachingAndSniffing` sets three headers
+  rather than four (`server.go:791-798`), and `serveError` then deletes `Cache-Control`, so the
+  live response carries `Content-Type`, `Pragma` and `X-Content-Type-Options` and **no**
+  `Expires`, where the Rust fallback adds `Expires: 0`. The trailing-slash form `/sdk-app/` misses
+  the exact pattern, falls through to the web root, and does carry `Expires`.
+- `/session-certs/` (`webserver.go:429`), the certificate handler, a subtree pattern.
+- `/cam-stream` (`server.go:818`). It is not an `/api-sdk/*` arm; the route, the multipart framing
+  and the JPEG re-encode are Tier C, and the ownership, operation lock, settle and byte meter the
+  route needs are all in the slice already. See `camstream.md`.
+
+No test asserts any of the three, for the same reason no test asserts a deferred arm: a stub is
+not a contract.
 
 ---
 
@@ -483,6 +526,48 @@ needed, is a custom `serde_json::ser::Formatter`, not a post-hoc string replace.
 
 **Where recorded.** Here. No test pins it, because pinning it would mean asserting the difference
 rather than the contract.
+
+---
+
+## 18. Two residuals in the mux path canonicalisation
+
+**Go.** `findHandler` canonicalises the request path before any pattern is considered
+(`net/http/server.go:2660-2699`). It cleans the escaped path with `cleanPath`, answers a 301 to
+the cleaned path when that changed it, and matches with each segment unescaped, because the
+routing tree's `firstSegment` calls `pathUnescape` (`net/http/routing_tree.go:205-215`). The
+trailing-slash redirect runs ahead of the cleaned-path one and builds its target from the
+**decoded** path, `cleanPath(u.Path) + "/"` (`server.go:2734`).
+
+**Rust.** `crates/wirepod-server/src/mux.rs` reproduces both steps and `router::canonicalise`
+runs them as a layer in front of the route table. Two things are not reproduced exactly.
+
+1. The trailing-slash redirect target is built from the cleaned **escaped** path rather than the
+   cleaned decoded path. The two differ only for a request that both needs cleaning and carries
+   an escape in its prefix segment, such as `//api%2Dsdk`, where Go answers
+   `Location: /api-sdk/` and Rust answers `Location: /api%2Dsdk`. The client takes one extra hop
+   and lands in the same place.
+2. A segment whose decoded form carries a byte that cannot be written back into a URI path stays
+   escaped through both the match and the handler dispatch. That covers a decoded `/`, `?`, `#`,
+   `%`, a space, a control byte and any non-ASCII byte. For a segment that has to match a
+   pattern, both servers answer the same 404, because no pattern this server registers contains
+   such a byte; `GET /ok%2F80` was probed live and answers the file-server 404 on both. For a
+   segment that only has to reach a dispatch `switch`, Go compares the decoded form and Rust
+   compares the escaped form, so a route name containing one of those bytes would reach Go's arm
+   and not Rust's. No route name on either prefix contains one.
+
+**Why.** Rewriting the request URI is what puts the decoded path in front of the route table,
+`fallback` and both dispatch switches at once, and a `http::Uri` cannot hold a path byte that
+would change how the path splits into segments or that its parser rejects. Refusing the segment
+leaves it in the form it arrived in, which is the same thing Go's own `pathUnescape` does for a
+segment it cannot decode. Chasing the first residual would mean carrying a second, decoded copy
+of the path through the middleware for a redirect target no client asks for.
+
+**Where tested.** `crates/wirepod-server/tests/routing.rs`:
+`a_path_is_matched_and_dispatched_by_its_unescaped_form` and
+`a_path_that_needs_cleaning_is_a_301_to_the_cleaned_path` pin the reproduced behaviour against
+fourteen live Go responses, including the `%2F` case that both residuals leave alone. The unit
+tests in `mux.rs` pin `clean` and `unescape_segments` directly. Nothing asserts either residual,
+because asserting it would build the difference into the type.
 
 ---
 

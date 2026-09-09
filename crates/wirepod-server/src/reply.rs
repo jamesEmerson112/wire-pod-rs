@@ -11,6 +11,8 @@
 //! appends a newline. And the root file server's 404 carries four headers, of
 //! which `Cache-Control` is conspicuously absent.
 
+use std::fmt::Write as _;
+
 use axum::body::Body;
 use axum::response::{IntoResponse, Response};
 use http::{HeaderValue, Method, StatusCode, header};
@@ -102,7 +104,7 @@ pub fn file_not_found() -> Response {
 /// nothing else. That method dependence is `http.Redirect`'s, not a handler's,
 /// so it does not contradict this surface's rule that no handler inspects the
 /// method.
-pub fn moved_permanently(path: &'static str, method: &Method, query: Option<&str>) -> Response {
+pub fn moved_permanently(path: &str, method: &Method, query: Option<&str>) -> Response {
     let location = match query {
         Some(query) => format!("{path}?{query}"),
         None => path.to_owned(),
@@ -126,9 +128,15 @@ pub fn moved_permanently(path: &'static str, method: &Method, query: Option<&str
     let mut response = if wants_body { text(body) } else { empty() };
     *response.status_mut() = StatusCode::MOVED_PERMANENTLY;
     let headers = response.headers_mut();
+    // `http.Redirect` writes `hexEscapeNonASCII(url)` into the header and
+    // `htmlEscape(url)` into the body, so the two differ for a non-ASCII byte.
+    // After that escape the only bytes `from_str` still rejects are control
+    // characters, which hyper refuses in a request target before a handler ever
+    // runs, so the fallback is unreachable rather than a policy.
     headers.insert(
         header::LOCATION,
-        HeaderValue::from_str(&location).unwrap_or_else(|_| HeaderValue::from_static("/")),
+        HeaderValue::from_str(&hex_escape_non_ascii(&location))
+            .unwrap_or_else(|_| HeaderValue::from_static("/")),
     );
     if wants_content_type {
         headers.insert(
@@ -152,6 +160,28 @@ pub fn allow_cors(response: &mut Response) {
         header::ACCESS_CONTROL_ALLOW_HEADERS,
         HeaderValue::from_static(literals::CORS_ANY),
     );
+}
+
+/// Go's `hexEscapeNonASCII`, which `http.Redirect` runs over the location
+/// before it sets `Location` (`net/http/server.go`).
+///
+/// Each byte at or above `0x80` becomes `%` and two lowercase hex digits, which
+/// is what `strconv.AppendInt(b, int64(s[i]), 16)` produces. The escape works on
+/// bytes rather than characters, so one non-ASCII character becomes two or more
+/// escapes, exactly as in Go.
+fn hex_escape_non_ascii(raw: &str) -> String {
+    if raw.is_ascii() {
+        return raw.to_owned();
+    }
+    let mut out = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        if byte.is_ascii() {
+            out.push(byte as char);
+        } else {
+            let _ = write!(out, "%{byte:x}");
+        }
+    }
+    out
 }
 
 /// Go's `htmlEscape`, the replacer `http.Redirect` runs over the location
@@ -184,5 +214,25 @@ mod tests {
             "Go escapes the ampersand a query brings into the anchor"
         );
         assert_eq!(html_escape("<\"'>"), "&lt;&#34;&#39;&gt;");
+    }
+
+    #[test]
+    fn the_location_is_hex_escaped_the_way_go_escapes_it() {
+        assert_eq!(
+            hex_escape_non_ascii("/api-sdk/?a=1&b=2"),
+            "/api-sdk/?a=1&b=2"
+        );
+        // One two-byte character becomes two escapes, because Go escapes bytes.
+        assert_eq!(hex_escape_non_ascii("/caf\u{e9}"), "/caf%c3%a9");
+        // The header carries the escape and the body carries the raw location,
+        // which is the one place the two disagree.
+        let response = moved_permanently("/caf\u{e9}/", &Method::GET, None);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("/caf%c3%a9/")
+        );
     }
 }

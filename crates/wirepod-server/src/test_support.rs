@@ -28,6 +28,26 @@ use crate::router;
 /// The serial of the robot on this machine, which every fixture uses.
 pub const TEST_ESN: &str = "00303f28";
 
+/// The two headers `apiHandler` sets before it dispatches
+/// (`webserver.go:28-29`), and which nothing else on this surface sets.
+///
+/// Half the header contract is an absence: `/api-sdk/*`, `/ok` and the file
+/// server carry neither of these, which is what tells an unknown `/api/*` path
+/// apart from a path that missed the prefix entirely.
+pub const CORS_HEADERS: [&str; 2] = [
+    "access-control-allow-origin",
+    "access-control-allow-headers",
+];
+
+/// The three cache headers only the two file-server mounts set
+/// (`webserver.go:415-421`, `server.go:791-798`).
+///
+/// No API route on either prefix sets any of them, and the file server's own
+/// 404 loses `Cache-Control` on the way out, so this whole list is absent from
+/// every response the slice serves except the file-server 404's `Pragma` and
+/// `Expires`.
+pub const CACHE_HEADERS: [&str; 3] = ["cache-control", "pragma", "expires"];
+
 /// That robot's address.
 pub const TEST_IP: &str = "192.168.8.203";
 
@@ -185,8 +205,30 @@ impl Reply {
         self.headers.get(name).and_then(|value| value.to_str().ok())
     }
 
+    /// One header's value, looked up by name rather than by [`header`] const.
+    ///
+    /// [`CORS_HEADERS`] and [`CACHE_HEADERS`] are lists of names, and this is
+    /// what lets a test loop over one of them.
+    ///
+    /// [`header`]: http::header
+    pub fn header_str(&self, name: &str) -> Option<&str> {
+        self.headers.get(name).and_then(|value| value.to_str().ok())
+    }
+
     /// The `Content-Type`, or `None` for the zero-byte bodies that carry none.
     pub fn content_type(&self) -> Option<&str> {
         self.header(header::CONTENT_TYPE)
+    }
+
+    /// Asserts that none of `names` is on the response.
+    ///
+    /// `context` names the request, because every caller loops over several.
+    pub fn assert_absent(&self, names: &[&str], context: &str) {
+        for name in names {
+            assert!(
+                !self.headers.contains_key(*name),
+                "{context} must not carry {name}"
+            );
+        }
     }
 }
