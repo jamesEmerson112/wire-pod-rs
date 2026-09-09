@@ -5,5 +5,5 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-sha2 = "0.10"
-walkdir = "2"
+sha2.workspace = true
+walkdir.workspace = true

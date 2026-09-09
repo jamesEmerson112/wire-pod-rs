@@ -7,3 +7,30 @@ default-members = ["crates/*", "xtask"]
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+
+# Member crates reference these with `.workspace = true`; adding a crate here must not change the resolved set in `Cargo.lock` until a member actually uses it.
+[workspace.dependencies]
+async-trait = "0.1"
+axum = "0.7"
+bytes = "1"
+futures-core = "0.3"
+http = "1"
+http-body-util = "0.1"
+prost = "0.13"
+prost-types = "0.13"
+protox = "0.7"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+sha2 = "0.10"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
+tokio-stream = "0.1"
+tokio-util = "0.7"
+tonic = "0.12"
+tonic-build = "0.12"
+tower = "0.4"
+tracing = "0.1"
+walkdir = "2"
+wirepod-core = { path = "crates/wirepod-core" }
+wirepod-proto = { path = "crates/wirepod-proto" }
+wirepod-vector = { path = "crates/wirepod-vector" }
