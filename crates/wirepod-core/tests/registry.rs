@@ -5,8 +5,10 @@
 //! rather than ported. The behaviours they pin are the ones a handler can
 //! observe: the exact `not found` text, that a connect issues one `BatteryState`
 //! and nothing else, that the same serial dials once while a different serial
-//! does not wait, the 300 second boundary, and that a disconnect stops both
-//! streams, pays its settle and leaves the camera meter alone.
+//! does not wait, the idle boundary just past 300 seconds, and that a
+//! disconnect serialises against the connect path, stops both streams, pays
+//! its settle, leaves the camera meter alone and turns the camera off only for
+//! the owner it stopped.
 //!
 //! No test pauses the clock. Idle time is driven by a [`ManualClock`], the
 //! settles are milliseconds, and every async test carries a real-clock ceiling
@@ -89,6 +91,20 @@ fn registry(factory: &Arc<FakeConnFactory>) -> RobotRegistry {
     RobotRegistry::new(factory).with_timings(Timings::instant())
 }
 
+/// Every `enable_image_streaming` the fake recorded, in order, with the other
+/// calls filtered out. The camera paths are asserted as a switch log, because
+/// what matters is the last value the robot was left with.
+fn camera_calls(robot: &FakeRobotConn) -> Vec<bool> {
+    robot
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            RobotCall::EnableImageStreaming(on) => Some(on),
+            _ => None,
+        })
+        .collect()
+}
+
 #[test]
 fn the_registry_defaults_hold_the_go_values() {
     let (_robot, factory) = fakes(FakeRobotConn::new());
@@ -119,9 +135,35 @@ fn peek_never_dials() {
     );
 }
 
+/// Deviation 7: Go reads a meter through `getCamMeter`, so reading an unknown
+/// ESN allocates one (`robot.go:182-185`). The port answers zero and creates
+/// nothing, and `meters_len` is what makes the difference visible from the
+/// registry rather than only from `CamMeters` itself.
+#[test]
+fn reading_a_meter_never_creates_one() {
+    let (_robot, factory) = fakes(FakeRobotConn::new());
+    let registry = registry(&factory);
+    let esn = Esn::new(ESN_A);
+
+    assert_eq!(registry.read_meter(&esn), (0, 0));
+    assert_eq!(
+        registry.meters_len(),
+        0,
+        "a read created a meter, as Go's insert-on-read would have"
+    );
+
+    registry.meter(&esn).record(1500);
+    assert_eq!(registry.read_meter(&esn), (1500, 1));
+    assert_eq!(
+        registry.meters_len(),
+        1,
+        "the frame pump's handle did not create a meter"
+    );
+}
+
 /// Go's `newRobot` fails the bot-info scan before it builds anything
 /// (`robot.go:349`), and the handler prefixes the message again
-/// (`server.go:61`), which is what doubles the `error: ` in the body.
+/// (`server.go:62`), which is what doubles the `error: ` in the body.
 #[tokio::test]
 async fn an_unknown_serial_is_not_found_and_dials_nothing() {
     let (_robot, factory) = fakes(FakeRobotConn::new());
@@ -196,6 +238,34 @@ async fn a_failed_dial_propagates_and_caches_nothing() {
     assert!(registry.is_empty(), "a failed dial cached an entry");
 }
 
+/// The per-serial connect lock is a `tokio::sync::Mutex`, which has no
+/// poisoning, and the guard drops normally when the dial's `?` returns, so a
+/// serial whose first dial failed is still dialable. That is the property the
+/// whole connect-lock design rests on, so it is asserted rather than reasoned
+/// about.
+#[tokio::test]
+async fn a_failed_dial_does_not_poison_the_serial() {
+    let robot = Arc::new(FakeRobotConn::new());
+    let conn: Arc<dyn RobotConn> = robot.clone();
+    let err = ConnError::new(StatusCode::Unavailable, "connection refused");
+    let factory = Arc::new(FakeConnFactory::scripted(vec![Err(err.clone()), Ok(conn)]));
+    let registry = registry(&factory);
+    let esn = Esn::new(ESN_A);
+
+    let got = within(registry.get_or_connect(&esn, &bot_info()))
+        .await
+        .expect_err("the first dial was supposed to fail");
+    assert_eq!(got, GetRobotError::Conn(err));
+    assert!(registry.is_empty());
+
+    let entry = within(registry.get_or_connect(&esn, &bot_info()))
+        .await
+        .expect("a serial whose first dial failed could not be dialled again");
+    assert_eq!(entry.esn, esn);
+    assert_eq!(factory.connect_count(), 2);
+    assert_eq!(registry.len(), 1);
+}
+
 #[tokio::test]
 async fn a_failed_liveness_check_propagates_and_caches_nothing() {
     let err = ConnError::new(StatusCode::Unavailable, "connection refused");
@@ -236,6 +306,26 @@ async fn a_liveness_deadline_maps_a_hung_robot_to_the_go_deadline_error() {
         "rpc error: code = DeadlineExceeded desc = context deadline exceeded"
     );
     assert!(registry.is_empty(), "a hung dial cached an entry");
+}
+
+/// The other side of deviation 9: with the default `None` deadline the liveness
+/// call is genuinely unbounded, as Go's bare `context.Background()` is
+/// (`robot.go:365`). A sensible-looking default slipped into the `None` arm
+/// would satisfy every other test here, so the delay is longer than any
+/// plausible one and far shorter than the ceiling.
+#[tokio::test]
+async fn the_default_liveness_check_is_unbounded() {
+    let (_robot, factory) =
+        fakes(FakeRobotConn::new().with_battery_delay(Duration::from_millis(120)));
+    let registry = registry(&factory);
+    assert_eq!(registry.liveness_deadline(), None);
+
+    let entry = within(registry.get_or_connect(&Esn::new(ESN_A), &bot_info()))
+        .await
+        .expect("the default deadline bounded a liveness call Go leaves unbounded");
+
+    assert_eq!(entry.esn, Esn::new(ESN_A));
+    assert_eq!(registry.len(), 1);
 }
 
 /// The same serial dials once. This is the half of deviation 8 that Go's
@@ -316,11 +406,13 @@ async fn a_dial_for_one_serial_does_not_block_another() {
     assert_eq!(registry.len(), 2);
 }
 
-/// Go's timer fires on `ConnTimer >= 300` (`robot.go:446`), so 300 seconds is a
-/// candidate and 299 is not. The preamble's one write is the only thing that
-/// resets it (`server.go:65`).
+/// Go tests `ConnTimer >= 300` before it increments it (`robot.go:446`,
+/// `robot.go:451`), so the counter reads 299 three hundred seconds after the
+/// reset and 300 only a second later: 300 seconds of idleness is not a
+/// candidate and 301 is. The preamble's one write is the only thing that resets
+/// it (`server.go:65`).
 #[tokio::test]
-async fn the_idle_rule_fires_at_three_hundred_seconds_and_touch_resets_it() {
+async fn the_idle_rule_fires_past_three_hundred_seconds_and_touch_resets_it() {
     let (_robot, factory) = fakes(FakeRobotConn::new());
     let clock = Arc::new(ManualClock::new());
     let esn = Esn::new(ESN_A);
@@ -341,27 +433,34 @@ async fn the_idle_rule_fires_at_three_hundred_seconds_and_touch_resets_it() {
             .is_empty(),
         "a robot idle for 299 seconds was a candidate"
     );
-    assert_eq!(
-        registry.idle_candidates(Duration::from_secs(300)),
-        vec![esn.clone()],
-        "a robot idle for 300 seconds was not a candidate"
-    );
-
-    clock.set(Duration::from_secs(300));
-    assert!(registry.touch(&esn), "touch did not find a connected robot");
     assert!(
         registry
             .idle_candidates(Duration::from_secs(300))
+            .is_empty(),
+        "a robot idle for exactly 300 seconds was a candidate, where Go's \
+         counter has only reached 299 and the robot is still connected"
+    );
+    assert_eq!(
+        registry.idle_candidates(Duration::from_secs(301)),
+        vec![esn.clone()],
+        "a robot idle for 301 seconds was not a candidate"
+    );
+
+    clock.set(Duration::from_secs(301));
+    assert!(registry.touch(&esn), "touch did not find a connected robot");
+    assert!(
+        registry
+            .idle_candidates(Duration::from_secs(301))
             .is_empty(),
         "touch did not reset the idle timer"
     );
     assert!(
         registry
-            .idle_candidates(Duration::from_secs(599))
+            .idle_candidates(Duration::from_secs(601))
             .is_empty()
     );
     assert_eq!(
-        registry.idle_candidates(Duration::from_secs(600)),
+        registry.idle_candidates(Duration::from_secs(602)),
         vec![esn]
     );
 
@@ -421,16 +520,69 @@ async fn evict_idle_drops_only_the_robots_past_the_limit() {
         .await
         .expect("the second connect failed");
 
-    clock.set(Duration::from_secs(300));
+    clock.set(Duration::from_secs(301));
     assert!(registry.touch(&kept));
 
-    let evicted = within(registry.evict_idle(Duration::from_secs(300))).await;
+    let evicted = within(registry.evict_idle(Duration::from_secs(301))).await;
     assert_eq!(evicted, vec![dropped.clone()]);
     assert!(
         registry.peek(&kept).is_some(),
         "a touched robot was evicted"
     );
     assert!(registry.peek(&dropped).is_none());
+    assert_eq!(registry.len(), 1);
+}
+
+/// Go runs one `connTimer` per robot (`robot.go:423-452`), so a robot touched
+/// while a different robot is inside its three second removal keeps its
+/// connection. The sweep here takes its decision for both robots at once and
+/// then pays a settle for the first, so without a re-check the second would be
+/// dropped on a reading that is already stale by the time it is acted on.
+#[tokio::test]
+async fn evict_idle_rechecks_a_candidate_touched_during_an_earlier_settle() {
+    let (_robot, factory) = fakes(FakeRobotConn::new());
+    let clock = Arc::new(ManualClock::new());
+    let first = Esn::new(ESN_A);
+    let second = Esn::new(ESN_B);
+    let registry = Arc::new(
+        registry(&factory)
+            .with_timings(Timings {
+                idle: Duration::from_secs(300),
+                disconnect_settle: Duration::from_millis(200),
+                ..Timings::instant()
+            })
+            .with_clock(Arc::clone(&clock) as Arc<dyn Clock>),
+    );
+
+    within(registry.get_or_connect(&first, &bot_info()))
+        .await
+        .expect("the first connect failed");
+    within(registry.get_or_connect(&second, &bot_info()))
+        .await
+        .expect("the second connect failed");
+
+    let now = Duration::from_secs(301);
+    let sweeping = tokio::spawn({
+        let registry = Arc::clone(&registry);
+        async move { registry.evict_idle(now).await }
+    });
+
+    // The sweep is now inside the first candidate's settle, which is where a
+    // request for the second one lands.
+    within(tokio::time::sleep(PARK_WINDOW)).await;
+    clock.set(now);
+    assert!(
+        registry.touch(&second),
+        "the second robot was dropped before it could be touched"
+    );
+
+    let evicted = within(sweeping).await.expect("the sweep task panicked");
+    assert_eq!(
+        evicted,
+        vec![first],
+        "a robot touched during an earlier candidate's settle was evicted anyway"
+    );
+    assert!(registry.peek(&second).is_some());
     assert_eq!(registry.len(), 1);
 }
 
@@ -560,6 +712,173 @@ async fn disconnect_stops_both_streams_pays_the_settle_and_keeps_the_meter() {
     assert!(within(guard.finish()).await);
     drop(frame_handle);
     drop(receiver_handle);
+}
+
+/// The disable is `finishCamStream` by another name (`server.go:700-707`), so
+/// it runs under the camera operation lock and only for the owner it stopped. A
+/// `/cam-stream` request that claims the feed during the settle keeps its
+/// camera; an unconditional disable would switch it off underneath a live
+/// owner, which is the hazard the Go source names at `robot.go:50-55`.
+#[tokio::test]
+async fn disconnect_leaves_a_camera_claimed_during_its_settle_alone() {
+    let (robot, factory) = fakes(FakeRobotConn::new());
+    let timings = Timings {
+        disconnect_settle: Duration::from_millis(200),
+        enable: Duration::from_secs(5),
+        ..Timings::instant()
+    };
+    let registry = Arc::new(registry(&factory).with_timings(timings));
+    let esn = Esn::new(ESN_A);
+
+    let entry = within(registry.get_or_connect(&esn, &bot_info()))
+        .await
+        .expect("the connect failed");
+    let camera: Arc<dyn CameraControl> = entry.conn.clone();
+
+    let guard_a = within(start_cam_stream(
+        Arc::clone(&entry.session),
+        Arc::clone(&camera),
+        &timings,
+        CancellationToken::new(),
+    ))
+    .await
+    .expect("the first camera claim failed");
+    assert_eq!(camera_calls(&robot), vec![true]);
+
+    let disconnecting = tokio::spawn({
+        let registry = Arc::clone(&registry);
+        let esn = esn.clone();
+        async move { registry.disconnect(&esn).await }
+    });
+
+    // The disconnect is parked in its settle. A request that took the entry
+    // before the removal started now claims the feed, which is what a reloaded
+    // camera page does.
+    within(tokio::time::sleep(PARK_WINDOW)).await;
+    let guard_b = within(start_cam_stream(
+        Arc::clone(&entry.session),
+        camera,
+        &timings,
+        CancellationToken::new(),
+    ))
+    .await
+    .expect("the replacement claim failed");
+    assert_ne!(
+        guard_b.generation(),
+        guard_a.generation(),
+        "the replacement reused the stopped generation"
+    );
+    assert_eq!(camera_calls(&robot), vec![true, true]);
+
+    assert!(
+        within(disconnecting)
+            .await
+            .expect("the disconnect task panicked")
+    );
+    assert_eq!(
+        camera_calls(&robot),
+        vec![true, true],
+        "the disconnect turned the camera off under the owner that replaced the one it stopped"
+    );
+    assert_eq!(
+        entry.session.cam.current(),
+        Some(guard_b.generation()),
+        "the disconnect took the new owner's claim with it"
+    );
+
+    assert!(within(guard_b.finish()).await);
+    assert_eq!(camera_calls(&robot), vec![true, true, false]);
+}
+
+/// The other half of the same rule. Go never sends `EnableImageStreaming` from
+/// `removeRobot` at all, so the port's extra disable has to stay confined to
+/// the case where Go would have left a claimed camera on: a robot whose camera
+/// was never opened must see nothing but its connect-time liveness call.
+#[tokio::test]
+async fn disconnecting_a_robot_whose_camera_was_never_claimed_sends_nothing() {
+    let (robot, factory) = fakes(FakeRobotConn::new());
+    let registry = registry(&factory);
+    let esn = Esn::new(ESN_A);
+
+    within(registry.get_or_connect(&esn, &bot_info()))
+        .await
+        .expect("the connect failed");
+    assert!(within(registry.disconnect(&esn)).await);
+
+    assert_eq!(
+        robot.calls(),
+        vec![RobotCall::BatteryState],
+        "the disconnect put a camera switch on the wire for a robot whose camera was never opened"
+    );
+    assert!(registry.is_empty());
+}
+
+/// Go's `removeRobot` holds `inhibitCreation` across the whole removal
+/// (`robot.go:456`, `robot.go:479`) and `getRobot` spins on it
+/// (`robot.go:407-412`), so a lookup that arrives during a removal waits and
+/// then dials a fresh connection. The port reaches the same place with this
+/// serial's connect lock, and drops the entry at the start of the removal so
+/// the waiting caller misses on its own peek.
+#[tokio::test]
+async fn a_request_during_a_disconnect_waits_and_dials_a_fresh_connection() {
+    let (robot, factory) = fakes(FakeRobotConn::new());
+    let registry = Arc::new(registry(&factory).with_timings(Timings {
+        disconnect_settle: Duration::from_millis(200),
+        ..Timings::instant()
+    }));
+    let esn = Esn::new(ESN_A);
+
+    let first = within(registry.get_or_connect(&esn, &bot_info()))
+        .await
+        .expect("the connect failed");
+
+    let disconnecting = tokio::spawn({
+        let registry = Arc::clone(&registry);
+        let esn = esn.clone();
+        async move { registry.disconnect(&esn).await }
+    });
+    within(tokio::time::sleep(PARK_WINDOW)).await;
+    assert!(
+        registry.peek(&esn).is_none(),
+        "the entry outlived the start of its own removal"
+    );
+
+    let mut waiting = tokio::spawn({
+        let registry = Arc::clone(&registry);
+        let esn = esn.clone();
+        async move { registry.get_or_connect(&esn, &bot_info()).await }
+    });
+    assert!(
+        tokio::time::timeout(PARK_WINDOW, &mut waiting)
+            .await
+            .is_err(),
+        "a request answered while the robot it asked for was still being removed"
+    );
+
+    assert!(
+        within(disconnecting)
+            .await
+            .expect("the disconnect task panicked")
+    );
+    let second = within(waiting)
+        .await
+        .expect("the waiting task panicked")
+        .expect("the request that waited out the removal failed to connect");
+
+    assert!(
+        !Arc::ptr_eq(&first, &second),
+        "a request during a removal was handed the entry being torn down"
+    );
+    assert_eq!(
+        factory.connect_count(),
+        2,
+        "the request that waited out the removal did not dial again"
+    );
+    assert_eq!(
+        robot.calls(),
+        vec![RobotCall::BatteryState, RobotCall::BatteryState]
+    );
+    assert_eq!(registry.len(), 1);
 }
 
 #[tokio::test]

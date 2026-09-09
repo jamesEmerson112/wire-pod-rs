@@ -257,13 +257,13 @@ impl Gate {
 }
 
 struct FakeFactoryState {
-    result: Result<Arc<dyn RobotConn>, ConnError>,
+    results: VecDeque<Result<Arc<dyn RobotConn>, ConnError>>,
     targets: Vec<ConnTarget>,
     gate: Option<Gate>,
 }
 
-/// A [`RobotConnFactory`] that hands out one configured connection, or fails,
-/// and counts what it was asked to dial.
+/// A [`RobotConnFactory`] that hands out configured connections, or fails, and
+/// counts what it was asked to dial.
 pub struct FakeConnFactory {
     state: Mutex<FakeFactoryState>,
 }
@@ -271,21 +271,35 @@ pub struct FakeConnFactory {
 impl FakeConnFactory {
     /// A factory that hands `conn` to every caller.
     pub fn connecting_to(conn: Arc<dyn RobotConn>) -> Self {
-        Self {
-            state: Mutex::new(FakeFactoryState {
-                result: Ok(conn),
-                targets: Vec::new(),
-                gate: None,
-            }),
-        }
+        Self::scripted(vec![Ok(conn)])
     }
 
     /// A factory whose dial always fails, which is how the preamble tests drive
     /// a robot that is not answering.
     pub fn failing(err: ConnError) -> Self {
+        Self::scripted(vec![Err(err)])
+    }
+
+    /// A factory that answers `results` in order, the last entry repeating for
+    /// every dial after it.
+    ///
+    /// [`FakeConnFactory::connecting_to`] and [`FakeConnFactory::failing`] are
+    /// the one-entry cases. A longer script is what lets a test dial a serial
+    /// that fails and then succeeds, which is how "a failed dial does not
+    /// poison the serial's connect lock" is pinned.
+    ///
+    /// # Panics
+    ///
+    /// If `results` is empty, because a factory with nothing to answer would
+    /// fail every dial for a reason no test wrote down.
+    pub fn scripted(results: Vec<Result<Arc<dyn RobotConn>, ConnError>>) -> Self {
+        assert!(
+            !results.is_empty(),
+            "a scripted factory needs at least one result"
+        );
         Self {
             state: Mutex::new(FakeFactoryState {
-                result: Err(err),
+                results: results.into(),
                 targets: Vec::new(),
                 gate: None,
             }),
@@ -330,7 +344,15 @@ impl RobotConnFactory for FakeConnFactory {
         if let Some(gate) = gate {
             gate.pass().await;
         }
-        self.lock().result.clone()
+        let result = {
+            let mut state = self.lock();
+            if state.results.len() > 1 {
+                state.results.pop_front()
+            } else {
+                state.results.front().cloned()
+            }
+        };
+        result.expect("a scripted factory ran out of results")
     }
 }
 

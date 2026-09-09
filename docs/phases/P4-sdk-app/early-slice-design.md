@@ -438,7 +438,7 @@ projection, the resolve rules, `BotStatus`, `PingerState`, and the `Clock` trait
 trip, last-match-wins and the global GUID fallback.
 
 **C8, core registry and `AppState` builder.** The registry with its entries, connect locks,
-meters and timings, and the builder. Tests cover the idle rule at 300 seconds, `touch` resetting
+meters and timings, and the builder. Tests cover the idle rule just past 300 seconds, `touch` resetting
 it, the disconnect settle, the per-ESN connect lock, and that the meter survives eviction and
 reconnect. Acceptance: `cargo test -p wirepod-core` runs the eight ported tests plus the
 additions in seconds, and each Go-derived test is confirmed to fail when its guard is removed.

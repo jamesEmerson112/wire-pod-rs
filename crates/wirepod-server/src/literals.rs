@@ -20,14 +20,14 @@ pub const SUCCESS: &str = "success";
 pub const DONE: &str = "done";
 
 /// The prefix the `/api-sdk/*` preamble puts in front of a connect failure
-/// (`server.go:61`).
+/// (`server.go:62`).
 pub const ERROR_PREFIX: &str = "error: ";
 
 /// What an unknown serial produces, in full.
 ///
 /// The prefix appears twice because Go's own message already starts with
 /// `error: ` (`robot.go:349`) and the preamble prepends another
-/// (`server.go:61`). The doubling is visible in the dashboard, so it is
+/// (`server.go:62`). The doubling is visible in the dashboard, so it is
 /// contract.
 pub const ROBOT_NOT_FOUND: &str = "error: error: robot not found in SDK info file";
 

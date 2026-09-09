@@ -349,7 +349,7 @@ projection drops them; last-match-wins lookup and the global GUID fallback; the 
 thresholds and the stored-case ESN; the form merge where a body value shadows a query value and
 both `serial=null` and `serial=` mean no robot; the frame pump counting before the sink,
 continuing past a skip, and returning on stream error, cancellation or a closed sink; the idle
-rule at 300 seconds with `touch` resetting it; and the meter surviving eviction and reconnect,
+rule just past 300 seconds with `touch` resetting it; and the meter surviving eviction and reconnect,
 which is the only thing guarding a refactor that would fold the meter into the evictable entry.
 
 **Defaults.** That `Timings::default()` holds the Go values, so nobody silently changes the 500

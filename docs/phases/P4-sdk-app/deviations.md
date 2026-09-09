@@ -200,7 +200,9 @@ the entry existing. The zero-for-unknown answer, which `net_probe` needs for a r
 has never been opened, is preserved exactly.
 
 **Where tested.** `crates/wirepod-core/tests/cam_meter.rs`, the port of Go test 7, asserts both
-the zero result and that the map did not grow.
+the zero result and that the map did not grow. `RobotRegistry::meters_len` exists so that
+`crates/wirepod-core/tests/registry.rs::reading_a_meter_never_creates_one` can assert the same
+thing through the registry, which is the type the handlers actually hold.
 
 ---
 
@@ -208,19 +210,36 @@ the zero result and that the map did not grow.
 
 **Go.** A single package-level `inhibitCreation` flag serialises robot creation across every
 serial. `getRobot` spins on it at `robot.go:407-412`, so a slow or hanging dial for one robot
-stalls every `/api-sdk/*` request for every robot.
+stalls every `/api-sdk/*` request for every robot. The same flag also spans the whole of
+`removeRobot`, set at `robot.go:456` and cleared at `robot.go:479` with the three second settle in
+between, so a removal stalls every lookup for every serial for those three seconds and the
+resuming caller then finds the robot gone and dials afresh.
 
 **Rust.** A map of per-ESN `tokio::sync::Mutex` connect locks, with the inner lock held across the
 dial. The same serial dials once; robot A's dial never blocks robot B.
+`RobotRegistry::disconnect` takes that same lock for the whole removal, so both halves of the Go
+flag are reproduced per serial rather than globally.
 
 **Why.** It preserves the property the global flag was reaching for, which is that one serial does
-not dial twice concurrently, while removing a global stall that the Go source itself works around
-elsewhere. Go commit `255a737` made the camera operation lock per-ESN for exactly this reason, so
-this is consistent with the direction the Go code was already moving.
+not dial twice concurrently and is not handed the entry a removal is tearing down, while removing a
+global stall that the Go source itself works around elsewhere. Go commit `255a737` made the camera
+operation lock per-ESN for exactly this reason, so this is consistent with the direction the Go
+code was already moving.
+
+**What differs on the removal half.** Three things, all deliberate. A removal stalls only requests
+for the serial being removed, where Go stalls every serial. The entry leaves the directory at the
+start of the removal rather than at the end, so the stalled caller misses on its own peek and
+dials, which is the state Go's caller resumes into; the difference is only visible in the window
+where Go's caller is blocked and can see nothing at all. And a caller that had already taken the
+entry before the removal started keeps its `Arc` and its live connection, exactly as a Go handler
+holding the `Robot` value `getRobot` returned keeps its `*vector.Vector`.
 
 **Where tested.** `crates/wirepod-core/tests/registry.rs` asserts that a second request for the
-same serial waits for the first dial and reuses its connection, and that a request for a different
-serial does not wait.
+same serial waits for the first dial and reuses its connection, that a request for a different
+serial does not wait, and, in
+`a_request_during_a_disconnect_waits_and_dials_a_fresh_connection`, that a request arriving inside
+a removal waits it out and then dials a fresh connection rather than being handed the entry being
+torn down.
 
 **Recorded as an improvement**, not a bug fix, in the amendments section of `docs/plan.md`.
 
@@ -420,11 +439,23 @@ goroutine always runs to completion. If that handler is already gone, nothing tu
 off and the robot streams to nobody until the next claim.
 
 The Rust registry's `disconnect` follows Go's order, and then, after the settle, issues one
-best-effort `enable_image_streaming(false)` when `cam.current()` is still `Some`. The call is
-bounded by `timings.enable` and its result is discarded, which is how Go treats the result of its
-own enable at `server.go:673-678`. The effect on the wire is one extra RPC in the case where Go
-would have left the camera on. The registry test
-`disconnect_stops_both_streams_pays_the_settle_and_keeps_the_meter` pins it.
+best-effort `enable_image_streaming(false)` when the owner it stopped still holds the feed. The
+check is `cam.current()` against the generation read before the settle, and it runs under the
+robot's camera operation lock, so the disable is ordered against `start_cam_stream` and
+`CamGuard::finish` by the lock Go names at `robot.go:50-55`. That makes it the disconnect-path
+analogue of `finishCamStream` (`server.go:700-707`): a `/cam-stream` request that claims the feed
+during the three second settle keeps its camera, where an unconditional disable would switch it
+off underneath a live owner and stall the viewer's image with no error. The call is bounded by
+`timings.enable` and its result is discarded, which is how Go treats the result of its own enable
+at `server.go:673-678`. The effect on the wire is one extra RPC, and only in the case where Go
+would have left the camera on.
+
+**Where tested.** Three registry tests.
+`disconnect_stops_both_streams_pays_the_settle_and_keeps_the_meter` pins that the disable is sent
+for a feed the disconnect stopped, `disconnect_leaves_a_camera_claimed_during_its_settle_alone`
+pins that a claim landing inside the settle keeps its camera, and
+`disconnecting_a_robot_whose_camera_was_never_claimed_sends_nothing` pins that a robot whose
+camera was never opened sees nothing on the wire but its connect-time liveness call.
 
 ---
 
@@ -465,9 +496,21 @@ error on cancellation may now not run its error path, so the `event stream: <err
 not appear for a clean stop. That log is the only current visibility into stream teardown and
 becomes user-visible once P1 lands the logger ring.
 
-**Nothing drives idle eviction yet.** `RobotRegistry::evict_idle(now)` is pure, in the slice and
-table-tested at the 300 second rule, but the background sweeper task that calls it is Tier C. Until
-P4 adds the task, a connected robot entry and its gRPC channel live for the process lifetime. The
+**The idle boundary is just past 300 seconds, not at it.** `connTimer` zeroes `ConnTimer` and then
+loops on "sleep one second, test `ConnTimer >= 300`, increment" (`robot.go:429-452`), so the test
+reads 0 one second after the reset and first reads 300 three hundred and one seconds after it. Go
+therefore keeps a robot that has been idle for exactly 300 seconds and removes it a second later,
+which is why `idle_candidates` compares with `>` rather than `>=`. Go's own boundary drifts later
+still, because `time.Sleep(time.Second)` sleeps at least a second and the drift accumulates over
+three hundred iterations; the port does not reproduce that drift, so under a per-second sweeper it
+removes at the early end of the window Go removes in. The one-second correction was found by an
+adversarial review of the C8 commit; the earlier `>=` was a misreading of the check-then-increment
+order.
+
+**Nothing drives idle eviction yet.** `RobotRegistry::idle_candidates(now)` is pure, in the slice
+and table-tested either side of the boundary, but the background sweeper task that calls
+`evict_idle` is Tier C. Until P4 adds the task, a connected robot entry and its gRPC channel live
+for the process lifetime. The
 exposure is bounded by the number of distinct serials ever requested, which is small, but it must
 not survive into the P10 soak. The asymmetry that `/cam-stream` never resets the idle timer while
 every `/api-sdk/*` request does is implemented and tested now, so the rule is pinned even though

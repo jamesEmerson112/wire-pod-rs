@@ -417,6 +417,8 @@ pub trait RobotConnFactory: Send + Sync {
     /// channel was built, not that the robot answered. The connect-time
     /// `BatteryState` liveness check that Go does inline in `newRobot`
     /// (`robot.go:365`) belongs to the registry, which is where its deadline
-    /// lives too (decision D3); it arrives with the registry in C8.
+    /// lives too (decision D3);
+    /// [`RobotRegistry::get_or_connect`](crate::robot::registry::RobotRegistry::get_or_connect)
+    /// is what makes it.
     async fn connect(&self, target: &ConnTarget) -> Result<Arc<dyn RobotConn>, ConnError>;
 }

@@ -57,6 +57,8 @@ The cache is per-process and is only emptied by `removeRobot`. A robot stays con
 
 The Rust port replaces this with a per-ESN connect lock, so the same serial dials once while one robot's dial never blocks another's. This is a recorded improvement rather than a parity break: nothing observable depends on unrelated requests being stalled.
 
+The removal half is reproduced the same way. `RobotRegistry::disconnect` holds that serial's connect lock across the whole removal, so a lookup for the robot being removed waits it out and then dials a fresh connection, which is where Go's stalled caller ends up. Two differences follow and are recorded in deviation 8: a lookup for any other serial is not stalled at all, and the entry leaves the directory at the start of the removal rather than at the end.
+
 ### `newRobot`: the connect path
 
 `robot.go:324-403`, in order:
@@ -72,6 +74,8 @@ The Rust port replaces this with a per-ESN connect lock, so the same serial dial
 ### The 300 second idle timer
 
 `connTimer(ind)` (`robot.go:423-453`) runs one goroutine per robot, keyed by slice index rather than by ESN. It bounds-checks once at entry, zeroes `robots[ind].ConnTimer`, then loops on a one-second sleep. On each tick it looks for its own index in `timerStopIndexes` and returns if it is there; otherwise, if `robots[ind].ConnTimer >= 300` it calls `removeRobot(robots[ind].ESN, "connTimer")` and returns; otherwise it increments the counter.
+
+**The check comes before the increment**, so the counter is one behind the elapsed seconds: it reads 0 at one second after the reset, 299 at three hundred seconds, and 300 only at three hundred and one. A robot that has been idle for exactly 300 seconds is therefore still connected under Go, and removal lands at about 301 seconds and drifts later because `time.Sleep(time.Second)` sleeps at least a second. The Rust `idle_candidates` compares with `>` for this reason and does not reproduce the drift.
 
 **Exactly one thing resets the timer**: the preamble's `robots[robotIndex].ConnTimer = 0` (`server.go:65`), which runs on every `/api-sdk/*` request except `get_sdk_info` and `debug`. `/cam-stream` runs its own preamble and discards the index (`server.go:710`), so a page showing only the camera is dropped after 300 seconds even while frames are flowing. The comment at `robot.go:36-38` states this explicitly. The Rust port keeps the asymmetry and tests it directly.
 
