@@ -19,9 +19,216 @@
 
   <div id="outer">
     <div id="content" class="">
-      <h1 class="center">Vector Configuration</h1>
-      <div id="botStats"></div>
-      <hr>
+
+      <div class="vb-wrap">
+        <div class="vb-card" id="vbCard">
+
+          <div class="vb-head">
+            <div class="vb-ident">
+              <img class="vb-avatar" id="vbAvatar" src="/assets/face.gif" alt="">
+              <div class="vb-ident-text">
+                <div class="vb-ident-line">
+                  <span class="vb-name">VECTOR</span>
+                  <span class="vb-serial" id="vbSerial"></span>
+                  <span class="vb-pill" id="vbStatusPill"><span class="vb-dot"></span><span id="vbStatusText">...</span></span>
+                </div>
+                <div class="vb-sub" id="vbSubline"></div>
+              </div>
+            </div>
+            <div class="vb-readouts">
+              <div class="vb-readout">
+                <div class="vb-rl">BATTERY</div>
+                <div class="vb-rv vb-rv-accent"><span id="vbBattPct">--</span> <span class="vb-ru" id="vbBattVolts"></span></div>
+              </div>
+              <div class="vb-readout">
+                <div class="vb-rl">THROUGHPUT</div>
+                <div class="vb-rv">&#8595;<span id="vbThroughput">--</span> <span class="vb-ru">kB/s</span></div>
+              </div>
+              <div class="vb-readout">
+                <div class="vb-rl">LATENCY</div>
+                <div class="vb-rv"><span id="vbLatency">--</span><span class="vb-ru">ms</span></div>
+              </div>
+              <button class="vb-gear" id="vbGear" type="button" title="Settings" aria-label="Open settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"></circle><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.5-2-3.4-2.3 1a7.7 7.7 0 0 0-2.6-1.5L14.2 2h-4l-.3 2.6a7.7 7.7 0 0 0-2.6 1.5l-2.3-1-2 3.4 2 1.5a7.6 7.6 0 0 0 0 3l-2 1.5 2 3.4 2.3-1a7.7 7.7 0 0 0 2.6 1.5l.3 2.6h4l.3-2.6a7.7 7.7 0 0 0 2.6-1.5l2.3 1 2-3.4z"></path></svg></button>
+            </div>
+          </div>
+
+          <div class="vb-body">
+
+            <div class="vb-col vb-col-l">
+
+              <section class="vb-panel vb-panel-cam">
+                <div class="vb-phead">
+                  <span class="vb-ptitle"><svg class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#00ff80" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>CAMERA &middot; WHAT VECTOR SEES</span>
+                  <span class="vb-pacc vb-rec"><span class="vb-recdot"></span>REC 30fps</span>
+                </div>
+                <div class="vb-pbody">
+                  <div class="vb-cam-frame" id="vbCamFrame">
+                    <img class="vb-cam" id="vbCam" alt="Vector camera stream">
+                    <div class="vb-cam-cross"></div>
+                    <div class="vb-cam-meta">640&#215;360 &middot; /cam-stream</div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="vb-panel vb-panel-grow">
+                <div class="vb-phead">
+                  <span class="vb-ptitle"><svg class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffb000" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"></path></svg>ACTIONS &middot; MOTOR STATE</span>
+                  <span class="vb-pacc"><span class="vb-badge vb-badge-todo">TODO</span></span>
+                </div>
+                <div class="vb-pbody">
+                  <div class="vb-act-label">Current action</div>
+                  <div class="vb-act-value">Tracking face &middot; idle</div>
+                  <div class="vb-stats">
+                    <div class="vb-stat"><div class="vb-sl">HEAD ANGLE</div><div class="vb-sv">+12&deg;</div></div>
+                    <div class="vb-stat"><div class="vb-sl">LIFT HEIGHT</div><div class="vb-sv">32 mm</div></div>
+                    <div class="vb-stat"><div class="vb-sl">WHEELS L/R</div><div class="vb-sv">0.12 m/s</div></div>
+                    <div class="vb-stat"><div class="vb-sl">SPEAKER</div><div class="vb-sv">vol 3/5</div></div>
+                  </div>
+                  <div class="vb-queued"><span class="vb-tag-queued">QUEUED</span> return to charger &middot; idle timeout 90s</div>
+                </div>
+              </section>
+
+            </div>
+
+            <div class="vb-col vb-col-m">
+
+              <section class="vb-panel vb-panel-grow">
+                <div class="vb-phead">
+                  <span class="vb-ptitle"><svg class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#29e0d6" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3z"></path><path d="M9 3v15M15 6v15"></path></svg>NAVIGATION &middot; SLAM MAP</span>
+                  <span class="vb-pacc">X 1.2m &middot; Y 0.4m &middot; &theta; 34&deg; <span class="vb-badge vb-badge-todo">TODO</span></span>
+                </div>
+                <div class="vb-pbody">
+                  <svg class="vb-map" viewBox="0 0 380 250" preserveAspectRatio="none" role="img" aria-label="SLAM map (demo data)">
+                    <defs>
+                      <pattern id="vbMapGrid" width="30" height="30" patternUnits="userSpaceOnUse">
+                        <path d="M30 0H0V30" fill="none" stroke="#29e0d6" stroke-opacity="0.09" stroke-width="1"></path>
+                      </pattern>
+                      <path id="vbMapPath" d="M46,206 C110,170 120,150 176,120 S250,70 320,44" fill="none"></path>
+                    </defs>
+                    <rect x="0" y="0" width="380" height="250" fill="url(#vbMapGrid)"></rect>
+                    <rect x="150" y="150" width="70" height="26" rx="4" fill="#ffffff" fill-opacity="0.06" stroke="#ffffff" stroke-opacity="0.14"></rect>
+                    <rect x="245" y="120" width="30" height="52" rx="4" fill="#ffffff" fill-opacity="0.06" stroke="#ffffff" stroke-opacity="0.14"></rect>
+                    <use class="vb-map-path" href="#vbMapPath" stroke="#00ff80" stroke-width="2" stroke-dasharray="6 6"></use>
+                    <g transform="translate(46,206)"><rect x="-11" y="-9" width="22" height="18" rx="3" fill="none" stroke="#ced100" stroke-width="1.6"></rect><path d="M-4,-2 L2,-2 L-1,2 L4,2" fill="none" stroke="#ced100" stroke-width="1.6"></path></g>
+                    <text x="46" y="230" text-anchor="middle" font-family="monospace" font-size="9" fill="#8a8a8a">charger</text>
+                    <g transform="translate(320,44)"><rect x="-8" y="-8" width="16" height="16" rx="2" fill="#29e0d6" fill-opacity="0.2" stroke="#29e0d6" stroke-width="1.6"></rect></g>
+                    <text x="320" y="30" text-anchor="middle" font-family="monospace" font-size="9" fill="#8a8a8a">voice source</text>
+                    <g class="vb-map-bot"><circle r="14" fill="#00ff80" fill-opacity="0.14"></circle><polygon points="9,0 -6,-6 -6,6" fill="#00ff80" stroke="#0a0b0d" stroke-width="1"></polygon><animateMotion dur="7s" repeatCount="indefinite" rotate="auto"><mpath href="#vbMapPath"></mpath></animateMotion></g>
+                  </svg>
+                  <div class="vb-map-legend">
+                    <span class="vb-lg"><span class="vb-sw vb-sw-robot"></span>robot</span>
+                    <span class="vb-lg"><span class="vb-sw vb-sw-charger"></span>charger</span>
+                    <span class="vb-lg"><span class="vb-sw vb-sw-target"></span>target</span>
+                    <span class="vb-lg"><span class="vb-sw vb-sw-obstacle"></span>obstacle</span>
+                  </div>
+                </div>
+              </section>
+
+              <section class="vb-panel">
+                <div class="vb-phead">
+                  <span class="vb-ptitle"><svg class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#98c379" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9a12 12 0 0 1 16 0"></path><path d="M7 12.5a7 7 0 0 1 10 0"></path><path d="M10 16a3 3 0 0 1 4 0"></path><circle cx="12" cy="19" r="1" fill="#98c379" stroke="none"></circle></svg>CONNECTIVITY &middot; DATA TRANSFER</span>
+                  <span class="vb-pacc"><button class="vb-chip" id="vbNetRun" type="button" title="Measure throughput over a five second window">RUN</button></span>
+                </div>
+                <div class="vb-pbody">
+                  <div class="vb-conn">
+                    <div class="vb-spark">
+                      <div class="vb-spark-label">&#8595; DOWN &middot; <span id="vbDownLabel">--</span></div>
+                      <svg class="vb-spark-svg" viewBox="0 0 200 34" preserveAspectRatio="none" aria-hidden="true"><polyline id="vbDownSpark" fill="none" stroke="#00ff80" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" points=""></polyline></svg>
+                    </div>
+                    <div class="vb-spark">
+                      <div class="vb-spark-label">LATENCY &middot; <span id="vbLatLabel">--</span></div>
+                      <svg class="vb-spark-svg" viewBox="0 0 200 34" preserveAspectRatio="none" aria-hidden="true"><polyline id="vbLatSpark" fill="none" stroke="#29e0d6" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" points=""></polyline></svg>
+                    </div>
+                    <div class="vb-conn-kv">
+                      <span class="vb-kvk">endpoint</span><span class="vb-kvv" id="vbNetTarget">--</span>
+                      <span class="vb-kvk">jitter</span><span class="vb-kvv" id="vbNetJitter">--</span>
+                      <span class="vb-kvk">loss</span><span class="vb-kvv" id="vbNetLoss">--</span>
+                      <span class="vb-kvk">probe</span><span class="vb-kvv vb-kvv-accent" id="vbNetProbe">--</span>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+            </div>
+
+            <div class="vb-col vb-col-r">
+
+              <section class="vb-panel vb-panel-talk">
+                <div class="vb-phead">
+                  <span class="vb-ptitle"><svg class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#00ff80" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><line x1="12" y1="18" x2="12" y2="22"></line></svg>TALK TO VECTOR</span>
+                  <span class="vb-pacc"><span class="vb-badge vb-badge-todo">TODO</span></span>
+                </div>
+                <div class="vb-pbody">
+                  <div class="vb-chat">
+                    <div class="vb-bubble">Hi Kevin &#8212; I'm awake and listening. Tap the mic and talk to me.</div>
+                    <div class="vb-bubble-meta">VECTOR &middot; ready</div>
+                  </div>
+                </div>
+                <div class="vb-talk-bar">
+                  <div class="vb-talk-input">
+                    <button class="vb-mic" type="button" title="Not wired up yet" aria-label="Talk to Vector (not wired up yet)"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#06130c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="11" rx="3" fill="#06130c" stroke="none"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><line x1="12" y1="18" x2="12" y2="22"></line></svg></button>
+                    <input class="vb-talk-field" type="text" placeholder="Tap to talk&#8212; or type a message..." title="Not wired up yet" readonly>
+                  </div>
+                </div>
+              </section>
+
+              <section class="vb-panel vb-panel-grow">
+                <div class="vb-phead">
+                  <span class="vb-ptitle"><svg class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#c586ff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="7.5" ry="3"></ellipse><path d="M4.5 5.5v13c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3v-13"></path><path d="M4.5 12c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3"></path></svg>MEMORY &middot; RAG STORE</span>
+                  <span class="vb-pacc">3,412 vecs <span class="vb-badge vb-badge-todo">TODO</span></span>
+                </div>
+                <div class="vb-pbody">
+                  <div class="vb-mem-sub">Recently recalled &middot; model all-MiniLM-L6</div>
+                  <div class="vb-mem-row">
+                    <div class="vb-mem-line"><span class="vb-mem-txt">User's name is Kevin</span><span class="vb-mem-score">0.94</span></div>
+                    <div class="vb-mem-bar"><i class="vb-mem-fill" style="width:94%"></i></div>
+                  </div>
+                  <div class="vb-mem-row">
+                    <div class="vb-mem-line"><span class="vb-mem-txt">Loves the fist-bump trick</span><span class="vb-mem-score">0.88</span></div>
+                    <div class="vb-mem-bar"><i class="vb-mem-fill" style="width:88%"></i></div>
+                  </div>
+                  <div class="vb-mem-row">
+                    <div class="vb-mem-line"><span class="vb-mem-txt">Charger is by the window</span><span class="vb-mem-score">0.81</span></div>
+                    <div class="vb-mem-bar"><i class="vb-mem-fill" style="width:81%"></i></div>
+                  </div>
+                  <div class="vb-mem-row vb-mem-row-dim">
+                    <div class="vb-mem-line"><span class="vb-mem-txt">Prefers metric units</span><span class="vb-mem-score">0.64</span></div>
+                    <div class="vb-mem-bar"><i class="vb-mem-fill" style="width:64%"></i></div>
+                  </div>
+                </div>
+              </section>
+
+            </div>
+
+          </div>
+
+          <div class="vb-foot">
+            <section class="vb-panel vb-panel-log">
+              <div class="vb-phead">
+                <span class="vb-ptitle"><svg class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#e5c07b" stroke-width="1.7" stroke-linecap="round"><path d="M4 7h16M4 12h11M4 17h16"></path></svg>LIVE LOG</span>
+                <div class="vb-pacc vb-chips" id="vbLogChips">
+                  <span class="vb-chip vb-chip-on" data-level="">All</span>
+                  <span class="vb-chip" data-level="info">Info</span>
+                  <span class="vb-chip" data-level="warn">Warn</span>
+                  <span class="vb-chip" data-level="error">Error</span>
+                </div>
+              </div>
+              <div class="vb-pbody">
+                <div class="vb-log-body" id="vbLogBody"></div>
+              </div>
+            </section>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="vb-scrim" id="vbScrim"></div>
+      <aside class="vb-drawer" id="vbDrawer">
+        <div class="vb-drawer-head">
+          <span class="vb-drawer-title">VECTOR CONFIGURATION</span>
+          <button class="vb-drawer-close" id="vbDrawerClose" type="button" title="Close" aria-label="Close settings"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+        </div>
+
       <div class="main-nav-parent">
         <div class="main-nav-child"><a href="/sdkapp"><i class="fa-solid fa-reply"></i><br />Back</a></div>
         <div class="main-nav-child"><a href="#" onclick="goToControlPage()"><i
@@ -37,7 +244,7 @@
         <div class="main-nav-child"><a href="#" onclick="showSection('section-stim'); return false;"><i
               class="fa-solid fa-face-laugh-beam" id="icon-stim" name="icon"></i><br />Stim</a></div>
         <div class="main-nav-child"><a href="#" onclick="showSection('section-stats'); return false;"><i
-              class="fa-solid fa-chart-simple" id="icon-stim" name="icon"></i><br />Statistics</a></div>
+              class="fa-solid fa-chart-simple" id="icon-stats" name="icon"></i><br />Statistics</a></div>
         <div class="main-nav-child"><a href="#" onclick="showSection('section-photos'); getPhotos(); return false;"><i
               class="fa-solid fa-images" id="icon-photos" name="icon"></i><br />Photos</a></div>
         <div class="main-nav-child"><a href="#" onclick="showSection('section-locale'); return false;"><i
@@ -387,6 +594,9 @@
         <button onclick="sendTimeZone()">Submit Time Zone</button>
         <hr>
       </div>
+      </aside>
+
+      <div id="botStats" class="vb-hidden"></div>
 
     </div>
   </div>
@@ -401,6 +611,7 @@
   <script src="./js/faces.js"></script>
   <script src="../js/ui.js"></script>
   <script src="./js/heyvector.js"></script>
+  <script src="./js/vectorbrain.js"></script>
   <iframe name="hiddenFrame" width="0" height="0" border="0" style="display: none;"></iframe>
 
 </body>

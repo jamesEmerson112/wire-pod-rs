@@ -35,7 +35,7 @@ d91b07626e28cc3f736a1619dfd37f086db1931877046649c747a17c82d0df28  ./webroot/asse
 e3395ef075ee4c9d243a2b3ba591a4ec4896f0cc6add2434cb416e19a291f4a4  ./webroot/css/DroidSans.woff
 c99fb740581471c2bd239a200c9f7a6c12f60a7099b0f0af795e405281bc2c5f  ./webroot/css/PxPlus_IBM_VGA_8x16.ttf
 b25fa5563cc8a2e1e9b3913c3129668fa9084b684b5071de34e80ba79b91e89e  ./webroot/css/h1Font.ttf
-8b99471859acb82738d22dffca8c75bcab754d6be9855b03edac89ebdfa2eb51  ./webroot/css/style.css
+e25338565a6aafb3e430ce3159c983c57ed2b78edf5539cbc9806a5944da3ab9  ./webroot/css/style.css
 4bebeeebdc0e30a5e9bda1641027dff68aab33ed134625039765dd827fe7a6a5  ./webroot/css/wing.css
 59e04dd62a27add6d008642a7faab7688278223a7a0a3459c6b275e71671cf6b  ./webroot/favicon.ico
 7af52a1d2c29d2a96cc3df9f61bfc4b806b24a96161f7d5808f31917ba239a21  ./webroot/favicon.png
@@ -57,8 +57,9 @@ f64bede966356a622566a917d1947bf07b6281ab813cb56f4b198ff3466bc2a6  ./webroot/sdka
 0ba653a07e51fa695a67be6002138a3db849bd52cf6e946c5cec0b57e4f1a6ea  ./webroot/sdkapp/js/heyvector.js
 185d9d2401484a9e15fdb132582b5139abca1d5ce1d7fb8ecbc8e6e66bf568ff  ./webroot/sdkapp/js/httprequest.js
 e48c86879346f3af669edcf414be74ad6b690f40841bf9e300a16110aa911879  ./webroot/sdkapp/js/iro.min.js
-d0f73627380ed4a304ab03c672ab4a4147e9d30bf06031a1eac3cccf51d9d99b  ./webroot/sdkapp/js/main.js
+b08475eb587067b1b4f65b3102e83d6134a02162e4af28fd129980a621ff4039  ./webroot/sdkapp/js/main.js
 9b3a36431d9c038597ab1284a5e9d5d83b53fa75acc1472362300660af2e37c7  ./webroot/sdkapp/js/settings.js
-11bd913e6b11fba01b95563fb16d4d2e95b90cd7e52f84a58eaf16e3740bfd0c  ./webroot/sdkapp/settings.html
+2f541880e64db7fa65521bcabaabaffdebc7eae3236eab8bbc7756442d90c80b  ./webroot/sdkapp/js/vectorbrain.js
+dabe3f116a7f8bbcef8b0cd55dad69baf4d397f0ec7d761325d6e1a79cb03123  ./webroot/sdkapp/settings.html
 8fa6ba7abb74d69141bc1001b02e1ff991bae65c2f1bc9364f36126847ee5d25  ./webroot/sessions
 85d3bf1c13192733c591abc7136a5c2c7793f128ab2c572e825d28a5f3f4cf61  ./webroot/setup.html

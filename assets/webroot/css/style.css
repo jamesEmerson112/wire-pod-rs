@@ -739,3 +739,1327 @@ input[type='checkbox']:checked:after {
 @keyframes blink {
   50% { opacity: 0; }
 }
+
+/* =========================================================================
+   VECTOR BRAIN dashboard (sdkapp/settings.html only)
+   Appended block. Purely additive: every selector below is either a new
+   vb- prefixed class, a new vb* id, or an existing id/class narrowed by a
+   :has(.vb-wrap) / .vb-drawer descendant guard so that index.html,
+   control.html and sdkapp/index.html render identically.
+   The page inherits body{font-size:1.8em}, so every vb- rule below sets an
+   absolute px font-size of its own.
+   ========================================================================= */
+
+/* ---- tokens ---------------------------------------------------------- */
+/* .vb-drawer and .vb-scrim are siblings of .vb-wrap, not descendants, so the
+   custom properties have to be declared on them too or var() there is empty. */
+.vb-wrap,
+.vb-drawer,
+.vb-scrim {
+  --vb-page: #0e0f12;
+  --vb-card: #141519;
+  --vb-strip: #17181d;
+  --vb-panel: #1c1d22;
+  --vb-line-card: rgba(255, 255, 255, 0.08);
+  --vb-line-panel: rgba(255, 255, 255, 0.07);
+  --vb-line-head: rgba(255, 255, 255, 0.06);
+  --vb-text: #e8e8e8;
+  --vb-muted: #8a8a8a;
+  --vb-muted-2: #9a9a9a;
+  --vb-log-msg: #cfcfcf;
+  --vb-log-time: #6f6f6f;
+  --vb-log-bot: #7f7f7f;
+  --vb-accent: #00ff80;
+  --vb-accent-hi: #7dffbe;
+  --vb-alert: #ff6b6b;
+  --vb-alert-hi: #ff4d4d;
+  --vb-cyan: #00d1d1;
+  --vb-amber: #ffb000;
+  --vb-violet: #c586ff;
+  --vb-mono: 'IBMVGA', 'Cascadia Mono', Consolas, monospace;
+}
+
+/* ---- host page adjustments, gated on the dashboard being present ------ */
+#content:has(.vb-wrap) {
+  width: 100% !important;
+  max-width: 1520px;
+}
+
+#outer:has(.vb-wrap) {
+  height: auto;
+  min-height: 100vh;
+}
+
+/* The mockup's page ground. --vb-page is declared on .vb-wrap, which is not an
+   ancestor of body, so the literal is repeated here rather than var()'d. */
+body:has(.vb-wrap) {
+  background-color: #0e0f12;
+}
+
+#botStats.vb-hidden,
+.vb-hidden {
+  display: none !important;
+}
+
+/* ---- shell ----------------------------------------------------------- */
+.vb-wrap {
+  width: 100%;
+  max-width: 1480px;
+  margin: 0 auto;
+  padding: 20px;
+  text-align: left;
+  font-family: var(--body-font-family);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--vb-text);
+}
+
+.vb-wrap,
+.vb-wrap *,
+.vb-wrap *::before,
+.vb-wrap *::after,
+.vb-scrim,
+.vb-drawer,
+.vb-drawer .vb-drawer-head,
+.vb-drawer .vb-drawer-head * {
+  box-sizing: border-box;
+}
+
+.vb-card {
+  background: var(--vb-card);
+  border: 1px solid var(--vb-line-card);
+  border-radius: 18px;
+  box-shadow: 0 30px 70px rgba(0, 0, 0, 0.55);
+  overflow: hidden;
+}
+
+/* ---- header strip ---------------------------------------------------- */
+.vb-head {
+  background: var(--vb-strip);
+  padding: 16px 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  border-bottom: 1px solid var(--vb-line-panel);
+}
+
+.vb-ident {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.vb-avatar {
+  flex: none;
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  background: #0c0d10;
+  border: 1px solid var(--vb-line-card);
+  object-fit: cover;
+  display: block;
+}
+
+.vb-ident-text {
+  min-width: 0;
+}
+
+.vb-ident-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.vb-name {
+  font-family: 'H1Weird', 'IBMVGA', sans-serif;
+  font-size: 18px;
+  letter-spacing: 0.03em;
+  line-height: 1.1;
+  color: var(--vb-accent);
+}
+
+.vb-serial {
+  font-family: var(--vb-mono);
+  font-size: 14px;
+  color: var(--vb-log-msg);
+}
+
+.vb-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--vb-accent);
+  background: rgba(0, 255, 128, 0.12);
+  border: 1px solid rgba(0, 255, 128, 0.32);
+  white-space: nowrap;
+}
+
+.vb-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--vb-accent);
+  animation: vb-pulse 2s infinite;
+}
+
+/* vectorbrain.js writes class vb-pill-<status> for the four values in its
+   STATUS_COLOR map: online, offline, disconnected, unknown. */
+.vb-pill.vb-pill-offline {
+  color: var(--vb-amber);
+  background: rgba(255, 176, 0, 0.1);
+  border-color: rgba(255, 176, 0, 0.3);
+}
+
+.vb-pill.vb-pill-offline .vb-dot {
+  background: var(--vb-amber);
+  animation: none;
+}
+
+.vb-pill.vb-pill-disconnected {
+  color: var(--vb-alert);
+  background: rgba(255, 107, 107, 0.1);
+  border-color: rgba(255, 107, 107, 0.3);
+}
+
+.vb-pill.vb-pill-disconnected .vb-dot {
+  background: var(--vb-alert-hi);
+  animation: vb-blink 1s step-start infinite;
+}
+
+.vb-pill.vb-pill-unknown {
+  color: var(--vb-muted);
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.vb-pill.vb-pill-unknown .vb-dot {
+  background: var(--vb-muted);
+  animation: none;
+}
+
+.vb-sub {
+  margin-top: 3px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--vb-muted);
+}
+
+.vb-readouts {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.vb-readout {
+  text-align: right;
+  min-width: 0;
+}
+
+.vb-rl {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--vb-muted);
+  white-space: nowrap;
+}
+
+.vb-rv {
+  margin-top: 4px;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--vb-text);
+  white-space: nowrap;
+}
+
+.vb-rv-accent {
+  color: var(--vb-accent);
+}
+
+.vb-ru {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--vb-muted);
+}
+
+/* vectorbrain.js toggles this on #vbBattPct at 20% or below. */
+#vbBattPct.vb-batt-low {
+  color: var(--vb-alert);
+}
+
+.vb-gear {
+  flex: none;
+  -webkit-appearance: none;
+  appearance: none;
+  width: 38px;
+  height: 38px;
+  margin: 0;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--vb-muted-2);
+  font-size: 0;
+  line-height: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease, transform 0.25s ease;
+}
+
+.vb-gear svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.vb-gear:hover,
+.vb-gear:focus {
+  color: var(--vb-accent);
+  background: rgba(0, 255, 128, 0.08);
+  border-color: rgba(0, 255, 128, 0.35);
+  transform: rotate(30deg);
+  outline: none;
+}
+
+.vb-gear:active {
+  transform: rotate(30deg) scale(0.95);
+}
+
+/* ---- body grid ------------------------------------------------------- */
+.vb-body {
+  padding: 18px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: stretch;
+}
+
+.vb-col {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+/* The mockup gives one panel per column flex:1 so all three columns end level:
+   ACTIONS (left), NAVIGATION (middle), MEMORY (right). */
+.vb-panel-grow { flex: 1; }
+
+.vb-col-l { flex: 1 1 360px; }
+.vb-col-m { flex: 2 1 440px; }
+.vb-col-r { flex: 1 1 340px; }
+
+.vb-foot {
+  padding: 0 18px 18px;
+}
+
+/* ---- panel chrome ---------------------------------------------------- */
+.vb-panel {
+  background: var(--vb-panel);
+  border: 1px solid var(--vb-line-panel);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.vb-phead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--vb-line-head);
+}
+
+.vb-ptitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-family: var(--vb-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  line-height: 1.4;
+  color: var(--vb-muted-2);
+  text-transform: uppercase;
+}
+
+.vb-picon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.vb-pacc {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--vb-mono);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #7a7a7a;
+  white-space: nowrap;
+}
+
+.vb-pbody {
+  padding: 14px;
+}
+
+.vb-badge {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: var(--vb-accent);
+  color: #06130c;
+  font-family: var(--vb-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.4;
+  text-transform: uppercase;
+  vertical-align: middle;
+}
+
+.vb-badge-todo {
+  background: var(--vb-amber);
+  color: #241800;
+}
+
+/* ---- camera panel ---------------------------------------------------- */
+/* The mockup's camera is a direct, full-bleed child of the panel: no padding
+   wrapper, no border, no radius, fixed 238px tall. */
+.vb-panel-cam .vb-pbody {
+  padding: 0;
+}
+
+.vb-cam-frame,
+#vbCamFrame {
+  position: relative;
+  width: 100%;
+  height: 238px;
+  background: #0a0b0d;
+  overflow: hidden;
+}
+
+.vb-cam-cross {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.vb-cam-cross::before,
+.vb-cam-cross::after {
+  content: "";
+  position: absolute;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.vb-cam-cross::before {
+  top: 7px;
+  left: 0;
+  width: 16px;
+  height: 2px;
+}
+
+.vb-cam-cross::after {
+  left: 7px;
+  top: 0;
+  width: 2px;
+  height: 16px;
+}
+
+.vb-cam,
+#vbCam {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #0a0b0d;
+}
+
+.vb-cam-meta {
+  position: absolute;
+  left: 10px;
+  bottom: 8px;
+  font-family: var(--vb-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.75);
+  text-shadow: 0 1px 3px #000;
+  pointer-events: none;
+}
+
+/* vectorbrain.js sets this on the frame when the MJPEG stream errors out.
+   The <img> is hidden with it: a dead stream otherwise shows the browser broken-image
+   glyph and the alt text on top of the overlay. */
+#vbCamFrame.vb-cam-off .vb-cam,
+#vbCamFrame.vb-cam-off #vbCam {
+  visibility: hidden;
+}
+
+#vbCamFrame.vb-cam-off::after {
+  content: "CAMERA OFFLINE - CLICK TO RETRY";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  font-family: var(--vb-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  color: var(--vb-muted);
+  pointer-events: none;
+}
+
+#vbCamFrame.vb-cam-off {
+  cursor: pointer;
+}
+
+/* The crosshair and the resolution caption belong to a live frame; over an
+   offline placeholder they read as a stream that is working but black. */
+#vbCamFrame.vb-cam-off .vb-cam-cross,
+#vbCamFrame.vb-cam-off .vb-cam-meta {
+  display: none;
+}
+
+/* Same reasoning for the REC badge in the panel header: it sits outside the
+   frame, so it needs :has() to follow the frame's state. Matches the
+   #content:has(.vb-wrap) approach already used above. */
+.vb-panel:has(#vbCamFrame.vb-cam-off) .vb-rec {
+  display: none;
+}
+
+.vb-rec {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--vb-alert);
+}
+
+.vb-recdot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--vb-alert-hi);
+  animation: vb-blink 1.2s step-start infinite;
+}
+
+/* ---- actions / motor state panel ------------------------------------- */
+.vb-act-label {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--vb-muted);
+}
+
+.vb-act-value {
+  margin: 4px 0 14px;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--vb-accent);
+}
+
+/* grid, not flex-wrap: a lone wrapped tile must keep its column width instead of
+   growing to fill the row (the mockup's SPEAKER tile stays one third wide). */
+.vb-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.vb-stat {
+  min-width: 0;
+  padding: 9px 11px;
+  background: #161719;
+  border: 1px solid var(--vb-line-head);
+  border-radius: 9px;
+}
+
+.vb-sl {
+  font-family: var(--vb-mono);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #7a7a7a;
+  text-transform: uppercase;
+}
+
+.vb-sv {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--vb-text);
+}
+
+.vb-queued {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--vb-muted);
+}
+
+/* plain text in the mockup, not a filled chip */
+.vb-tag-queued {
+  color: #61afef;
+  font-family: var(--vb-mono);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-transform: uppercase;
+}
+
+/* ---- navigation / SLAM map panel ------------------------------------- */
+.vb-map {
+  display: block;
+  width: 100%;
+  height: 268px;
+  border-radius: 8px;
+  background: var(--vb-page);
+}
+
+.vb-map-path {
+  animation: vb-dash 1.6s linear infinite;
+}
+
+.vb-map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin-top: 10px;
+  font-family: var(--vb-mono);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--vb-muted);
+}
+
+.vb-lg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vb-sw {
+  flex: none;
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+}
+
+.vb-sw-robot {
+  background: var(--vb-accent);
+  clip-path: polygon(100% 50%, 0 0, 0 100%);
+}
+
+.vb-sw-charger {
+  border: 1.5px solid #ced100;
+}
+
+.vb-sw-target {
+  background: rgba(41, 224, 214, 0.3);
+  border: 1.5px solid #29e0d6;
+}
+
+.vb-sw-obstacle {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1.5px solid rgba(255, 255, 255, 0.3);
+}
+
+/* ---- connectivity panel ---------------------------------------------- */
+.vb-conn {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+}
+
+.vb-spark {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.vb-spark-label {
+  margin-bottom: 4px;
+  font-family: var(--vb-mono);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #7a7a7a;
+}
+
+.vb-spark-svg {
+  display: block;
+  width: 100%;
+  height: 34px;
+  overflow: visible;
+}
+
+/* auto-width key/value grid: the sparklines absorb the slack, so this block no
+   longer wraps to a second row the way a 210px flex basis did. */
+.vb-conn-kv {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 4px 14px;
+  font-family: var(--vb-mono);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.vb-kvk {
+  color: #7a7a7a;
+  white-space: nowrap;
+}
+
+.vb-kvv {
+  color: var(--vb-log-msg);
+  white-space: nowrap;
+}
+
+.vb-kvv-ok {
+  color: #98c379;
+}
+
+.vb-kvv-accent {
+  color: var(--vb-accent);
+}
+
+/* ---- talk panel ------------------------------------------------------ */
+/* The mockup splits this panel into a scrolling message column and a composer
+   bar separated by a rule; the panel itself is the flex column that joins them. */
+.vb-panel-talk {
+  display: flex;
+  flex-direction: column;
+}
+
+.vb-panel-talk .vb-pbody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 244px;
+  overflow: auto;
+}
+
+.vb-chat {
+  align-self: flex-start;
+  max-width: 88%;
+}
+
+.vb-bubble {
+  padding: 8px 12px;
+  border-radius: 12px 12px 12px 3px;
+  background: rgba(0, 255, 128, 0.1);
+  border: 1px solid rgba(0, 255, 128, 0.22);
+  color: #d6ffe8;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.vb-bubble-meta {
+  margin: 3px 0 0 4px;
+  font-family: var(--vb-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  line-height: 1.4;
+  color: var(--vb-accent);
+}
+
+.vb-talk-bar {
+  padding: 12px 14px;
+  border-top: 1px solid var(--vb-line-head);
+}
+
+.vb-talk-input {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.vb-mic {
+  flex: none;
+  -webkit-appearance: none;
+  appearance: none;
+  width: 52px;
+  height: 52px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #00ff80, #00a34f);
+  color: #06130c;
+  font-size: 0;
+  line-height: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 0 20px rgba(0, 255, 128, 0.35);
+  transition: box-shadow 0.18s ease;
+}
+
+.vb-mic svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.vb-mic:hover,
+.vb-mic:focus {
+  box-shadow: 0 0 28px rgba(0, 255, 128, 0.6);
+  outline: none;
+}
+
+.vb-mic:active {
+  transform: scale(0.96);
+}
+
+.vb-talk-bar .vb-talk-field,
+input.vb-talk-field {
+  flex: 1 1 auto;
+  width: auto;
+  max-width: none;
+  min-width: 0;
+  height: auto;
+  margin: 0;
+  padding: 11px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: var(--vb-card);
+  color: var(--vb-text);
+  font-family: var(--body-font-family);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.vb-talk-bar .vb-talk-field::placeholder,
+input.vb-talk-field::placeholder {
+  color: #6f6f6f;
+}
+
+.vb-talk-bar .vb-talk-field:hover,
+.vb-talk-bar .vb-talk-field:focus,
+input.vb-talk-field:hover,
+input.vb-talk-field:focus {
+  border: 1px solid rgba(0, 255, 128, 0.4);
+  outline: none;
+}
+
+/* ---- memory panel ---------------------------------------------------- */
+.vb-mem-sub {
+  margin-bottom: 10px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--vb-muted);
+}
+
+.vb-mem-row {
+  margin-bottom: 10px;
+}
+
+.vb-mem-row:last-child {
+  margin-bottom: 0;
+}
+
+.vb-mem-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.vb-mem-txt {
+  min-width: 0;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: #e0d0ff;
+}
+
+.vb-mem-score {
+  flex: none;
+  font-family: var(--vb-mono);
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--vb-violet);
+}
+
+.vb-mem-bar {
+  margin-top: 4px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--vb-card);
+  overflow: hidden;
+}
+
+.vb-mem-fill {
+  display: block;
+  height: 100%;
+  background: var(--vb-violet);
+}
+
+.vb-mem-row-dim .vb-mem-txt {
+  color: var(--vb-muted-2);
+}
+
+.vb-mem-row-dim .vb-mem-score {
+  color: #8a6fb0;
+}
+
+.vb-mem-row-dim .vb-mem-fill {
+  background: #8a6fb0;
+}
+
+/* ---- live log panel -------------------------------------------------- */
+.vb-chips,
+#vbLogChips {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vb-chip {
+  -webkit-appearance: none;
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  margin: 0;
+  /* the global button rule (top of this file) hands every <button> a fixed 170px
+     and a drop shadow; the RUN chip in the connectivity panel is a real button */
+  width: auto;
+  box-shadow: none;
+  padding: 3px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: transparent;
+  color: var(--vb-muted);
+  font-family: var(--vb-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  cursor: pointer;
+  -webkit-user-select: none;
+  user-select: none;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.vb-chip:hover,
+.vb-chip:focus {
+  color: var(--vb-text);
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.06);
+  outline: none;
+}
+
+.vb-chip-on,
+.vb-chip.vb-chip-on:hover,
+.vb-chip.vb-chip-on:focus {
+  background: var(--vb-accent);
+  border-color: var(--vb-accent);
+  color: #0b0b0b;
+}
+
+/* the RUN chip in the connectivity panel is the one chip that is a real button,
+   and it spends its measurement window disabled; without this it looks idle */
+.vb-chip:disabled,
+.vb-chip:disabled:hover {
+  cursor: default;
+  opacity: 0.55;
+  color: var(--vb-muted);
+  border-color: rgba(255, 255, 255, 0.14);
+  background: transparent;
+}
+
+/* the log block is its own darker well in the mockup, not a panel surface */
+.vb-panel-log {
+  background: #0f0f11;
+}
+
+/* the log body sits inside a .vb-pbody, which would otherwise double the pad */
+.vb-panel-log .vb-pbody {
+  padding: 0;
+}
+
+.vb-log-body,
+#vbLogBody {
+  height: 184px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 8px 14px;
+  font-family: var(--vb-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+}
+
+.vb-log-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 3px 0;
+}
+
+.vb-log-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* .vb-ll and .vb-lc deliberately declare no colour: the pre-existing
+   .level-* / .comp-* rules supply it and share their specificity. */
+.vb-lt {
+  flex: none;
+  width: 62px;
+  color: var(--vb-log-time);
+}
+
+.vb-ll {
+  flex: none;
+  width: 44px;
+}
+
+/* the .level-* rules are shared with the home page log, so the two values that
+   differ from the mockup are corrected here instead of edited in place. */
+.vb-log-row .level-ERROR {
+  color: var(--vb-alert-hi);
+}
+
+.vb-log-row .level-DEBUG {
+  color: var(--vb-muted);
+}
+
+.vb-lc {
+  flex: none;
+  width: 58px;
+}
+
+.vb-lb {
+  flex: none;
+  width: 70px;
+  color: var(--vb-log-bot);
+}
+
+.vb-lm {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--vb-log-msg);
+  word-break: break-word;
+}
+
+.vb-log-empty {
+  display: block;
+  padding: 8px 14px;
+  color: #555555;
+}
+
+.vb-log-body::-webkit-scrollbar,
+#vbLogBody::-webkit-scrollbar,
+.vb-drawer::-webkit-scrollbar {
+  width: 8px;
+}
+
+.vb-log-body::-webkit-scrollbar-track,
+#vbLogBody::-webkit-scrollbar-track,
+.vb-drawer::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.vb-log-body::-webkit-scrollbar-thumb,
+#vbLogBody::-webkit-scrollbar-thumb,
+.vb-drawer::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
+}
+
+.vb-log-body::-webkit-scrollbar-thumb:hover,
+#vbLogBody::-webkit-scrollbar-thumb:hover,
+.vb-drawer::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+/* ---- drawer + scrim -------------------------------------------------- */
+.vb-scrim {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease;
+  z-index: 1000;
+}
+
+.vb-scrim.vb-open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.vb-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  height: 100%;
+  width: 380px;
+  max-width: 100%;
+  padding-bottom: 40px;
+  background: #17181d;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  transform: translateX(100%);
+  /* visibility (not display) so the off-screen drawer keeps a real layout box for
+     the Chart.js canvas and the iro picker while dropping out of the tab order.
+     Delayed by the slide duration so the closing animation still plays. */
+  visibility: hidden;
+  transition: transform 0.25s ease, visibility 0s linear 0.25s;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  box-shadow: -20px 0 60px rgba(0, 0, 0, 0.5);
+  z-index: 1001;
+}
+
+.vb-drawer.vb-open {
+  transform: translateX(0);
+  visibility: visible;
+  transition: transform 0.25s ease, visibility 0s linear 0s;
+}
+
+.vb-drawer-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  background: #17181d;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.vb-drawer-title {
+  font-family: var(--vb-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  line-height: 1.4;
+  color: #9a9a9a;
+  text-transform: uppercase;
+}
+
+.vb-drawer-close {
+  flex: none;
+  -webkit-appearance: none;
+  appearance: none;
+  width: 32px;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: #9a9a9a;
+  font-family: var(--body-font-family);
+  font-size: 18px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.vb-drawer-close svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.vb-drawer-close:hover,
+.vb-drawer-close:focus {
+  color: #e8e8e8;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.22);
+  outline: none;
+}
+
+body.vb-locked {
+  overflow: hidden;
+}
+
+/* legacy tiles and sections, scoped to the drawer only */
+.vb-drawer .main-nav-parent {
+  gap: 10px;
+  padding: 12px;
+  margin: 12px auto;
+  width: 100%;
+  max-width: 100%;
+}
+
+.vb-drawer .main-nav-child {
+  box-sizing: border-box;
+  width: 72px;
+  min-width: 72px;
+  padding: 8px 4px;
+}
+
+.vb-drawer .main-nav-child i {
+  font-size: 24px;
+  margin-bottom: 6px;
+}
+
+.vb-drawer .main-nav-child a {
+  font-size: 11px;
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.vb-drawer .main-nav-child a i {
+  font-size: 30px;
+  padding-bottom: 6px;
+}
+
+.vb-drawer .main-nav-child a img {
+  width: 28px;
+  height: 28px;
+  margin-bottom: 6px;
+}
+
+.vb-drawer .toggleable-section {
+  padding: 0 14px 20px;
+  font-size: 15px;
+}
+
+.vb-drawer canvas,
+.vb-drawer img {
+  max-width: 100%;
+}
+
+/* ---- responsive ------------------------------------------------------ */
+@media screen and (max-width: 900px) {
+  .vb-wrap {
+    padding: 12px;
+  }
+
+  .vb-col,
+  .vb-col-l,
+  .vb-col-m,
+  .vb-col-r {
+    flex: 1 1 100%;
+  }
+
+  .vb-body {
+    padding: 12px;
+    gap: 12px;
+  }
+
+  .vb-foot {
+    padding: 0 12px 12px;
+  }
+
+  .vb-head {
+    padding: 14px 16px;
+    align-items: flex-start;
+  }
+
+  .vb-readouts {
+    flex-wrap: wrap;
+    gap: 18px;
+  }
+
+  .vb-map {
+    height: 220px;
+  }
+
+  .vb-cam-frame,
+  #vbCamFrame {
+    height: 200px;
+  }
+
+  .vb-drawer {
+    width: 100%;
+    border-left: none;
+  }
+}
+
+@media screen and (max-width: 560px) {
+  .vb-lb {
+    display: none;
+  }
+
+  .vb-lt {
+    width: 56px;
+  }
+
+  .vb-chips,
+  #vbLogChips {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+}
+
+/* ---- keyframes: vb- namespaced so they cannot collide with the bare
+   "blink" keyframe already defined above -------------------------------- */
+@keyframes vb-blink {
+  50% { opacity: 0; }
+}
+
+@keyframes vb-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(0, 255, 128, 0.5); }
+  50%      { box-shadow: 0 0 0 5px rgba(0, 255, 128, 0); }
+}
+
+@keyframes vb-bar {
+  0%, 100% { height: 4px; }
+  50%      { height: 14px; }
+}
+
+@keyframes vb-dash {
+  to { stroke-dashoffset: -40; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vb-recdot,
+  .vb-dot,
+  .vb-map-path,
+  .vb-map-bot,
+  .vb-pill.vb-pill-disconnected .vb-dot {
+    animation: none;
+  }
+}

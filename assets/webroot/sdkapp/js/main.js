@@ -57,15 +57,37 @@ function stimHandler() {
   // array to store data
   let stimData = [];
 
+  // Re-entering this section assigns a new timer to the shared global below, so
+  // without this the previous one is orphaned: its own clearInterval(interval)
+  // would cancel the newest timer rather than itself and it would poll forever.
+  // Opening the settings drawer, selecting Stim and closing it more than once
+  // reaches this directly.
+  // Read through window: interval is an implicit global that only exists once
+  // stimHandler has run, and a bare reference to it throws ReferenceError on the
+  // first call.
+  if (window.interval) {
+    clearInterval(window.interval);
+  }
+
+  // Consecutive polls that did not come back as a number.
+  let stimFails = 0;
+
   // get the data every half a second
   interval = setInterval(() => {
     if (stimRunning == false) {
       sendForm("/api-sdk/stop_event_stream");
       clearInterval(interval);
+      // So the guard above stays honest about whether a poller is running.
+      window.interval = null;
+      // Without this the tick falls through and issues one more get_stim_status
+      // after the poller has already been told to stop.
+      return;
     }
     fetch("/api-sdk/get_stim_status?serial=" + esn)
       .then((response) => response.json())
       .then((data) => {
+        stimFails = 0;
+
         // add the data to the array
         stimData.push(data);
 
@@ -84,6 +106,18 @@ function stimHandler() {
         });
 
         myChart.update();
+      })
+      .catch(() => {
+        // get_stim_status answers "error: must start event stream" as plain text,
+        // which response.json() rejects on. That state is reachable when the stop
+        // and begin POSTs of a quick close-and-reopen arrive out of order, and
+        // nothing clears it by itself, so stop instead of throwing twice a second
+        // for the life of the page. The next tick sends stop_event_stream and
+        // clears this timer; the Stim tile starts it again.
+        stimFails++;
+        if (stimFails >= 3) {
+          stimRunning = false;
+        }
       });
   }, 500);
 }
@@ -416,4 +450,6 @@ function getCurrentSettings() {
   };
 }
 
-renderBatteryInfo(esn);
+// Battery is rendered by the Vector Brain header (vectorbrain.js). Calling
+// renderBatteryInfo(esn) here too would run a second 3s poller and open a
+// duplicate SDK connection for the same robot.
