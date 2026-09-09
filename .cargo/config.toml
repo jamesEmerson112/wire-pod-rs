@@ -3,3 +3,8 @@
 # escape hatch and only affects vendored C builds.
 [env]
 CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+
+# `cargo xtask <task>` instead of `cargo run -p xtask -- <task>`. The README and
+# CLAUDE.md both document the short form, so the alias is what makes them true.
+[alias]
+xtask = "run -p xtask --"

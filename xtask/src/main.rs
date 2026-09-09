@@ -31,12 +31,20 @@ fn main() {
             }
             let from = from.unwrap_or_else(|| die("--from <go-repo-root> is required"));
             let assets = repo_root().join("assets");
-            let drift = sync_assets(&from, &assets, check);
-            if check && drift > 0 {
-                eprintln!("sync-assets --check: {drift} file(s) drifted");
-                std::process::exit(1);
+            let report = sync_assets(&from, &assets, check);
+            if check {
+                if report.drift > 0 {
+                    eprintln!("sync-assets --check: {} file(s) drifted", report.drift);
+                    std::process::exit(1);
+                }
+                println!("sync-assets: clean ({} mapped roots)", ASSET_MAP.len());
+            } else {
+                println!(
+                    "sync-assets: {} file(s) copied ({} mapped roots)",
+                    report.copied,
+                    ASSET_MAP.len()
+                );
             }
-            println!("sync-assets: clean ({} mapped roots)", ASSET_MAP.len());
         }
         _ => die("usage: cargo xtask sync-assets --from <go-repo-root> [--check]"),
     }
@@ -56,9 +64,19 @@ fn repo_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// Returns the number of drifted (missing/differing/extra) files.
-/// When `check` is false, drifted files are copied and the manifest rewritten.
-fn sync_assets(from: &Path, assets: &Path, check: bool) -> usize {
+/// What one run found. `drift` counts every missing, differing or unexpected
+/// file, which is what `--check` fails on; `copied` counts the subset a
+/// non-check run actually wrote, which is always zero under `--check`. The two
+/// differ because an unexpected file under `assets/` is drift that no copy can
+/// resolve.
+struct SyncReport {
+    drift: usize,
+    copied: usize,
+}
+
+/// Reports the drift, and when `check` is false copies the drifted files and
+/// rewrites the manifest.
+fn sync_assets(from: &Path, assets: &Path, check: bool) -> SyncReport {
     let mut expected: BTreeMap<PathBuf, PathBuf> = BTreeMap::new(); // dest rel -> source abs
     for (src_rel, dst_rel) in ASSET_MAP {
         let src = from.join(src_rel);
@@ -80,6 +98,7 @@ fn sync_assets(from: &Path, assets: &Path, check: bool) -> usize {
     }
 
     let mut drift = 0usize;
+    let mut copied = 0usize;
     for (dst_rel, src) in &expected {
         let dst = assets.join(dst_rel);
         let differs = match (hash_file(src), hash_file(&dst)) {
@@ -93,6 +112,7 @@ fn sync_assets(from: &Path, assets: &Path, check: bool) -> usize {
             } else {
                 std::fs::create_dir_all(dst.parent().unwrap()).unwrap();
                 std::fs::copy(src, &dst).unwrap();
+                copied += 1;
                 eprintln!("copied: {}", dst_rel.display());
             }
         }
@@ -123,7 +143,7 @@ fn sync_assets(from: &Path, assets: &Path, check: bool) -> usize {
         }
         std::fs::write(assets.join("MANIFEST.sha256"), manifest).unwrap();
     }
-    drift
+    SyncReport { drift, copied }
 }
 
 fn hash_file(p: &Path) -> Option<String> {
