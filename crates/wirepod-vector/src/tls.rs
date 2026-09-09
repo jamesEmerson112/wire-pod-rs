@@ -254,6 +254,15 @@ impl Service<Uri> for InsecureTlsConnector {
             let port = uri.port_u16().unwrap_or(ROBOT_TLS_PORT);
             let name = server_name(&host)?;
             let tcp = TcpStream::connect((host.as_str(), port)).await?;
+            // Go sets TCP_NODELAY on every new TCP connection
+            // (`net/tcpsock.go:290`), and tonic's stock connector sets it from
+            // `Endpoint::tcp_nodelay`, which defaults to on
+            // (`tonic-0.12.3/src/transport/channel/endpoint.rs:332`). A custom
+            // connector has to do it itself. Without it, HTTP/2's separate
+            // HEADERS and DATA writes trip Nagle against the robot's delayed
+            // ACK, and the first real-robot trial measured that as roughly
+            // 40 milliseconds added to every round trip.
+            tcp.set_nodelay(true)?;
             let stream = TlsConnector::from(config).connect(name, tcp).await?;
             Ok(TokioIo::new(stream))
         })

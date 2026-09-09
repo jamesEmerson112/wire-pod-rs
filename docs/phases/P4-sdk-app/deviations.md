@@ -895,12 +895,16 @@ never pushes to.
 1. The inbound rustls listener and the mDNS registration against the real robot. Both require
    binding 443 and 5353, which means stopping the production Go server and taking the robot
    offline for about five minutes. `RUNBOOK-S1.md` is the procedure.
-2. Whether `ProtocolVersion(client_version = 5, min_host_version = 0)` answers `SUCCESS` or
-   `UNSUPPORTED` on this robot. The slice does not care, because the verdict is discarded by
-   construction, but the answer is unknown.
-3. The roughly 14 millisecond round trip that motivated choosing `ProtocolVersion` over
-   `BatteryState` for the probe. It comes from the Go source comment, not from a measurement made
-   during this work.
+2. Settled on 2026-09-09 by the first real-robot trial (`RUNBOOK-SDK-TRIAL.md`):
+   `ProtocolVersion(client_version = 5, min_host_version = 0)` answers `SUCCESS` with
+   `host_version = 5` on ESN 00303f28. The slice still discards the verdict by construction; the
+   answer is only visible on the `wirepod_vector::conn` debug log line.
+3. Settled on 2026-09-09. The Go server's `net_probe` measured 8 to 28 milliseconds over thirteen
+   probes, and the Rust trial binary measured 19 to 24 milliseconds once the custom TLS connector
+   set `TCP_NODELAY` the way Go (`net/tcpsock.go:290`) and tonic's stock connector do. Before that
+   fix it measured 51 to 73 milliseconds, which is the Nagle stall between HTTP/2's separate
+   HEADERS and DATA writes and the robot's delayed ACK. The Go comment's roughly 14 milliseconds is
+   the right order of magnitude.
 4. Whether the 500 millisecond camera settle is long enough on real hardware. None of the four Go
    commit messages justifies the value. The Rust handoff tests run with a zero settle, so a settle
    that is too short would pass every test and still fail on the robot.
@@ -917,4 +921,6 @@ never pushes to.
    is proven against a loopback fake serving the escape-pod certificate, which settles the
    verifier, the ALPN and the TLS 1.2 path, but not whether the suites the ring provider offers
    intersect the ones Vector's gateway accepts. Deviation 24 records why the two lists differ.
-   Nothing short of dialling the robot answers it, and no test does that.
+   Settled on 2026-09-09: the handshake completed against the robot's gateway in the first trial,
+   so the ring provider's suites do intersect the gateway's, and every slice route answered over
+   that connection. Deviation 24's description of the offered lists stands.

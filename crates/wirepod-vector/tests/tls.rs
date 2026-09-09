@@ -46,6 +46,7 @@ fn target(authority: &str) -> ConnTarget {
 
 /// What one handshake settled on.
 struct Negotiated {
+    nodelay: bool,
     alpn: Option<Vec<u8>>,
     version: Option<ProtocolVersion>,
     chain: Vec<CertificateDer<'static>>,
@@ -63,8 +64,9 @@ async fn negotiate(addr: SocketAddr) -> Negotiated {
         .await
         .expect("the handshake completes");
     let stream = io.into_inner();
-    let (_socket, session) = stream.get_ref();
+    let (socket, session) = stream.get_ref();
     Negotiated {
+        nodelay: socket.nodelay().expect("the socket option is readable"),
         alpn: session.alpn_protocol().map(<[u8]>::to_vec),
         version: session.protocol_version(),
         chain: session
@@ -106,6 +108,10 @@ async fn the_handshake_negotiates_h2() {
         // (`google.golang.org/grpc@v1.82.1/credentials/tls.go:239`). Without it
         // the robot's gateway has no way to know an HTTP/2 preface is coming.
         assert_eq!(negotiated.alpn.as_deref(), Some(&b"h2"[..]));
+        // Go sets TCP_NODELAY on every TCP connection (`net/tcpsock.go:290`),
+        // and the first real-robot trial measured about 40 milliseconds of
+        // Nagle stall per round trip without it.
+        assert!(negotiated.nodelay, "the socket was left with Nagle on");
         handle.shutdown().await;
     })
     .await

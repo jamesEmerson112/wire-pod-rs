@@ -45,6 +45,13 @@ cargo xtask sync-assets --from ../wire-pod --check   # report drift, exit 1 if a
 cargo xtask sync-assets --from ../wire-pod           # copy the drifted files, report the count, rewrite assets/MANIFEST.sha256
 ```
 
+Real-robot trial of the SDK-app slice. It serves the router on `127.0.0.1:18080` and dials the robot over TLS while the production Go server keeps running on 8080; `RUNBOOK-SDK-TRIAL.md` is the procedure and `scripts/sdk-trial-diff.sh` compares the two servers request by request:
+
+```bash
+cargo run -p wirepod-app -- sdk-trial
+bash scripts/sdk-trial-diff.sh
+```
+
 Spikes:
 
 ```bash

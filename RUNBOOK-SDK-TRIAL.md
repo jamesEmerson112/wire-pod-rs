@@ -152,11 +152,12 @@ This run settles three of them, and the answers belong in that list afterwards.
    trial window, each `net_probe` produces a line of the form
 
    ```
-   DEBUG wirepod_vector::conn: protocol version verdict, which every caller discards result=Unsupported host_version=...
+   DEBUG wirepod_vector::conn: protocol version verdict, which every caller discards result=Success host_version=5
    ```
 
    Read `result` and `host_version` and write both down. This is why the default
-   filter turns `wirepod_vector` up to debug.
+   filter turns `wirepod_vector` up to debug. The first trial on 2026-09-09
+   recorded exactly the line above.
 
 2. **The real round trip** (open question 3). The roughly 14 millisecond figure
    that motivated choosing `ProtocolVersion` over `BatteryState` comes from a Go
@@ -168,7 +169,11 @@ This run settles three of them, and the answers belong in that list afterwards.
    ```
 
    Three samples from each side is enough to say whether the figure is real and
-   whether the two implementations time the same thing.
+   whether the two implementations time the same thing. The first trial on
+   2026-09-09 read 19 to 24 milliseconds on the Rust side against 8 to 28 on the
+   Go side. An earlier build without `TCP_NODELAY` on the custom TLS connector
+   read 51 to 73, so a Rust figure about 40 milliseconds above Go's means that
+   socket option has been lost again.
 
 3. **Whether a non-zero stim reading renders the way the dashboard needs**
    (implied by the stim work, and untestable without a robot being touched).
