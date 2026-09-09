@@ -16,7 +16,7 @@ use crate::{literals, reply};
 ///
 /// `server.go:605-608`. Two things about that shape are contract. The body is
 /// written after `removeRobot` returns, and `removeRobot` sleeps three seconds
-/// for every matched robot (`robot.go:471`), so the request blocks for the
+/// for every matched robot (`robot.go:473`), so the request blocks for the
 /// settle before anything reaches the client; the live Go server answers this
 /// route in 3.00 seconds. And the body is `done` whatever happened, because
 /// `removeRobot` returns nothing at all: a robot that was already gone, or that

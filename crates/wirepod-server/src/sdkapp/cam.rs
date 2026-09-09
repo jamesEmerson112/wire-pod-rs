@@ -11,12 +11,12 @@ use wirepod_core::RobotEntry;
 
 use crate::{literals, reply};
 
-/// The camera route Go registers outside both prefixes (`server.go:817`).
+/// The camera route Go registers outside both prefixes (`server.go:818`).
 ///
 /// It is named here rather than left to be discovered, because the route it
 /// names carries a rule that is easy to lose. `camStreamHandler` runs its own
 /// connect preamble and throws the robot index away
-/// (`server.go:709`: `robotObj, _, err := getRobot(...)`), so it never writes
+/// (`server.go:710`: `robotObj, _, err := getRobot(...)`), so it never writes
 /// `robots[robotIndex].ConnTimer = 0`. A page showing nothing but the camera is
 /// therefore dropped by the idle sweep after 300 seconds while frames are still
 /// flowing, and the port reproduces that by not touching from this path. The

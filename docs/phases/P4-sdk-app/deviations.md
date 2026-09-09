@@ -277,6 +277,15 @@ where Go's caller is blocked and can see nothing at all. And a caller that had a
 entry before the removal started keeps its `Arc` and its live connection, exactly as a Go handler
 holding the `Robot` value `getRobot` returned keeps its `*vector.Vector`.
 
+**And one thing the flag does not do at all.** `inhibitCreation` is a plain `bool` that `getRobot`
+spins on rather than a lock (`robot.go:407-412`), and the only writer that raises it is `newRobot`
+itself, on its first line (`robot.go:325`). Two requests for one serial that both clear the spin
+before either reaches that line both scan the slice and find nothing (`robot.go:413-417`), and both
+append (`robot.go:393-396`), so the slice holds the same ESN twice. `removeRobot` then walks the
+whole slice and pays the three second settle once per match (`robot.go:458-475`), so the
+disconnect for that serial costs six seconds and drops both entries. `RobotRegistry` is keyed by
+`Esn`, so it holds at most one entry per serial and always pays exactly one settle.
+
 **Where tested.** `crates/wirepod-core/tests/registry.rs` asserts that a second request for the
 same serial waits for the first dial and reuses its connection, that a request for a different
 serial does not wait, and, in
@@ -643,6 +652,9 @@ a genuine setup error is logged rather than written to the body and that the cla
 and `a_begin_straight_after_a_stop_is_admitted` pins that a stop frees the stream for the next
 begin. The abandoned-open arm itself has no test: reaching it needs an open held across a stop, and
 asserting the outcome would be asserting the absence of a log line.
+
+---
+
 ## 21. `disconnect` stops no per-robot timer, because there is none to stop
 
 **Go.** Every connect spawns one `connTimer` goroutine per robot, addressed by the robot's

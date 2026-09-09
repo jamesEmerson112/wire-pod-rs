@@ -230,6 +230,22 @@ marked arms in `sdkapp/mod.rs` and land with C11 and C12. `begin_cam_stream` nee
 because Go's arm is a no-op whose only statement is commented out. `tests/live_seam.rs` lands with
 C11 for the same reason.
 
+### What C12 added beyond the block above
+
+Two files exist that the layout does not name, and both are deliberate.
+
+`crates/wirepod-server/src/sdkapp/disconnect.rs` is a module rather than an inline arm, even
+though its body is two statements. What it carries is an ordering: the body is written only after
+`RobotRegistry::disconnect` has returned, so the request pays the three second settle before
+anything reaches the client, and the answer is `done` whatever happened because Go's `removeRobot`
+returns nothing. Those two rules and the reason the registry's boolean is discarded need somewhere
+to live that is not a comment wedged into the `match`.
+
+`crates/wirepod-server/tests/lifecycle.rs` is a sixth test binary. The idle-timer asymmetry it
+pins belongs to no single route: it spans the preamble, all ten slice routes, an unknown path
+under the prefix, and `/cam-stream` outside it. That fits neither `contract_bodies.rs`, which
+asserts bodies against live Go responses, nor `sdk_api.rs`, which is organised per route.
+
 ## Lock ordering and the `await_holding_lock` rule
 
 `crates/wirepod-core/src/lib.rs` carries `#![deny(clippy::await_holding_lock)]`. The

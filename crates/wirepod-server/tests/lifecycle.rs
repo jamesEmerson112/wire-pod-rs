@@ -3,9 +3,9 @@
 //!
 //! The two routes are the only ones in the slice whose whole point is a side
 //! effect, so almost nothing here is asserted from a body. What is asserted is
-//! what the camera owner, the registry and the dial seam look like afterwards,
-//! and, for the disconnect, that the body arrives only once the settle has been
-//! paid.
+//! what the camera and event owners, the registry and the dial seam look like
+//! afterwards, and, for the disconnect, that the body arrives only once the
+//! settle has been paid.
 //!
 //! Every timing is injected and every idle reading comes from a `ManualClock`,
 //! so no test waits on a real clock beyond one 150 millisecond settle. The
@@ -270,6 +270,18 @@ async fn disconnect_answers_done_and_drops_the_entry() {
     );
     assert!(fixture.state.registry().is_empty());
 
+    // Nothing reached the robot. This fixture never claims the camera, so the
+    // post-settle disable of deviation 16 is skipped: the registry issues it
+    // only for an owner the disconnect itself stopped, and an unconditional
+    // disable here would switch off a camera nobody asked it to touch. This is
+    // the negative direction of that condition, which the positive assertion in
+    // `disconnect_stops_a_live_camera_and_turns_it_off` cannot see.
+    assert_eq!(
+        fixture.camera_calls(),
+        Vec::<bool>::new(),
+        "disconnect of a robot whose camera was never claimed sent a disable"
+    );
+
     // `removeRobot` returns nothing, so a disconnect of a robot that is already
     // gone is the same `done`. It reconnects first, because the preamble runs
     // for every path.
@@ -285,6 +297,14 @@ async fn disconnect_stops_a_live_camera_and_turns_it_off() {
 
     let cancel = CancellationToken::new();
     let (generation, _) = entry.session.cam.claim(cancel.clone());
+    // `removeRobot` stops both streams, one line apart (`robot.go:467-470`), so
+    // the stim receiver is claimed here alongside the camera and both halves of
+    // that pair are asserted below.
+    let events_cancel = CancellationToken::new();
+    assert!(
+        entry.session.events.claim(events_cancel.clone()).is_some(),
+        "the fixture event stream was already claimed"
+    );
 
     let reply = fixture.post(&route("disconnect")).await;
     assert_eq!(reply.body, literals::DONE);
@@ -308,6 +328,18 @@ async fn disconnect_stops_a_live_camera_and_turns_it_off() {
         Some(generation),
         "disconnect released a claim that `stopCamStream` leaves in place"
     );
+
+    // The event stream half. It is cancelled the same way and for the same
+    // reason, but its ownership entry does go: `stopEventStream` deletes it
+    // (`robot.go:256`) where `stopCamStream` reads the token and leaves the
+    // entry behind (`robot.go:139`). The two owners are therefore asserted to
+    // be in different states on purpose.
+    assert!(
+        events_cancel.is_cancelled(),
+        "disconnect left the stim receiver parked in its receive"
+    );
+    assert!(!entry.session.events.is_streaming());
+
     assert!(fixture.state.registry().peek(&esn()).is_none());
 }
 
@@ -492,7 +524,7 @@ async fn a_request_whose_preamble_fails_touches_nothing() {
 /// The idle-timer asymmetry outside the prefix.
 ///
 /// Go's `camStreamHandler` runs its own preamble and throws the robot index
-/// away (`server.go:709`), so `/cam-stream` never writes
+/// away (`server.go:710`), so `/cam-stream` never writes
 /// `robots[robotIndex].ConnTimer = 0`, and a page showing only the camera is
 /// dropped after 300 seconds while frames are still flowing. The route is P4
 /// work; this pins the rule while it is still absent, so that whatever lands
