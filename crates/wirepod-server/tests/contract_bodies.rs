@@ -62,6 +62,32 @@ fn the_marshal_failure_body_has_no_newline() {
 }
 
 #[test]
+fn the_idle_stim_sentinel_is_plain_text_that_cannot_parse_as_json() {
+    // `fmt.Fprint(w, "error: must start event stream")`, `server.go:515`.
+    assert_eq!(
+        literals::MUST_START_EVENT_STREAM,
+        "error: must start event stream"
+    );
+    // The dashboard's breaker is a failing `response.json()`
+    // (`webroot/sdkapp/js/main.js:110-121`), so this staying non-JSON is the
+    // contract rather than a formatting choice. `null`, `{"error":"..."}` or a
+    // bare number would all resolve and disarm the breaker.
+    serde_json::from_str::<serde_json::Value>(literals::MUST_START_EVENT_STREAM)
+        .expect_err("the sentinel must not parse as JSON");
+    assert!(
+        literals::MUST_START_EVENT_STREAM.starts_with(literals::ERROR_PREFIX),
+        "the panel strips the prefix and prints the remainder"
+    );
+}
+
+#[test]
+fn the_probe_name_is_the_rpc_that_is_timed() {
+    // `npProbeName = "ProtocolVersion"`, `server.go:39`. Deliberately not
+    // `BatteryState`, which the robot answers off its engine tick.
+    assert_eq!(literals::NET_PROBE_NAME, "ProtocolVersion");
+}
+
+#[test]
 fn the_conn_check_body_is_two_characters() {
     // `fmt.Fprintf(w, "ok")`, `jdocspinger.go:218`. The robot polls this every
     // few seconds for the life of the connection.
@@ -144,6 +170,7 @@ fn the_newline_split_is_exactly_where_go_puts_it() {
         literals::DONE,
         literals::ROBOT_NOT_FOUND,
         literals::ERROR_MARSHALING_JSON,
+        literals::MUST_START_EVENT_STREAM,
         literals::OK,
         literals::MDNS_RAN,
     ] {

@@ -4073,12 +4073,15 @@ dependencies = [
  "axum",
  "http",
  "http-body-util",
+ "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tower 0.4.13",
  "tracing",
  "wirepod-core",
  "wirepod-server",
+ "wirepod-vector",
 ]
 
 [[package]]

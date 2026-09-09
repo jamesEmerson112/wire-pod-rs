@@ -6,7 +6,7 @@
 //! file does not recognize fails the test, so a new probe line cannot be
 //! silently skipped.
 
-use wirepod_core::{go_format_f32, go_json_f64};
+use wirepod_core::{GoJsonError, go_format_f32, go_json_f64, go_json_f64_raw};
 
 const EXPECTED: &str = include_str!("../../../docs/phases/P4-sdk-app/gofmt-probe/expected.txt");
 
@@ -138,4 +138,72 @@ fn go_formatting_matches_the_recorded_probe() {
 
     assert!(f32_cases > 0, "the probe file recorded no f32 cases");
     assert!(f64_cases > 0, "the probe file recorded no f64 cases");
+}
+
+/// The `RawValue` form must be the string form, unchanged, and it must survive
+/// being serialized inside a struct.
+///
+/// This is the whole reason the helper exists: `serde_json` serializing an
+/// `f64` writes `0.0` where Go writes `0`, so `/api-sdk/net_probe`'s `rttMs`
+/// has to reach the wire as digits rather than as a number the encoder
+/// re-renders.
+#[test]
+fn the_raw_form_carries_the_go_digits_through_a_serializer() {
+    /// The shape `/api-sdk/net_probe` serializes, cut down to the one field
+    /// that cannot go through `serde_json`'s own number writer.
+    #[derive(serde::Serialize)]
+    struct Body<'a> {
+        #[serde(rename = "rttMs")]
+        rtt_ms: &'a serde_json::value::RawValue,
+    }
+
+    for value in [
+        0.0f64,
+        13.482,
+        1.0,
+        0.001,
+        -0.25,
+        1e21,
+        1e-7,
+        f64::MIN_POSITIVE,
+        f64::MAX,
+    ] {
+        let text = go_json_f64(value).expect("a finite value marshals");
+        let raw = go_json_f64_raw(value).expect("a finite value marshals");
+        assert_eq!(
+            raw.get(),
+            text,
+            "the raw form is the string form for {value}"
+        );
+
+        // Inside a document, which is where it is actually used.
+        let document =
+            serde_json::to_string(&Body { rtt_ms: &raw }).expect("a raw number serializes");
+        assert_eq!(document, format!(r#"{{"rttMs":{text}}}"#));
+    }
+
+    // The two spellings the encoder would get wrong, spelled out.
+    assert_eq!(go_json_f64_raw(0.0).expect("zero marshals").get(), "0");
+    assert_eq!(
+        go_json_f64_raw(13.482)
+            .expect("a round trip marshals")
+            .get(),
+        "13.482"
+    );
+}
+
+#[test]
+fn the_raw_form_refuses_what_go_refuses() {
+    assert_eq!(
+        go_json_f64_raw(f64::NAN).expect_err("NaN is not marshalable"),
+        GoJsonError::Nan
+    );
+    assert_eq!(
+        go_json_f64_raw(f64::INFINITY).expect_err("+Inf is not marshalable"),
+        GoJsonError::PosInf
+    );
+    assert_eq!(
+        go_json_f64_raw(f64::NEG_INFINITY).expect_err("-Inf is not marshalable"),
+        GoJsonError::NegInf
+    );
 }

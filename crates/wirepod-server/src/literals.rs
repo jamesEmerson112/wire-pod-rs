@@ -45,6 +45,23 @@ pub const NO_BOTS_AUTHENTICATED: &str = "no bots are authenticated\n";
 /// can ours; the arm exists so the body is not invented later.
 pub const ERROR_MARSHALING_JSON: &str = "error marshaling json";
 
+/// `/api-sdk/get_stim_status` when the robot is not event-streaming
+/// (`server.go:515`).
+///
+/// This one must stay non-JSON. The dashboard's stim poller treats a failing
+/// `response.json()` as the failure signal and counts three consecutive
+/// failures before it stops polling (`webroot/sdkapp/js/main.js:110-121`), so
+/// an error body that happened to parse as JSON would reset the breaker,
+/// silently plot an undefined value twice a second, and never recover.
+pub const MUST_START_EVENT_STREAM: &str = "error: must start event stream";
+
+/// The `probe` field of `/api-sdk/net_probe`, which names the RPC that was
+/// timed (`npProbeName`, `server.go:39`).
+///
+/// The page prints it as-is rather than hardcoding a name of its own, so that
+/// changing which RPC is timed cannot leave a stale label on the panel.
+pub const NET_PROBE_NAME: &str = "ProtocolVersion";
+
 /// `/ok` and `/ok:80`, the robot's liveness heartbeat (`jdocspinger.go:218`).
 pub const OK: &str = "ok";
 

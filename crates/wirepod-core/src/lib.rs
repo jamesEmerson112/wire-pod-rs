@@ -32,7 +32,7 @@ pub mod timings;
 
 pub use crate::clock::{Clock, ManualClock, SystemClock};
 pub use crate::esn::{Esn, Generation};
-pub use crate::gofmt::{GoJsonError, go_format_f32, go_json_f64};
+pub use crate::gofmt::{GoJsonError, go_format_f32, go_json_f64, go_json_f64_raw};
 pub use crate::robot::{
     BatteryLevel, BatteryReading, CamGuard, CamMeter, CamMeters, CamOwner, CameraControl,
     CameraFrame, ConnError, ConnTarget, EVENT_CONNECTION_ID, EVENT_WHITELIST, EventItem,

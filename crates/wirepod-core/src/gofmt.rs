@@ -19,6 +19,8 @@
 
 use std::fmt;
 
+use serde_json::value::RawValue;
+
 /// The values `encoding/json` refuses to marshal.
 ///
 /// `Display` reproduces Go's error text exactly, because it is the string the
@@ -109,6 +111,26 @@ pub fn go_json_f64(x: f64) -> Result<String, GoJsonError> {
     } else {
         Ok(decimal.plain_form())
     }
+}
+
+/// The same rendering as [`go_json_f64`], as a value that can be spliced into a
+/// serialized struct without being re-encoded.
+///
+/// `serde_json`'s own `f64` writer always emits a decimal point, so a field
+/// typed as an `f64` reaches the wire as `0.0` where Go writes `0`, and as
+/// `1e21` where Go writes `1e+21`. A [`RawValue`] field carries these digits
+/// through the serializer untouched, which is what makes
+/// `/api-sdk/net_probe`'s `rttMs` byte-exact while the rest of the body is
+/// still built by `serde`.
+///
+/// # Panics
+///
+/// Never. Every string [`go_json_f64`] returns is a JSON number literal, which
+/// is what [`RawValue::from_string`] is checking for; the `expect` is that
+/// invariant written down rather than a case with a behavior of its own.
+pub fn go_json_f64_raw(x: f64) -> Result<Box<RawValue>, GoJsonError> {
+    let rendered = go_json_f64(x)?;
+    Ok(RawValue::from_string(rendered).expect("every go_json_f64 rendering is a JSON number"))
 }
 
 /// A finite, non-zero float split into sign, shortest round-trip digits and the

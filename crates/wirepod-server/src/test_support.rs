@@ -21,6 +21,7 @@ use tower::ServiceExt;
 use wirepod_core::test_support::{FakeConnFactory, FakeRobotConn};
 use wirepod_core::{
     AppState, BotInfo, ConnError, ManualClock, RobotConn, RobotConnFactory, StatusCode as ConnCode,
+    Timings,
 };
 
 use crate::router;
@@ -92,7 +93,33 @@ impl TestServer {
     /// A server whose robot answers every call.
     pub fn connected(bot_info: BotInfo) -> Self {
         let conn: Arc<dyn RobotConn> = Arc::new(FakeRobotConn::new());
-        Self::with_factory(bot_info, Arc::new(FakeConnFactory::connecting_to(conn)))
+        Self::with_robot(bot_info, conn)
+    }
+
+    /// A server dialling `conn`, so a test can script the robot's answers and
+    /// read back what it was asked.
+    ///
+    /// The caller keeps its own `Arc<FakeRobotConn>` and clones it in here, so
+    /// it can arm a gate or queue a receiver while the request is in flight.
+    pub fn with_robot(bot_info: BotInfo, conn: Arc<dyn RobotConn>) -> Self {
+        Self::with_robot_and_timings(bot_info, conn, Timings::default())
+    }
+
+    /// The same, waiting on `timings` rather than on the Go defaults.
+    ///
+    /// The probe deadline is the one a handler test wants to move: setting it
+    /// to zero against a robot that has not answered yet is how the lost-probe
+    /// body is driven without waiting five seconds for it.
+    pub fn with_robot_and_timings(
+        bot_info: BotInfo,
+        conn: Arc<dyn RobotConn>,
+        timings: Timings,
+    ) -> Self {
+        Self::build(
+            bot_info,
+            Arc::new(FakeConnFactory::connecting_to(conn)),
+            timings,
+        )
     }
 
     /// A server whose robot never answers, so every dial fails.
@@ -101,17 +128,19 @@ impl TestServer {
     /// a connect that then fails, is the only way to tell the exemption apart
     /// from an unknown serial.
     pub fn unreachable(bot_info: BotInfo) -> Self {
-        Self::with_factory(
+        Self::build(
             bot_info,
             Arc::new(FakeConnFactory::failing(unreachable_error())),
+            Timings::default(),
         )
     }
 
-    fn with_factory(bot_info: BotInfo, factory: Arc<FakeConnFactory>) -> Self {
+    fn build(bot_info: BotInfo, factory: Arc<FakeConnFactory>, timings: Timings) -> Self {
         let clock = Arc::new(ManualClock::new());
         let dialler: Arc<dyn RobotConnFactory> = Arc::clone(&factory) as Arc<dyn RobotConnFactory>;
         let state = AppState::builder(dialler)
             .bot_info(bot_info)
+            .timings(timings)
             .clock(Arc::clone(&clock) as Arc<dyn wirepod_core::Clock>)
             .build();
         Self {
@@ -145,6 +174,32 @@ impl TestServer {
     pub async fn send(&self, req: Request) -> Reply {
         send_to(&self.router, req).await
     }
+}
+
+/// The real-clock ceiling every asynchronous helper and test runs under.
+///
+/// Nothing here pauses the clock. The ceiling exists to turn a regression into
+/// a failure rather than a hung CI job, and it is generous enough that a slow
+/// runner never trips it.
+pub const CEILING: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Yields until `ready` answers true, or fails at [`CEILING`].
+///
+/// A detached receiver publishes its first reading on its own schedule, so a
+/// test that asserted straight after a `begin_event_stream` would be racing the
+/// task it just spawned. Yielding rather than sleeping keeps the wait as short
+/// as the runtime allows and needs no chosen interval.
+///
+/// `what` names the condition, because a timeout here reads as a hang and the
+/// message is the only clue about which one.
+pub async fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
+    tokio::time::timeout(CEILING, async {
+        while !ready() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for {what}"));
 }
 
 /// Sends one request through a router and collects the response.

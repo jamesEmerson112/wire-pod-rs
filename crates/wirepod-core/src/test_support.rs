@@ -55,7 +55,9 @@ struct FakeRobotState {
     battery: Result<BatteryReading, ConnError>,
     battery_delay: Duration,
     protocol: Result<ProtocolVerdict, ConnError>,
+    protocol_gate: Option<Gate>,
     event_streams: Vec<ReceiverResult>,
+    event_stream_gate: Option<Gate>,
     camera_feeds: Vec<FrameStreamResult>,
     camera_result: Result<(), ConnError>,
     calls: Vec<RobotCall>,
@@ -88,7 +90,9 @@ impl FakeRobotConn {
                     result: ProtocolResult::Success,
                     host_version: 0,
                 }),
+                protocol_gate: None,
                 event_streams: Vec::new(),
+                event_stream_gate: None,
                 camera_feeds: Vec::new(),
                 camera_result: Ok(()),
                 calls: Vec::new(),
@@ -142,9 +146,47 @@ impl FakeRobotConn {
         self
     }
 
+    /// Holds the next `protocol_version` call until the returned gate releases
+    /// it.
+    ///
+    /// The call is recorded before it parks, so a test that waits on the gate
+    /// resumes with the round trip genuinely in flight. That is what lets it
+    /// move a [`ManualClock`](crate::clock::ManualClock) by a chosen amount
+    /// across an RPC, and what lets it drive the probe deadline against a call
+    /// that never answers.
+    pub fn arm_protocol_gate(&self) -> Gate {
+        let gate = Gate::new();
+        self.lock().protocol_gate = Some(gate.clone());
+        gate
+    }
+
+    /// Holds the next `open_event_stream` call until the returned gate releases
+    /// it.
+    ///
+    /// The queued receiver is taken after the gate, so a caller abandoned while
+    /// it is parked here leaves the receiver in the queue for the next one.
+    pub fn arm_event_stream_gate(&self) -> Gate {
+        let gate = Gate::new();
+        self.lock().event_stream_gate = Some(gate.clone());
+        gate
+    }
+
     /// Every call made so far, in order.
     pub fn calls(&self) -> Vec<RobotCall> {
         self.lock().calls.clone()
+    }
+
+    /// How many calls of one kind the fake has answered.
+    ///
+    /// Counting rather than comparing the whole log is what a test wants when
+    /// it is asserting that a second request opened no second stream, because
+    /// the log also carries the connect-time `battery_state`.
+    pub fn call_count(&self, matches: impl Fn(&RobotCall) -> bool) -> usize {
+        self.lock()
+            .calls
+            .iter()
+            .filter(|call| matches(call))
+            .count()
     }
 
     fn lock(&self) -> MutexGuard<'_, FakeRobotState> {
@@ -184,12 +226,18 @@ impl RobotConn for FakeRobotConn {
         client_version: i64,
         min_host_version: i64,
     ) -> Result<ProtocolVerdict, ConnError> {
-        let mut state = self.lock();
-        state.calls.push(RobotCall::ProtocolVersion {
-            client_version,
-            min_host_version,
-        });
-        state.protocol.clone()
+        let gate = {
+            let mut state = self.lock();
+            state.calls.push(RobotCall::ProtocolVersion {
+                client_version,
+                min_host_version,
+            });
+            state.protocol_gate.take()
+        };
+        if let Some(gate) = gate {
+            gate.pass().await;
+        }
+        self.lock().protocol.clone()
     }
 
     async fn open_event_stream(
@@ -197,11 +245,18 @@ impl RobotConn for FakeRobotConn {
         whitelist: &[&str],
         connection_id: &str,
     ) -> Result<Box<dyn EventReceiver>, ConnError> {
+        let gate = {
+            let mut state = self.lock();
+            state.calls.push(RobotCall::OpenEventStream {
+                whitelist: whitelist.iter().map(|item| (*item).to_string()).collect(),
+                connection_id: connection_id.to_string(),
+            });
+            state.event_stream_gate.take()
+        };
+        if let Some(gate) = gate {
+            gate.pass().await;
+        }
         let mut state = self.lock();
-        state.calls.push(RobotCall::OpenEventStream {
-            whitelist: whitelist.iter().map(|item| (*item).to_string()).collect(),
-            connection_id: connection_id.to_string(),
-        });
         if state.event_streams.is_empty() {
             return Err(Self::exhausted("event stream"));
         }

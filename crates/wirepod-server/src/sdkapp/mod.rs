@@ -14,13 +14,15 @@
 //! [`crate::router`]'s middleware has already unescaped each segment, so
 //! `GET /api-sdk/deb%75g` reaches the `debug` arm rather than the catch-all.
 
+pub mod net_probe;
 pub mod sdk_info;
+pub mod stim;
 
 use std::sync::Arc;
 
 use axum::extract::{Request, State};
 use axum::response::Response;
-use wirepod_core::{AppState, Esn};
+use wirepod_core::{AppState, Esn, RobotEntry};
 
 use crate::form::{self, Form};
 use crate::{literals, reply};
@@ -100,7 +102,8 @@ async fn dispatch(state: &Arc<AppState>, path: &str, form: &Form) -> Response {
         }
     }
 
-    match path.strip_prefix(PREFIX).unwrap_or_default() {
+    let route = path.strip_prefix(PREFIX).unwrap_or_default();
+    match route {
         // Implemented in this slice.
         "conn_test" => reply::text(literals::SUCCESS),
         "get_sdk_info" => sdk_info::handle(state),
@@ -119,11 +122,17 @@ async fn dispatch(state: &Arc<AppState>, path: &str, form: &Form) -> Response {
             reply::not_found()
         }
 
-        // In the slice, landing in C11. Answering the deferred-route stub is
-        // deliberate: no test asserts it, so the arm can be replaced without
-        // rewriting an assertion.
+        // The four routes that read the connected robot. None of them is
+        // preamble-exempt, so the `Err` arm is unreachable: an unresolvable
+        // serial or a failed dial has already been written and returned above.
+        // It answers the dispatch default rather than panicking, because an
+        // unreachable arm that cannot be reached by a request is not worth a
+        // way to take the process down.
         "net_probe" | "begin_event_stream" | "stop_event_stream" | "get_stim_status" => {
-            reply::not_found()
+            match &robot {
+                Ok(entry) => connected_route(state, route, entry).await,
+                Err(_) => reply::not_found(),
+            }
         }
 
         // In the slice, landing in C12. Same stub, same reason.
@@ -131,6 +140,23 @@ async fn dispatch(state: &Arc<AppState>, path: &str, form: &Form) -> Response {
 
         // Go's `default`, which is also where its other 36 arms land while they
         // are deferred.
+        _ => reply::not_found(),
+    }
+}
+
+/// The four routes behind a connected robot.
+///
+/// Split out so that [`dispatch`]'s `match` stays one flat list of route names
+/// rather than nesting the `Ok`/`Err` on every one of them. Go reads
+/// `robotObj` in each arm directly, because its preamble left a zero value
+/// there rather than an error.
+async fn connected_route(state: &AppState, route: &str, entry: &RobotEntry) -> Response {
+    match route {
+        "net_probe" => net_probe::handle(state, entry).await,
+        "begin_event_stream" => stim::begin(entry),
+        "stop_event_stream" => stim::stop(entry),
+        "get_stim_status" => stim::status(entry),
+        // Unreachable: the caller matched this same list before it called.
         _ => reply::not_found(),
     }
 }

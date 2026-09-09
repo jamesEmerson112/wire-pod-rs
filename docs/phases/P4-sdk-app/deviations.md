@@ -571,6 +571,74 @@ because asserting it would build the difference into the type.
 
 ---
 
+## 19. An abandoned `net_probe` writes nothing where Go writes a `Canceled` body
+
+**Go.** The probe deadline is `context.WithTimeout(r.Context(), npTimeout)` (`server.go:99`), so it
+is a child of the request context and a client that closes its connection cancels the RPC as surely
+as the five second deadline does. `ProtocolVersion` then returns
+`rpc error: code = Canceled desc = context canceled`, the handler takes its error branch, and
+`fmt.Fprint(w, "error: "+err.Error())` at `server.go:112` writes that string to a `ResponseWriter`
+whose connection is already gone. The write is discarded by `net/http`; the handler goroutine still
+runs it.
+
+**Rust.** Axum drops the handler future when the request is aborted, and the probe awaits the RPC
+inline rather than spawning it, so the dropped future drops
+`tokio::time::timeout(state.timings().probe, entry.conn.protocol_version(..))` and the RPC future
+with it. Nothing runs after that point, so no error string is produced and no body is written.
+
+**Why it is accepted.** The difference is only observable from inside the process. The one client
+this affects has already gone away, so neither body reaches anybody, and the Go one is written into
+a discarded buffer. Reproducing it would mean either catching the drop, which a future cannot do
+from the inside, or spawning the RPC so it outlives the handler, which is the opposite of what is
+wanted: an abandoned probe should stop costing the robot an RPC, not keep one in flight.
+
+**Two related shapes that are not deviations.** The deadline itself comes from `Timings::probe` on
+`AppState` rather than from a `npTimeout` constant, and the default is Go's five seconds, so the
+wire behaviour is the same and a test can drive the lost-probe body without waiting for it. The
+elapsed time is measured against the injectable `Clock` rather than `Instant::elapsed`, and the
+production clock is `SystemClock`, which is `Instant` underneath; the injection is what lets a test
+move a `ManualClock` across a round trip held open by a gate and assert `13.482` exactly.
+
+**Where tested.** `crates/wirepod-server/tests/sdk_api.rs`:
+`a_probe_abandoned_by_its_client_leaves_no_second_call_behind` parks a request inside the RPC,
+aborts its task, and asserts the join handle reports cancellation, that the robot recorded exactly
+one `ProtocolVersion`, and that the next probe answers normally. Nothing asserts the absent body,
+because asserting it would be asserting the difference rather than the contract.
+
+---
+
+## 20. A stream setup abandoned by a stop logs nothing where Go logs `context canceled`
+
+**Go.** `begin_event_stream` opens the stream on `streamCtx`, a cancellable child of the robot
+context (`server.go:472`, `server.go:484`). A `stop_event_stream` that lands while the goroutine is
+still inside `EventStream` cancels that context, the call fails, and the goroutine takes its error
+branch: `logger.Println("event stream: " + err.Error())` followed by
+`releaseEventStream(robotObj.ESN, gen)` (`server.go:496-500`). The log line reads
+`event stream: rpc error: code = Canceled desc = context canceled`.
+
+**Rust.** `open_event_stream` takes no token, so the spawned task selects on the
+`CancellationToken` and the open together, biased towards the token. A stop that lands during the
+open therefore abandons it and the task returns through a third arm that releases the claim without
+logging anything. The claim is still handed back, generation checked, so the state machine ends in
+the same place Go's does.
+
+**Why it is accepted.** This is the same family as the recorded difference that `run_event_stream`
+selects on the token: cancellation in this port is a token rather than an error the callee reports,
+so the teardown paths that Go can only observe as a failed call have no error to log. The
+alternative, letting the open run to completion so it can fail on its own, would leave a dial to an
+unresponsive robot in flight after the stop that was meant to end it, which is worse than a missing
+log line. The visible consequence arrives with P1's logger ring, where a clean stop will show no
+`event stream:` entry at all.
+
+**Where tested.** The reachable half is.
+`crates/wirepod-server/tests/sdk_api.rs`'s `a_stream_setup_failure_never_reaches_the_body` pins that
+a genuine setup error is logged rather than written to the body and that the claim is handed back,
+and `a_begin_straight_after_a_stop_is_admitted` pins that a stop frees the stream for the next
+begin. The abandoned-open arm itself has no test: reaching it needs an open held across a stop, and
+asserting the outcome would be asserting the absence of a log line.
+
+---
+
 ## Additional recorded differences
 
 **`run_event_stream` selects on the cancellation token.** Go's loop relies on the receiver

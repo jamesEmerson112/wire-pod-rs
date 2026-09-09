@@ -14,13 +14,22 @@ test-util = ["wirepod-core/test-util"]
 axum.workspace = true
 http.workspace = true
 http-body-util.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+# `net_probe` times its round trip and `begin_event_stream` detaches its
+# receiver, so the handlers need `tokio::time::timeout` and `tokio::spawn`.
+tokio.workspace = true
+# `CancellationToken`, which is what a `stop_event_stream` cancels. Default
+# features only: `rt` would activate the optional `futures-util` dependency and
+# change the lock.
+tokio-util.workspace = true
 tower.workspace = true
 tracing.workspace = true
 wirepod-core.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true
+tokio-util.workspace = true
 tower.workspace = true
 # The same mechanism `wirepod-core` and `wirepod-vector` use: helpers that both
 # `src` and several integration-test binaries need live in `src/` behind a
@@ -28,3 +37,7 @@ tower.workspace = true
 # feature on for the test build only.
 wirepod-core = { workspace = true, features = ["test-util"] }
 wirepod-server = { workspace = true, features = ["test-util"] }
+# `tests/live_seam.rs` drives the router through the production tonic client
+# against `spawn_fake_robot`, which is the only proof that the seam the handler
+# tests fake is the seam the robot sees.
+wirepod-vector = { workspace = true, features = ["test-util"] }
