@@ -5,5 +5,21 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-# Exposes the `test_support` fakes to other crates. Empty until C5 adds them.
+# Exposes the `test_support` fakes to other crates, and to this crate's own
+# integration tests through the self dev-dependency below.
 test-util = []
+
+[dependencies]
+async-trait.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
+tokio-util.workspace = true
+# Items behind `#[cfg(test)]` are not visible from an integration test binary,
+# so the fakes live behind a feature instead. Listing this crate as its own
+# dev-dependency is what turns that feature on for the test build only, which
+# keeps plain `cargo test` working while `cargo build` compiles none of it.
+wirepod-core = { workspace = true, features = ["test-util"] }

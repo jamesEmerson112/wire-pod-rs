@@ -4029,6 +4029,13 @@ version = "0.1.0"
 [[package]]
 name = "wirepod-core"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "wirepod-core",
+]
 
 [[package]]
 name = "wirepod-intent"

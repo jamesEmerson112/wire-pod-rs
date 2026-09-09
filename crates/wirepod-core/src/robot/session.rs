@@ -175,6 +175,31 @@ impl EventOwner {
         state.stim = StimSample::ZERO;
     }
 
+    /// Drops ownership if `generation` still holds it, and reports whether it
+    /// did.
+    ///
+    /// This is the receiver's own way out, taken on every exit path of the
+    /// stim loop. A superseded receiver gets `false` and changes nothing, so it
+    /// cannot clear the state of the receiver that replaced it, and a receiver
+    /// unwinding from a [`EventOwner::stop`] gets `false` too, because the stop
+    /// already took ownership away.
+    ///
+    /// Unlike [`EventOwner::stop`] this leaves the reading alone, which is what
+    /// Go does: `releaseEventStream` deletes the entry and clears the flag
+    /// (`robot.go:236-246`) while only `stopEventStream` zeroes the value
+    /// (`robot.go:258`). The difference is not observable, because
+    /// `get_stim_status` reads the value only while the flag is set, but it is
+    /// reproduced rather than tidied up.
+    pub fn release(&self, generation: Generation) -> bool {
+        let mut state = self.lock();
+        if state.current != Some(generation) {
+            return false;
+        }
+        state.current = None;
+        state.streaming = false;
+        true
+    }
+
     /// Publishes `sample` if `generation` still owns the stream, and reports
     /// whether it did. A receiver still unwinding from a cancelled receive
     /// cannot overwrite the value its replacement just published.
