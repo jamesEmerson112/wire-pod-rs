@@ -29,6 +29,7 @@ pub mod store;
 #[cfg(feature = "test-util")]
 pub mod test_support;
 pub mod timings;
+pub mod token;
 
 pub use crate::clock::{Clock, ManualClock, SystemClock};
 pub use crate::esn::{Esn, Generation};
@@ -46,3 +47,8 @@ pub use crate::store::{
     BotInfo, BotInfoRobot, BotInfoWire, BotStatus, BotStatusKind, PingerState, RobotWire,
 };
 pub use crate::timings::Timings;
+pub use crate::token::{
+    GUID_B64_LEN, HASH_SIZE, HASHED_B64_LEN, HASHED_RAW_LEN, Hashed, SALT_SIZE, TOKEN_SIZE,
+    TokenHashError, TokenPair, compare_hash_and_token, create_token_and_hashed_token,
+    encode_token_and_hash, hash_token, new_from_hash,
+};
