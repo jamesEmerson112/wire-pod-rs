@@ -1,8 +1,14 @@
 // Command go-probe records the Go behaviors that Phase 1 of the Rust port of
 // wire-pod has to reproduce byte for byte. Every input is a fixed constant
-// written into this file. Nothing is read from the clock, the environment, the
-// filesystem, a map iteration or a live server, so two runs on any machine
-// produce identical bytes and the recording is a diffable artifact.
+// written into this file. Nothing is read from the clock, a map iteration or a
+// live server, so two runs on any machine produce identical bytes and the
+// recording is a diffable artifact. The one thing the program reads off the
+// host is the IANA time zone database, which time.LoadLocation finds through
+// the ZONEINFO environment variable, then the platform's zoneinfo directories,
+// then the copy time/tzdata embeds; in Go's own source tree that search is
+// src/time/zoneinfo.go:663-696 and src/time/zoneinfo_read.go:531-569. See "The
+// zone the addmonth_local section uses" below for why that still leaves the
+// recording stable.
 //
 // # Sections, and the Go source each one reproduces
 //
@@ -26,7 +32,15 @@
 //	             which is how the "expires" claim lands one calendar month out.
 //	             AddDate adds to the month field and then lets time.Date
 //	             normalise, so 31 January plus one month is 3 March in a common
-//	             year and 2 March in a leap year.
+//	             year and 2 March in a leap year. Every case in this section
+//	             runs in a time.FixedZone, which has one offset for all time.
+//	addmonth_local
+//	             The same AddDate(0, 1, 0) call in a zone that has daylight
+//	             saving transitions, which is the situation token.go:195-196 is
+//	             really in: both timestamps come from time.Now(), so their
+//	             location is time.Local and not a fixed offset. See "The zone
+//	             the addmonth_local section uses" below for the two rules only
+//	             a real zone can show.
 //	f32json      pkg/vars/config.go:38-39, the top_p and temp fields, which are
 //	             declared float32 and rendered by encoding/json's floatEncoder.
 //	             In Go's own source tree that encoder is
@@ -45,6 +59,35 @@
 //	             (fileFormatLine), both of which stamp with the layout
 //	             "2006.01.02 15:04:05", plus pkg/logger/logger.go:20-31 for
 //	             Level.String.
+//
+// # The zone the addmonth_local section uses
+//
+// A time.FixedZone carries one offset for all time, so the addmonth and
+// rfc3339 sections above cannot show either of the two rules that decide what
+// the Go server actually writes into the "expires" claim:
+//
+//  1. Format prints the offset in effect at the instant being formatted, not
+//     the one the source instant carried. "iat" and "expires" are one calendar
+//     month apart, so for roughly a month before each transition they carry
+//     different offsets.
+//  2. When the target wall time does not exist, because a spring forward
+//     transition removed it, time.Date normalises backwards by the size of the
+//     gap rather than forwards. 8 February 02:30 plus one month is 8 March
+//     01:30, an hour earlier on the wall clock than the 02:30 that was asked
+//     for. When the target wall time happens twice, because a fall back
+//     transition repeated it, time.Date picks the first of the two.
+//
+// The zone is America/Los_Angeles, whose rules are the US ones fixed by the
+// Energy Policy Act of 2005 and unchanged since 2007: forward at 02:00 local
+// on the second Sunday in March, back at 02:00 local on the first Sunday in
+// November. Every instant recorded in that section is in 2026 or 2027, so no
+// future tzdata release can move one of these cases: a release revises
+// historical rules or announces a new one, and the last US change was the 2005
+// act taking effect in 2007.
+//
+// time/tzdata is imported for its side effect so LoadLocation still resolves on
+// a host that carries no zoneinfo files, which is every stock Windows machine.
+// It is standard library, so it adds nothing to go.mod.
 //
 // # How the claims section is built
 //
@@ -117,6 +160,7 @@ import (
 	"math"
 	"strings"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/golang-jwt/jwt"
 )
@@ -165,6 +209,12 @@ func newFromHash(hashedToken []byte) (*hashed, error) {
 
 // compareHashAndToken is hashing.go:89-114 with the constant time compare
 // replaced by a string comparison, which changes the timing and not the answer.
+//
+// This direction is dead in the Go checkout: CompareHashAndToken's only caller
+// is DecodeAndCompare at hashing.go:73-84, and nothing calls that. It is
+// recorded because the Rust side uses it for the live association check against
+// the hash already on disk, so the answers below are a contract for the port
+// rather than a behaviour the Go server exercises.
 func compareHashAndToken(hashedToken, token string) error {
 	hashedBytes, err := base64.StdEncoding.DecodeString(hashedToken)
 	if err != nil {
@@ -215,6 +265,7 @@ func main() {
 	hashSection()
 	rfc3339Section()
 	addMonthSection()
+	addMonthLocalSection()
 	f32JSONSection()
 	claimsSection()
 	legacyStampSection()
@@ -277,7 +328,14 @@ func hashSection() {
 	emit(sec, "kind=const name=hashed_b64_len",
 		fmt.Sprint(len(base64.StdEncoding.EncodeToString(make([]byte, hashSize+saltSize)))))
 
-	// The error strings, verbatim from hashing.go:21-25.
+	// The error strings, verbatim from hashing.go:21-25. Only the first three
+	// are reachable. errTokenTooLong and errTokenTooShort are declared at
+	// hashing.go:24-25 and referenced nowhere else in the Go checkout: hash()
+	// at :130-136 appends a token of any length, and CompareHashAndToken at
+	// :89-114 never looks at len(tokenBytes). Go therefore never produces
+	// either string. They are recorded for completeness, and the Rust side must
+	// not add a token length check; the short and long kind=compare cases below
+	// pin what Go answers instead.
 	emit(sec, "kind=const name=errMismatchedTokenAndHash", errMismatchedTokenAndHash)
 	emit(sec, "kind=const name=errHashTooLong", errHashTooLong)
 	emit(sec, "kind=const name=errHashTooShort", errHashTooShort)
@@ -312,6 +370,27 @@ func hashSection() {
 		errText(compareHashAndToken(subject, ascB64)))
 	emit(sec, "kind=compare token="+descB64+" hashed="+subject,
 		errText(compareHashAndToken(subject, descB64)))
+
+	// A 15 byte and a 17 byte token against the same subject hash. Neither
+	// length is checked anywhere, so both come back as an ordinary mismatch and
+	// not as one of the two token size errors above.
+	short15 := base64.StdEncoding.EncodeToString(asc[:15])
+	long17 := base64.StdEncoding.EncodeToString(append(append([]byte{}, asc[:]...), 0x10))
+	emit(sec, "kind=compare token="+short15+" hashed="+subject,
+		errText(compareHashAndToken(subject, short15)))
+	emit(sec, "kind=compare token="+long17+" hashed="+subject,
+		errText(compareHashAndToken(subject, long17)))
+
+	// A token that is not base64 at all, which fails in the decode before any
+	// of the hashing runs. The text is encoding/base64's, not wire-pod's.
+	const undecodable = "!!!!"
+	emit(sec, "kind=compare token="+undecodable+" hashed="+subject,
+		errText(compareHashAndToken(subject, undecodable)))
+
+	// The same for an undecodable hash, which is the argument that reaches this
+	// function from disk rather than from the robot.
+	emit(sec, "kind=compare token="+ascB64+" hashed="+undecodable,
+		errText(compareHashAndToken(undecodable, ascB64)))
 }
 
 // errText renders an error the way this recording spells success, which is the
@@ -456,8 +535,12 @@ func addMonthSection() {
 		{y: 2023, mo: time.January, d: 31, h: 23, mi: 59, s: 59, ns: 999999999},
 		{y: 2024, mo: time.February, d: 29, h: 12, mi: 34, s: 56, ns: 789000000},
 		{y: 2026, mo: time.September, d: 9, h: 1, mi: 2, s: 3, ns: 4},
-		// The same civil date in three zones, to show the offset is carried
-		// through and never used to shift the date.
+		// The same civil date under three fixed offsets. A time.FixedZone has
+		// one offset for all time, so here the offset rides through untouched
+		// and is never used to shift the date. That is a property of
+		// time.FixedZone and not a general rule: the addmonth_local section
+		// below records what a zone with transitions does instead, where the
+		// offset printed on the result is the one in effect a month later.
 		{y: 2023, mo: time.January, d: 31, h: 12, off: 0},
 		{y: 2023, mo: time.January, d: 31, h: 12, off: -25200},
 		{y: 2023, mo: time.January, d: 31, h: 12, off: 19800},
@@ -470,6 +553,121 @@ func addMonthSection() {
 		emit(sec, fmt.Sprintf("kind=add_months y=%d mo=%d d=%d h=%d mi=%d s=%d ns=%d off=%d in=%s",
 			c.y, int(c.mo), c.d, c.h, c.mi, c.s, c.ns, c.off, in.Format(time.RFC3339Nano)),
 			out.Format(time.RFC3339Nano))
+	}
+}
+
+// ---------------------------------------------------------- addmonth_local
+
+// probeZone is the zone the addmonth_local cases run in. See the doc comment's
+// "The zone the addmonth_local section uses" for why this one and why every
+// instant below sits in 2026 or 2027.
+const probeZone = "America/Los_Angeles"
+
+// localCase is a civil date read in probeZone. There is no offset field: the
+// whole point of this section is that the zone, not the case, decides the
+// offset, and that it can decide a different one for the result than for the
+// input.
+type localCase struct {
+	name            string
+	y               int
+	mo              time.Month
+	d, h, mi, s, ns int
+}
+
+// addMonthLocalSection records AddDate(0, 1, 0) in a zone that has daylight
+// saving transitions, which is what token.go:195-196 runs: currentTime and
+// expiresAt both come from time.Now(), so their location is time.Local.
+//
+// Three lines are emitted per case, each carrying one scalar: the formatted
+// result, its Unix second and its offset in seconds. Together with in_unix and
+// in_off on the first line, that is everything a test needs to drive a fake
+// clock whose offset function is keyed by Unix second, without a tz database of
+// its own.
+func addMonthLocalSection() {
+	const sec = "addmonth_local"
+
+	loc, err := time.LoadLocation(probeZone)
+	if err != nil {
+		panic(err)
+	}
+
+	emit(sec, "kind=const name=zone", probeZone)
+
+	cases := []localCase{
+		// A month that crosses no transition, so both ends carry -07:00.
+		{name: "control_no_transition", y: 2026, mo: time.September, d: 9, h: 12},
+		// A month that crosses the spring forward. The input is -08:00 and the
+		// result is -07:00, which is the case an implementation that carries
+		// the input's offset into the result gets wrong.
+		{name: "crosses_spring_forward", y: 2026, mo: time.February, d: 9, h: 12},
+		// The same with a fraction, to show it rides along untouched.
+		{name: "crosses_spring_forward_frac", y: 2026, mo: time.February, d: 9, h: 12, ns: 123456789},
+		// The day before, which crosses nothing, so both ends are -08:00.
+		{name: "day_before_spring_forward", y: 2026, mo: time.February, d: 7, h: 12},
+		// A month that crosses the fall back, -07:00 in and -08:00 out.
+		{name: "crosses_fall_back", y: 2026, mo: time.October, d: 9, h: 12},
+		// The target wall time does not exist: 8 March 02:30 is inside the hour
+		// the spring forward removes. time.Date normalises backwards by the gap
+		// rather than forwards, so the answer is 01:30 -08:00 and not 03:30
+		// -07:00.
+		{name: "lands_in_missing_hour", y: 2026, mo: time.February, d: 8, h: 2, mi: 30},
+		// The target wall time happens twice: 1 November 01:30 is inside the
+		// hour the fall back repeats. time.Date picks the first of the two,
+		// which is the -07:00 one.
+		{name: "lands_in_repeated_hour", y: 2026, mo: time.October, d: 1, h: 1, mi: 30},
+		// The input itself is a wall time that does not exist, which is what a
+		// hand written civil-to-instant conversion has to handle before AddDate
+		// is even reached.
+		{name: "starts_in_missing_hour", y: 2026, mo: time.March, d: 8, h: 2, mi: 30},
+		// The input is inside the repeated hour.
+		{name: "starts_in_repeated_hour", y: 2026, mo: time.November, d: 1, h: 1, mi: 30},
+		// Month ends, where the day overflow and a transition happen together.
+		{name: "month_end_crosses_spring_forward", y: 2026, mo: time.February, d: 28, h: 12},
+		{name: "month_end_crosses_fall_back", y: 2026, mo: time.October, d: 31, h: 12},
+		// 31 January in a real zone: the day overflows to 3 March, still
+		// before the transition, so the offset is unchanged.
+		{name: "month_end_overflow", y: 2026, mo: time.January, d: 31, h: 12},
+		// The year roll, with no transition anywhere near it.
+		{name: "year_roll", y: 2026, mo: time.December, d: 31, h: 12},
+	}
+
+	for _, c := range cases {
+		in := time.Date(c.y, c.mo, c.d, c.h, c.mi, c.s, c.ns, loc)
+		out := in.AddDate(0, 1, 0)
+		_, inOff := in.Zone()
+		_, outOff := out.Zone()
+		key := fmt.Sprintf("case=%s zone=%s y=%d mo=%d d=%d h=%d mi=%d s=%d ns=%d",
+			c.name, probeZone, c.y, int(c.mo), c.d, c.h, c.mi, c.s, c.ns)
+		emit(sec, fmt.Sprintf("kind=add_months_local %s in_unix=%d in_off=%d in=%s",
+			key, in.Unix(), inOff, in.Format(time.RFC3339Nano)),
+			out.Format(time.RFC3339Nano))
+		emit(sec, "kind=out_unix case="+c.name, fmt.Sprint(out.Unix()))
+		emit(sec, "kind=out_off case="+c.name, fmt.Sprint(outOff))
+	}
+
+	// The transition instants themselves, so the offset function a test builds
+	// from this section has its step edges pinned rather than inferred from the
+	// cases above. Each pair is the last second of the old offset and the first
+	// second of the new one. They are written in UTC because a local wall time
+	// at a transition is either missing or ambiguous, which is the very thing
+	// under test.
+	for _, u := range []time.Time{
+		// Spring forward 2026: at 10:00 UTC, PST becomes PDT.
+		time.Date(2026, time.March, 8, 9, 59, 59, 0, time.UTC),
+		time.Date(2026, time.March, 8, 10, 0, 0, 0, time.UTC),
+		// Fall back 2026: at 09:00 UTC, PDT becomes PST.
+		time.Date(2026, time.November, 1, 8, 59, 59, 0, time.UTC),
+		time.Date(2026, time.November, 1, 9, 0, 0, 0, time.UTC),
+		// Spring forward 2027, one year on. The cases above do not reach it;
+		// it is here so the recording shows the rule repeating rather than a
+		// pair of edges that could be read as one-off constants.
+		time.Date(2027, time.March, 14, 9, 59, 59, 0, time.UTC),
+		time.Date(2027, time.March, 14, 10, 0, 0, 0, time.UTC),
+	} {
+		t := u.In(loc)
+		_, off := t.Zone()
+		emit(sec, fmt.Sprintf("kind=offset zone=%s unix=%d", probeZone, t.Unix()),
+			fmt.Sprint(off))
 	}
 }
 

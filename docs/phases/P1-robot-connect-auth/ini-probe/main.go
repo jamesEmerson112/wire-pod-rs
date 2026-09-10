@@ -1,13 +1,17 @@
-// Command ini-probe records the exact bytes gopkg.in/ini.v1 writes for the two
-// shapes the Go server's WriteToIniPrimary produces, so the hand written Rust
-// writer that replaces the library in Phase 1 has the output to match rather
-// than a guess about it.
+// Command ini-probe records the exact bytes gopkg.in/ini.v1 writes for the four
+// shapes the Go server's two sdk_config.ini writers produce, so the hand written
+// Rust writer that replaces the library in Phase 1 has the output to match
+// rather than a guess about it.
 //
 // # What is reproduced
 //
-// pkg/servers/jdocs/botInfoStorer.go:31-62 in the Go checkout's chipper/
-// directory. That function loads ~/.anki_vector/sdk_config.ini, falls back to
-// ini.Empty() when the load fails, then takes one of two paths:
+// pkg/servers/jdocs/botInfoStorer.go in the Go checkout's chipper/ directory
+// holds two writers, and Phase 1 has to implement both. Each loads
+// ~/.anki_vector/sdk_config.ini, falls back to ini.Empty() when the load fails,
+// takes an update path or a create path, and ends in SaveTo.
+//
+// WriteToIniPrimary, :31-62, is called from jdocs/server.go:124 on the primary
+// auth path:
 //
 //   - The update path, :39-48. It walks every section, and for a section whose
 //     name matches the ESN case insensitively it calls Key(...).SetValue(...)
@@ -20,8 +24,20 @@
 //     update path: cert, ip, name, guid here against cert, name, ip, guid
 //     above. That difference is visible in the file and is reproduced here.
 //
-// It then calls SaveTo, :60. SaveTo is SaveToIndent(filename, "") which builds
-// the same buffer WriteTo builds and hands it to os.WriteFile
+// WriteToIniSecondary, :66-128, is called from jdocs/server.go:140 inside the
+// brand new robot branch of ReadDocs, and neither of its paths matches the
+// primary's:
+//
+//   - The update path, :78-89, sets guid and then ip and touches neither cert
+//     nor name. Two keys, not four, and in an order the primary never uses. A
+//     section missing guid and ip therefore gets them appended in that order,
+//     which is what kind=secondary_update_missing_keys records.
+//   - The create path, :115-125, calls NewKey for cert, ip, name, guid. That
+//     happens to be the primary create order, but it is a separate call site,
+//     so it is recorded separately rather than assumed to stay in step.
+//
+// Both writers end in SaveTo, :60 and :127. SaveTo is SaveToIndent(filename,
+// "") which builds the same buffer WriteTo builds and hands it to os.WriteFile
 // (file.go:525-540 in the library), so the bytes this program takes from
 // WriteTo are the bytes the Go server puts on disk.
 //
@@ -42,13 +58,21 @@
 //     therefore ends with exactly one line break, the one after the last key.
 //   - DefaultHeader is false and the DEFAULT section is written only when it
 //     holds keys (file.go:363-372), so a file of named sections has no header.
-//   - KeyValueDelimiterOnWrite is "=" by default (ini.go:114-115).
-//   - Values are only quoted when they need it: a value containing a newline or
-//     a backtick is wrapped in triple quotes, a value containing '#' or ';' is
-//     wrapped in backticks, and a value with leading or trailing whitespace is
-//     wrapped in double quotes (file.go:461-468). A Windows path full of
-//     backslashes needs none of that and is written through untouched, which is
-//     why the cert values below carry backslashes on purpose.
+//   - KeyValueDelimiterOnWrite is a per-load option whose zero value is filled
+//     in with "=" by newFile at file.go:54-55. ini.go:114-115 is the field and
+//     the doc comment that states the same default in prose.
+//   - Values are only quoted when they need it, in the three arms at
+//     file.go:461-468: a value containing a newline or a backtick is wrapped in
+//     triple quotes, a value containing '#' or ';' is wrapped in backticks
+//     unless IgnoreInlineComment is set, and a value with leading or trailing
+//     whitespace is wrapped in double quotes. A Windows path full of
+//     backslashes trips none of the three and is written through untouched,
+//     which is why the cert values below carry backslashes on purpose. The four
+//     kind=quote_* cases record each arm firing rather than leaving the rule as
+//     a claim, because the bot name reaches both the name key and the middle of
+//     the cert path and is not a literal the server controls: on the primary
+//     path it comes from the caller at botInfoStorer.go:44 and on the secondary
+//     path from the session certificate's Issuer CommonName at :105.
 //
 // # The line break, and why this program pins it
 //
@@ -59,6 +83,12 @@
 // writes anything, which is a no-op on Windows and makes the recording identical
 // on a Linux or macOS host, so the committed expected.txt is a property of the
 // library and not of whoever regenerated it.
+//
+// Because of that assignment, the setting line for it is named
+// line_break_written rather than LineBreak: it reads back this program's own
+// store, so it is a statement about the file wire-pod writes on Windows and not
+// about the library's default. The default is recorded beside it as
+// line_break_default, taken from the declaration rather than from a read.
 //
 // # Nothing here is a live value
 //
@@ -131,7 +161,13 @@ func settingsSection() {
 	const sec = "setting"
 
 	emit(sec, "kind=setting name=module", "gopkg.in/ini.v1 v1.67.3")
-	emit(sec, "kind=setting name=LineBreak", ini.LineBreak)
+
+	// Read back off the package var this program assigned at the top of main,
+	// so it records the byte pair wire-pod writes on Windows rather than the
+	// library's default. That default is the literal from the declaration at
+	// ini.go:35-37, which the init at ini.go:60-64 overwrites on Windows.
+	emit(sec, "kind=setting name=line_break_written", ini.LineBreak)
+	emit(sec, "kind=setting name=line_break_default", "\n")
 	emit(sec, "kind=setting name=DefaultSection", ini.DefaultSection)
 	emit(sec, "kind=setting name=DefaultHeader", fmt.Sprint(ini.DefaultHeader))
 	emit(sec, "kind=setting name=PrettySection", fmt.Sprint(ini.PrettySection))
@@ -144,14 +180,19 @@ func settingsSection() {
 	// DefaultFormatLeft + KeyValueDelimiterOnWrite + DefaultFormatRight and
 	// then, because PrettyFormat is true, replaces it with the space padded
 	// form. KeyValueDelimiterOnWrite is a per-load option whose zero value is
-	// filled in with "=" (ini.go:114-115), so it is recorded as the literal the
-	// library defaults to rather than read back off a File.
+	// filled in with "=" by newFile at file.go:54-55, so it is recorded as the
+	// literal that fill-in uses rather than read back off a File.
 	emit(sec, "kind=setting name=KeyValueDelimiterOnWrite", "=")
 	emit(sec, "kind=setting name=delimiter_written", " = ")
 
-	// The two key orders botInfoStorer.go uses, recorded because they differ.
-	emit(sec, "kind=setting name=create_key_order", "cert,ip,name,guid")
-	emit(sec, "kind=setting name=update_key_order", "cert,name,ip,guid")
+	// The four key orders botInfoStorer.go uses. All four are recorded, and
+	// each name carries the writer it belongs to, so nobody reads one pair as
+	// the only pair. The two update orders are the ones that differ: the
+	// primary writes four keys and the secondary writes two.
+	emit(sec, "kind=setting name=primary_create_key_order", "cert,ip,name,guid")
+	emit(sec, "kind=setting name=primary_update_key_order", "cert,name,ip,guid")
+	emit(sec, "kind=setting name=secondary_create_key_order", "cert,ip,name,guid")
+	emit(sec, "kind=setting name=secondary_update_key_order", "guid,ip")
 }
 
 // ------------------------------------------------------------------ file
@@ -198,6 +239,82 @@ func writeToIniPrimary(existing []byte, edits []primaryEdit) string {
 				panic(err)
 			}
 			if _, err := newSection.NewKey("cert", sdkIniPath+e.botName+"-"+e.esn+".cert"); err != nil {
+				panic(err)
+			}
+			if _, err := newSection.NewKey("ip", e.ip); err != nil {
+				panic(err)
+			}
+			if _, err := newSection.NewKey("name", e.botName); err != nil {
+				panic(err)
+			}
+			if _, err := newSection.NewKey("guid", e.guid); err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	var buf bytes.Buffer
+	if _, err := f.WriteTo(&buf); err != nil {
+		panic(err)
+	}
+	return buf.String()
+}
+
+// secondaryEdit is one WriteToIniSecondary call. The Go signature is
+// (esn, guid, ip); botName and certPath are the two values that function
+// derives inside itself, from the matched section's name key on the update path
+// and from the downloaded session certificate on the create path. They are
+// passed in here because this program makes no network call, exactly as
+// primaryEdit passes botName in.
+type secondaryEdit struct {
+	esn      string
+	guid     string
+	ip       string
+	botName  string // create path only
+	certPath string // create path only
+}
+
+// writeToIniSecondary is botInfoStorer.go:66-128 with the disk and the network
+// removed. The load is from a byte slice, the mkdir, the log lines and the
+// https://session-certs.token.global.anki-services.com fetch at :91-111 are
+// gone, and SaveTo becomes WriteTo. Everything that decides bytes is unchanged,
+// including the one thing that is not the primary writer's: the update path at
+// :86-87 sets guid and then ip and leaves cert and name alone, where the
+// primary sets all four.
+//
+// One hazard is deliberately not exercised. At :81-82 the real function does
+// botNameKey, _ := section.GetKey("name") and then botNameKey.String(), so a
+// matched section with no name key hands a nil *ini.Key to a method that
+// dereferences it (key.go:179-181) and the Go server panics. The Rust port has
+// to decide what to do there; no case below reaches it, because a recording
+// cannot hold a panic.
+func writeToIniSecondary(existing []byte, edits []secondaryEdit) string {
+	var f *ini.File
+	if existing == nil {
+		f = ini.Empty()
+	} else {
+		var err error
+		f, err = ini.Load(existing)
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	for _, e := range edits {
+		certExists := false
+		for _, section := range f.Sections() {
+			if strings.EqualFold(section.Name(), e.esn) {
+				certExists = true
+				section.Key("guid").SetValue(e.guid)
+				section.Key("ip").SetValue(e.ip)
+			}
+		}
+		if !certExists {
+			newSection, err := f.NewSection(e.esn)
+			if err != nil {
+				panic(err)
+			}
+			if _, err := newSection.NewKey("cert", e.certPath); err != nil {
 				panic(err)
 			}
 			if _, err := newSection.NewKey("ip", e.ip); err != nil {
@@ -294,4 +411,74 @@ func fileSection() {
 	//    the existing one.
 	emit(sec, "kind=create_after_existing sections=2",
 		writeToIniPrimary([]byte(one), []primaryEdit{beta}))
+
+	// ---- WriteToIniSecondary, botInfoStorer.go:66-128 -------------------
+
+	alphaSecondary := secondaryEdit{
+		esn:      "00000001",
+		guid:     "Wl1gY2ZpbG9ydXh7foGEhw==",
+		ip:       "192.0.2.99",
+		botName:  "Vector-Z9Y8",
+		certPath: sdkIniPath + "Vector-Z9Y8-00000001.cert",
+	}
+	betaSecondary := secondaryEdit{
+		esn:      "00000002",
+		guid:     "Dw4NDAsKCQgHBgUEAwIBAA==",
+		ip:       "192.0.2.12",
+		botName:  "Vector-C3D4",
+		certPath: sdkIniPath + "Vector-C3D4-00000002.cert",
+	}
+
+	// 8. The secondary update path over a section that already holds all four
+	//    keys. Only guid and ip change; cert and name keep the values the file
+	//    was parsed with, which is the difference from the primary update.
+	emit(sec, "kind=secondary_update_all_keys sections=1",
+		writeToIniSecondary([]byte(one), []secondaryEdit{alphaSecondary}))
+
+	// 9. The secondary update path over a section that has cert and name but
+	//    neither guid nor ip, so the two are appended in the call order at
+	//    :86-87, guid then ip. A writer that reused the primary's order would
+	//    append ip then guid and pass every other case in this file.
+	secondaryPartial := "[00000001]\r\n" +
+		"cert = " + sdkIniPath + "Vector-A1B2-00000001.cert\r\n" +
+		"name = Vector-A1B2\r\n"
+	emit(sec, "kind=secondary_update_missing_keys sections=1",
+		writeToIniSecondary([]byte(secondaryPartial), []secondaryEdit{alphaSecondary}))
+
+	// 10. The secondary create path from an empty file, :115-125.
+	emit(sec, "kind=secondary_create sections=1",
+		writeToIniSecondary(nil, []secondaryEdit{alphaSecondary}))
+
+	// 11. The secondary create path against a file that already holds another
+	//     robot's section.
+	emit(sec, "kind=secondary_create_after_existing sections=2",
+		writeToIniSecondary([]byte(one), []secondaryEdit{betaSecondary}))
+
+	// ---- The three value quoting arms at file.go:461-468 ----------------
+	//
+	// Every value in the cases above avoids all three triggers, so a writer
+	// that skipped quoting entirely would pass all of them. The four cases
+	// below fire all three arms, the middle arm through both of its trigger
+	// characters. The trigger rides in on the bot name, which lands both in the
+	// name key and in the middle of the cert path, so each case also records
+	// which of the two keys ends up quoted.
+
+	quoted := func(kind, botName string) {
+		emit(sec, kind+" sections=1", writeToIniPrimary(nil, []primaryEdit{{
+			botName: botName,
+			esn:     "00000001",
+			guid:    "AAECAwQFBgcICQoLDA0ODw==",
+			ip:      "192.0.2.11",
+		}}))
+	}
+
+	// Arm 1, :462-463: a backtick wraps the value in triple quotes.
+	quoted("kind=quote_backtick", "Vector-A`B2")
+	// Arm 2, :464-465: '#' and ';' each wrap the value in backticks, because
+	// IgnoreInlineComment is false.
+	quoted("kind=quote_hash", "Vector-A#B2")
+	quoted("kind=quote_semicolon", "Vector-A;B2")
+	// Arm 3, :466-467: trailing whitespace wraps the value in double quotes.
+	// Only the name key trips it; in the cert path the space is interior.
+	quoted("kind=quote_trailing_space", "Vector-A1B2 ")
 }
