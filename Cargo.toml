@@ -12,14 +12,23 @@ license = "MIT"
 [workspace.dependencies]
 async-trait = "0.1"
 axum = "0.7"
+# Decoding and encoding the token and the hash. The audited crate rather than a
+# hand rolled one, because base64 sits on the critical hashing path.
+base64 = "0.22"
 bytes = "1"
 futures-core = "0.3"
+# The sixteen token bytes and the sixteen salt bytes, which is what Go takes
+# from `crypto/rand`.
+getrandom = "0.2"
 http = "1"
 http-body-util = "0.1"
 # `tokio` is the feature `hyper_util::rt::TokioIo` lives behind, which is what the
 # TLS connector hands back to tonic. `tonic` already enables exactly that one
 # feature, so turning it on here adds no package.
 hyper-util = { version = "0.1", features = ["tokio"] }
+# `localtime_r` for the local UTC offset, and `chmod` for the file modes Go
+# applies. Unix only.
+libc = "0.2"
 prost = "0.13"
 prost-types = "0.13"
 protox = "0.7"
@@ -30,6 +39,8 @@ rustls-pemfile = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 sha2 = "0.10"
+# The constant time compare Go does with `subtle.ConstantTimeCompare`.
+subtle = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
@@ -47,6 +58,10 @@ tracing = "0.1"
 # feature set already resolved in `Cargo.lock`, where `extism` pulls the same
 # crate in, so declaring it here activates no package the lock does not carry.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# `SystemTimeToTzSpecificLocalTime` for the local UTC offset at a given instant,
+# which is what Go resolves through the timezone database. Features are cfg
+# gates over generated bindings inside the one crate and pull no package.
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Time"] }
 walkdir = "2"
 wirepod-core = { path = "crates/wirepod-core" }
 wirepod-proto = { path = "crates/wirepod-proto" }
