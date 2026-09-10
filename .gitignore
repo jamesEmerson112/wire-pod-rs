@@ -3,4 +3,8 @@ target/
 spikes/**/vendor/
 *.log
 dump.txt
-docs/
+# `docs/` holds the phase specs, which are tracked, next to scratch notes, which are
+# not. `docs/*` rather than `docs/` so that git still descends into the directory and
+# the negation below can take effect; an ignored directory is never opened at all.
+docs/*
+!docs/phases/
