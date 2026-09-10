@@ -20,6 +20,10 @@ subtle.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
+# The `Layer` trait the logger ring is installed as. Already resolved in
+# `Cargo.lock` for `wirepod-app`, with the same workspace feature set, so this
+# adds an edge and no package.
+tracing-subscriber.workspace = true
 
 # The local UTC offset at a given instant. Go resolves it through the timezone
 # database; each platform has its own call for that and neither is portable.

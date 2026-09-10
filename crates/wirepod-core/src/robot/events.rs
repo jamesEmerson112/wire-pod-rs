@@ -70,7 +70,8 @@ pub async fn run_event_stream(
             Ok(None) => break EventLoopExit::StreamEnded,
             Err(err) => {
                 // Go's only visibility into teardown, at `server.go:652`.
-                tracing::info!(target: "sdkapp", "event stream: {err}");
+                // `logger.Println` is DEBUG (`logger.go:234-238`).
+                tracing::debug!(target: "sdkapp", "event stream: {err}");
                 break EventLoopExit::Failed(err);
             }
         }

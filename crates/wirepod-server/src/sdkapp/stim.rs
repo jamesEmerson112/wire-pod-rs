@@ -75,7 +75,7 @@ pub fn begin(entry: &RobotEntry) -> Response {
                 // (`server.go:498`). On this path the receiver is nil and the
                 // loop would panic on its first receive, so the claim is handed
                 // straight back instead.
-                tracing::info!(target: "sdkapp", "event stream: {err}");
+                tracing::debug!(target: "sdkapp", "event stream: {err}");
                 owner.release(generation);
             }
             // Abandoned before the stream existed. A stop already took

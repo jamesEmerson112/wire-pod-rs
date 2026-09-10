@@ -23,6 +23,7 @@
 pub mod clock;
 pub mod esn;
 pub mod gofmt;
+pub mod logger;
 pub mod robot;
 pub mod state;
 pub mod store;
