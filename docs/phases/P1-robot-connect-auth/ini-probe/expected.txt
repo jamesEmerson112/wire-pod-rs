@@ -1,0 +1,27 @@
+# Recorded stdout of docs/phases/P1-robot-connect-auth/ini-probe/main.go.
+# One case per line: <section>TAB<input>TAB<output>. Field 2 is space separated
+# key=value pairs beginning with kind=. Field 3 is ALWAYS a Go %q quoted string
+# literal, so the CRLF pairs and the alignment spaces are exact. main.go's doc
+# comment names the Go source and the library version this reproduces.
+# Regenerate with: cargo run -p xtask -- go-probe
+# Verify with:     cargo run -p xtask -- go-probe --check
+setting	kind=setting name=module	"gopkg.in/ini.v1 v1.67.3"
+setting	kind=setting name=LineBreak	"\r\n"
+setting	kind=setting name=DefaultSection	"DEFAULT"
+setting	kind=setting name=DefaultHeader	"false"
+setting	kind=setting name=PrettySection	"true"
+setting	kind=setting name=PrettyFormat	"true"
+setting	kind=setting name=PrettyEqual	"false"
+setting	kind=setting name=DefaultFormatLeft	""
+setting	kind=setting name=DefaultFormatRight	""
+setting	kind=setting name=KeyValueDelimiterOnWrite	"="
+setting	kind=setting name=delimiter_written	" = "
+setting	kind=setting name=create_key_order	"cert,ip,name,guid"
+setting	kind=setting name=update_key_order	"cert,name,ip,guid"
+file	kind=create sections=1	"[00000001]\r\ncert = C:\\probe\\.anki_vector\\Vector-A1B2-00000001.cert\r\nip   = 192.0.2.11\r\nname = Vector-A1B2\r\nguid = AAECAwQFBgcICQoLDA0ODw==\r\n"
+file	kind=create sections=2	"[00000001]\r\ncert = C:\\probe\\.anki_vector\\Vector-A1B2-00000001.cert\r\nip   = 192.0.2.11\r\nname = Vector-A1B2\r\nguid = AAECAwQFBgcICQoLDA0ODw==\r\n\r\n[00000002]\r\ncert = C:\\probe\\.anki_vector\\Vector-C3D4-00000002.cert\r\nip   = 192.0.2.12\r\nname = Vector-C3D4\r\nguid = Dw4NDAsKCQgHBgUEAwIBAA==\r\n"
+file	kind=update sections=1	"[00000001]\r\ncert = C:\\probe\\.anki_vector\\Vector-Z9Y8-00000001.cert\r\nip   = 192.0.2.99\r\nname = Vector-Z9Y8\r\nguid = Wl1gY2ZpbG9ydXh7foGEhw==\r\n"
+file	kind=update sections=2	"[00000001]\r\ncert = C:\\probe\\.anki_vector\\Vector-Z9Y8-00000001.cert\r\nip   = 192.0.2.99\r\nname = Vector-Z9Y8\r\nguid = Wl1gY2ZpbG9ydXh7foGEhw==\r\n\r\n[00000002]\r\ncert = C:\\probe\\.anki_vector\\Vector-C3D4-00000002.cert\r\nip   = 192.0.2.12\r\nname = Vector-C3D4\r\nguid = Dw4NDAsKCQgHBgUEAwIBAA==\r\n"
+file	kind=update_unknown_survives sections=2	"[00000001]\r\ncert  = C:\\probe\\.anki_vector\\Vector-Z9Y8-00000001.cert\r\nip    = 192.0.2.99\r\nname  = Vector-Z9Y8\r\nguid  = Wl1gY2ZpbG9ydXh7foGEhw==\r\nextra = kept by the fork\r\n\r\n[some-other-tool]\r\na_very_long_key_name = 1\r\nb                    = 2\r\n"
+file	kind=update_partial_section sections=1	"[00000001]\r\nname = Vector-Z9Y8\r\ncert = C:\\probe\\.anki_vector\\Vector-Z9Y8-00000001.cert\r\nip   = 192.0.2.99\r\nguid = Wl1gY2ZpbG9ydXh7foGEhw==\r\n"
+file	kind=create_after_existing sections=2	"[00000001]\r\ncert = C:\\probe\\.anki_vector\\Vector-A1B2-00000001.cert\r\nip   = 192.0.2.11\r\nname = Vector-A1B2\r\nguid = AAECAwQFBgcICQoLDA0ODw==\r\n\r\n[00000002]\r\ncert = C:\\probe\\.anki_vector\\Vector-C3D4-00000002.cert\r\nip   = 192.0.2.12\r\nname = Vector-C3D4\r\nguid = Dw4NDAsKCQgHBgUEAwIBAA==\r\n"
