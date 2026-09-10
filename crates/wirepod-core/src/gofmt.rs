@@ -1,21 +1,33 @@
 //! Go-compatible float formatting.
 //!
-//! Two Go behaviors reach the wire and have to be reproduced byte for byte:
+//! Three Go behaviors reach the wire and have to be reproduced byte for byte:
 //! `fmt.Sprintf("%v", x)` on a `float32`, which is what `get_stim_status`
 //! prints when it passes `stimState`'s `float32` to `fmt.Fprint`
-//! (`server.go:512`, `robot.go:276`), and `encoding/json`'s `float64`
-//! encoding, which carries `net_probe`'s `rttMs` (`server.go:48`,
-//! `server.go:117`). The `custom_eye_color` echo is not one of them: it writes
-//! the raw `hue` and `sat` form strings back out (`server.go:163`) and never
-//! parses a float at all.
+//! (`server.go:512`, `robot.go:276`); `encoding/json`'s `float64` encoding,
+//! which carries `net_probe`'s `rttMs` (`server.go:48`, `server.go:117`); and
+//! `encoding/json`'s `float32` encoding, which carries `apiConfig.json`'s
+//! `top_p` and `temp` (`pkg/vars/config.go:38-39`). The `custom_eye_color`
+//! echo is not one of them: it writes the raw `hue` and `sat` form strings
+//! back out (`server.go:163`) and never parses a float at all.
 //!
-//! Rust's own `Display` agrees with neither: it writes `14` as `14`, but also
-//! `1e6` as `1000000` where Go writes `1e+06`, and `serde_json` always emits a
-//! decimal point. Rust's shortest digits also break an exact tie the other way
-//! from Go, which [`Decimal::break_tie_to_even`] undoes.
+//! The two JSON widths are separate functions on purpose. Go does **not**
+//! widen a `float32` to a `float64` before formatting it: `float32Encoder` is
+//! `floatEncoder(32)` (`encoding/json/encode.go:574-577`), so both the format
+//! cutoffs at `encode.go:557` and the `strconv.AppendFloat` call at
+//! `encode.go:561` run at 32 bits. A `top_p` of `0.7` therefore marshals as
+//! `0.7`, not as the `0.699999988079071` a widened `float64` would produce,
+//! and rewriting the config file must reproduce that.
 //!
-//! Both functions are pinned by `docs/phases/P4-sdk-app/gofmt-probe/expected.txt`,
-//! which is the recorded stdout of the Go probe program committed beside it.
+//! Rust's own `Display` agrees with none of them: it writes `14` as `14`, but
+//! also `1e6` as `1000000` where Go writes `1e+06`, and `serde_json` always
+//! emits a decimal point. Rust's shortest digits also break an exact tie the
+//! other way from Go, which [`Decimal::break_tie_to_even`] undoes.
+//!
+//! `go_format_f32` and the `float64` pair are pinned by
+//! `docs/phases/P4-sdk-app/gofmt-probe/expected.txt`; the `float32` JSON pair
+//! is pinned by the `f32json` section of
+//! `docs/phases/P1-robot-connect-auth/go-probe/expected.txt`. Both files are
+//! the recorded stdout of the Go probe program committed beside them.
 
 use std::fmt;
 
@@ -74,6 +86,78 @@ pub fn go_format_f32(x: f32) -> String {
     }
 }
 
+/// Formats `x` the way Go's `encoding/json` marshals a `float32` struct field.
+///
+/// This is `floatEncoder(32)` (`encoding/json/encode.go:540-572`, bound as
+/// `float32Encoder` at `encode.go:574-577`), which is the encoder reflect
+/// picks for a `float32` field such as `apiConfig.json`'s `top_p` and `temp`
+/// (`pkg/vars/config.go:38-39`).
+///
+/// The one thing that separates it from [`go_json_f64`] is that nothing is
+/// widened. Go reads the field as a `float64` (`encode.go:541`) but narrows it
+/// straight back for the cutoff test, which `encode.go:555` calls out in a
+/// comment of its own: "Must use float32 comparisons for underlying float32
+/// value to get precise cutoffs right". The condition at `encode.go:557` is
+/// `float32(abs) < 1e-6 || float32(abs) >= 1e21`, and `encode.go:561` passes a
+/// bit size of 32 to `strconv.AppendFloat`, so the digits are the shortest
+/// ones that round-trip through a `float32`. That is why `0.7` marshals as
+/// `0.7` and not as the `0.699999988079071` its exact `float64` value would
+/// give. Reproducing the widening instead would rewrite every `top_p` and
+/// `temp` in the config file on the first boot after cutover.
+///
+/// Everything else matches the `float64` encoder: plain form when the value is
+/// zero or its magnitude is in `[1e-6, 1e21)` and exponent form otherwise,
+/// with the two-digit negative exponent cleaned up to one digit
+/// (`encode.go:562-569`), and NaN and the infinities rejected
+/// (`encode.go:542-544`).
+pub fn go_json_f32(x: f32) -> Result<String, GoJsonError> {
+    if x.is_nan() {
+        return Err(GoJsonError::Nan);
+    }
+    if x.is_infinite() {
+        return Err(if x.is_sign_positive() {
+            GoJsonError::PosInf
+        } else {
+            GoJsonError::NegInf
+        });
+    }
+    if x == 0.0 {
+        return Ok(if x.is_sign_negative() { "-0" } else { "0" }.to_owned());
+    }
+    let decimal = Decimal::shortest_f32(x);
+    // Go's `float32(abs) < 1e-6 || float32(abs) >= 1e21` (`encode.go:557`),
+    // written as the range the plain form covers. Both bounds are the nearest
+    // `f32` to the written decimal and the test is exclusive below and
+    // inclusive above, so `f32::from_bits(0x3586_37bd)` (the `f32` nearest
+    // 1e-6) takes the plain form while the ulp below it does not.
+    if !(1e-6f32..1e21f32).contains(&x.abs()) {
+        Ok(clean_negative_exponent(decimal.exponent_form()))
+    } else {
+        Ok(decimal.plain_form())
+    }
+}
+
+/// The same rendering as [`go_json_f32`], as a value that can be spliced into a
+/// serialized struct without being re-encoded.
+///
+/// `serde_json` picks the same shortest `f32` digits Go does, but not the same
+/// layout for them. It always writes a decimal point, so a `temp` of `1`
+/// reaches the file as `1.0` where Go writes `1`, and its large-end switch to
+/// exponent form comes far earlier than Go's `1e21`, so `1e20` reaches the file
+/// as `1e+20` where Go writes the twenty-one digit plain form. A [`RawValue`]
+/// field carries [`go_json_f32`]'s bytes through the serializer untouched,
+/// which is what lets the rest of `apiConfig.json` still be built by `serde`.
+///
+/// # Panics
+///
+/// Never. Every string [`go_json_f32`] returns is a JSON number literal, which
+/// is what [`RawValue::from_string`] is checking for; the `expect` is that
+/// invariant written down rather than a case with a behavior of its own.
+pub fn go_json_f32_raw(x: f32) -> Result<Box<RawValue>, GoJsonError> {
+    let rendered = go_json_f32(x)?;
+    Ok(RawValue::from_string(rendered).expect("every go_json_f32 rendering is a JSON number"))
+}
+
 /// Formats `x` the way Go's `encoding/json` marshals a `float64`.
 ///
 /// Plain form when the value is zero or its magnitude is in `[1e-6, 1e21)`, and
@@ -96,18 +180,10 @@ pub fn go_json_f64(x: f64) -> Result<String, GoJsonError> {
     }
     let decimal = Decimal::shortest_f64(x);
     // encoding/json writes exponent form outside [1e-6, 1e21) and plain form
-    // inside it (encoding/json/encode.go, floatEncoder).
+    // inside it (`encoding/json/encode.go:553-560`). At 64 bits the cutoffs
+    // are compared as `float64`.
     if !(1e-6..1e21).contains(&x.abs()) {
-        let mut out = decimal.exponent_form();
-        // encoding/json rewrites a two-digit negative exponent down to one
-        // digit, "clean up e-09 to e-9" (encoding/json/encode.go, floatEncoder).
-        // A positive exponent keeps its padding, so `1e+21` stays as it is.
-        let bytes = out.as_bytes();
-        let n = bytes.len();
-        if n >= 4 && bytes[n - 4] == b'e' && bytes[n - 3] == b'-' && bytes[n - 2] == b'0' {
-            out.remove(n - 2);
-        }
-        Ok(out)
+        Ok(clean_negative_exponent(decimal.exponent_form()))
     } else {
         Ok(decimal.plain_form())
     }
@@ -131,6 +207,26 @@ pub fn go_json_f64(x: f64) -> Result<String, GoJsonError> {
 pub fn go_json_f64_raw(x: f64) -> Result<Box<RawValue>, GoJsonError> {
     let rendered = go_json_f64(x)?;
     Ok(RawValue::from_string(rendered).expect("every go_json_f64 rendering is a JSON number"))
+}
+
+/// Applies `encoding/json`'s exponent cleanup to a rendering in exponent form.
+///
+/// `strconv` pads an exponent to two digits and `encoding/json` undoes that for
+/// a single-digit negative exponent only: "clean up e-09 to e-9"
+/// (`encoding/json/encode.go:562-569`). Go tests the last four bytes for
+/// `e`, `-`, `0`, so a positive exponent keeps its padding and `1e+21` stays as
+/// it is, and a two-digit magnitude such as `1e-10` is left alone because the
+/// byte before the last is not a zero.
+///
+/// Go runs this only when it chose the `'e'` format, and so do both callers:
+/// a plain-form rendering has no exponent for the test to match.
+fn clean_negative_exponent(mut rendered: String) -> String {
+    let bytes = rendered.as_bytes();
+    let n = bytes.len();
+    if n >= 4 && bytes[n - 4] == b'e' && bytes[n - 3] == b'-' && bytes[n - 2] == b'0' {
+        rendered.remove(n - 2);
+    }
+    rendered
 }
 
 /// A finite, non-zero float split into sign, shortest round-trip digits and the
