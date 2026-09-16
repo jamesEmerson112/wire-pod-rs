@@ -22,6 +22,7 @@
 #![deny(clippy::await_holding_lock)]
 
 pub mod clock;
+pub mod config;
 pub mod esn;
 pub mod gofmt;
 pub mod logger;
@@ -38,6 +39,11 @@ pub mod token;
 pub mod wallclock;
 
 pub use crate::clock::{Clock, ManualClock, SystemClock};
+pub use crate::config::{
+    ApiConfig, BatteryConfig, BootConfig, BootOutcome, Env, Extra, GoFormatter, KnowledgeConfig,
+    ServerConfig, SttConfig, WeatherConfig, create_config_from_env, go_marshal, read_config,
+    write_config_to_disk,
+};
 pub use crate::esn::{Esn, Generation};
 pub use crate::gofmt::{
     GoJsonError, go_format_f32, go_json_f32, go_json_f32_raw, go_json_f64, go_json_f64_raw,
