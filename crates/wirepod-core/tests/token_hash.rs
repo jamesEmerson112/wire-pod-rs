@@ -347,6 +347,97 @@ fn a_fresh_pair_verifies_against_itself() {
     }
 }
 
+/// The salt is drawn independently of the token, and every byte of both draws
+/// really moves.
+///
+/// Neither the round trip nor the two-generation test can see this, and its
+/// absence would not be cosmetic. The salt travels in the clear in the second
+/// half of the stored hash (`hashing.go:64-65`), so a build whose salt was the
+/// token bytes themselves would still verify against itself, would still differ
+/// from the next generation, and would write every robot's GUID into
+/// `jdocs.json` beside its own hash. A draw that fell one byte short would
+/// leave a byte of the token or the salt constant instead, which the round trip
+/// also cannot see. The probe's vectors reach neither, because they fix both
+/// inputs and never draw anything.
+///
+/// The constancy check fails on a correct implementation with probability
+/// 256^-15 per byte position. Nothing here prints token material: every
+/// assertion is a bare `assert!` with a fixed message.
+#[test]
+fn the_salt_is_drawn_independently_of_the_token() {
+    const DRAWS: usize = 16;
+
+    let mut tokens: Vec<Vec<u8>> = Vec::with_capacity(DRAWS);
+    let mut salts: Vec<Vec<u8>> = Vec::with_capacity(DRAWS);
+
+    for _ in 0..DRAWS {
+        let pair = create_token_and_hashed_token().expect("the OS random source answers");
+        let raw = STANDARD
+            .decode(&pair.guid_hash)
+            .expect("a freshly drawn stored hash is standard base64");
+        let hashed = new_from_hash(&raw).expect("a freshly drawn stored hash is 48 bytes");
+        let token = STANDARD
+            .decode(&pair.guid)
+            .expect("a freshly drawn GUID is standard base64");
+
+        assert!(
+            hashed.salt != token.as_slice(),
+            "the stored salt equalled the token bytes, so the stored hash carries the robot's \
+             GUID in the clear"
+        );
+        tokens.push(token);
+        salts.push(hashed.salt.to_vec());
+    }
+
+    for position in 0..TOKEN_SIZE {
+        let first = tokens[0][position];
+        assert!(
+            tokens.iter().any(|token| token[position] != first),
+            "token byte {position} was identical in all {DRAWS} draws, so it is not being drawn"
+        );
+    }
+    for position in 0..SALT_SIZE {
+        let first = salts[0][position];
+        assert!(
+            salts.iter().any(|salt| salt[position] != first),
+            "salt byte {position} was identical in all {DRAWS} draws, so it is not being drawn"
+        );
+    }
+}
+
+/// When both arguments are malformed, the caller sees the stored hash's error.
+///
+/// Go decodes `hashedToken` at `hashing.go:91` and returns on its error before
+/// it touches `token` at `:95`. The recording cannot pin that order on its own,
+/// because each of its two undecodable cases pairs one bad argument with one
+/// good one and both happen to fault at the same offset, so either order
+/// reproduces both lines. This test hand-writes no expected value: it compares
+/// three answers of the function against each other.
+#[test]
+fn a_malformed_stored_hash_is_reported_before_a_malformed_token() {
+    // Not a real pair. Forty eight and sixteen zero bytes are valid standard
+    // base64 of the two right lengths, which is all this test needs.
+    let good_hash = STANDARD.encode([0u8; HASHED_RAW_LEN]);
+    let good_token = STANDARD.encode([0u8; TOKEN_SIZE]);
+    // Both are illegal base64, and the offending symbol sits at a different
+    // offset in each, so the two decode errors differ.
+    let bad_hash = "AAAA!AAA";
+    let bad_token = "!AAA";
+
+    let from_the_hash = compare_hash_and_token(bad_hash, &good_token);
+    let from_the_token = compare_hash_and_token(&good_hash, bad_token);
+    assert!(
+        from_the_hash != from_the_token,
+        "the two malformed inputs fault identically, so this test cannot see the order"
+    );
+    assert_eq!(
+        compare_hash_and_token(bad_hash, bad_token),
+        from_the_hash,
+        "Go decodes hashedToken (hashing.go:91) before token (hashing.go:95), so a caller with \
+         two malformed arguments sees the stored hash's error"
+    );
+}
+
 /// Two generations differ, and neither verifies against the other's hash.
 ///
 /// This is what says the salt is redrawn per pair rather than fixed, and it is
@@ -382,12 +473,31 @@ fn two_generations_differ_and_do_not_cross_verify() {
 ///
 /// It is `#[ignore]`d because it reads a live, machine-specific data directory
 /// that no CI runner has, and because the material it loads must never be
-/// printed. Run it deliberately with `cargo test -- --ignored`. It asserts
-/// nothing about the values themselves, reports nothing derived from them, and
-/// its parse failures carry fixed messages so that no fragment of the files can
-/// reach the output. When `APPDATA` is unset or either file is missing it
-/// prints a skip line and passes, because the absence of the live server is not
-/// a failure of this code.
+/// printed. It asserts nothing about the values themselves, reports nothing
+/// derived from them, and its parse failures carry fixed messages so that no
+/// fragment of the files can reach the output.
+///
+/// Exactly one situation is a skip: `APPDATA` is unset or one of the two files
+/// is absent, which is a machine without the live server rather than a failure
+/// of this code. Everything past that point is an assertion. A stored
+/// `vic.AppTokens` document whose ESN has no bot-info entry is therefore a
+/// failure and not a skip, because the association it names is already broken,
+/// and because a regression in `BotInfo::resolve` would otherwise make this
+/// gate vacuous while leaving the hashing itself correct. An absent
+/// `vic.AppTokens` document is a failure for the same reason: a run that
+/// checked no robot has proved nothing.
+///
+/// Run it deliberately, and with `--nocapture`:
+///
+/// ```text
+/// cargo test -p wirepod-core --test token_hash -- --ignored --nocapture
+/// ```
+///
+/// The flag is not optional. libtest captures both stdout and stderr for a test
+/// that passes, so without it the one legitimate skip reaches the operator as
+/// the bare word `ok`, which is exactly what a real pass looks like. The skip
+/// prints a fixed line beginning `SKIP:` and `--nocapture` is what lets it
+/// through.
 #[test]
 #[ignore = "reads the live wire-pod data directory, which only the server's own machine has"]
 fn the_live_stored_hash_verifies_against_the_live_guid() {
@@ -397,7 +507,7 @@ fn the_live_stored_hash_verifies_against_the_live_guid() {
     use serde::Deserialize;
     use wirepod_core::{BotInfo, Esn};
 
-    /// One element of the jdocs file, Go's `botjdoc` (`vars.go:137-141`).
+    /// One element of the jdocs file, Go's `botjdoc` (`vars.go:137-144`).
     #[derive(Deserialize)]
     struct LiveEntry {
         #[serde(default)]
@@ -463,10 +573,10 @@ fn the_live_stored_hash_verifies_against_the_live_guid() {
         let Some(esn) = entry.thing.strip_prefix("vic:") else {
             continue;
         };
-        let Some(target) = info.resolve(&Esn::new(esn)) else {
-            eprintln!("SKIP: a robot has a stored token but no bot-info entry, so it has no GUID");
-            continue;
-        };
+        let target = info.resolve(&Esn::new(esn)).expect(
+            "a robot has a stored vic.AppTokens document but no bot-info entry, so it has no \
+             GUID to check the stored hash against and its association is already broken",
+        );
         let tokens: LiveTokens = serde_json::from_str(&entry.jdoc.json_doc)
             .unwrap_or_else(|_| panic!("a live vic.AppTokens jdoc is not a client-token document"));
 
@@ -485,7 +595,9 @@ fn the_live_stored_hash_verifies_against_the_live_guid() {
         robots_checked += 1;
     }
 
-    if robots_checked == 0 {
-        eprintln!("SKIP: the live jdocs file holds no vic.AppTokens document to check");
-    }
+    assert!(
+        robots_checked > 0,
+        "both live files are present and parsed, but the jdocs file holds no vic.AppTokens \
+         document, so this run proved nothing about hash parity"
+    );
 }

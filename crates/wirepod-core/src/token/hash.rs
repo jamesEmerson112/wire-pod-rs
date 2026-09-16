@@ -22,6 +22,21 @@
 //! section of `docs/phases/P1-robot-connect-auth/go-probe/expected.txt` is the
 //! stdout of the Go program committed beside it, and `tests/token_hash.rs`
 //! drives this module from it.
+//!
+//! Three of `hashing.go`'s items are deliberately not here. `DecodeAndCompare`
+//! (`hashing.go:73-86`) is not ported, because a grep over the whole Go
+//! checkout finds nothing that calls it, and it is in turn the only caller of
+//! `CompareHashAndToken` (`:89`) in this module, so the compare path is dead in
+//! the running Go server. The two live calls at
+//! `vector-cloud/gateway/tokens.go:110` and `:118` reach a separate module's
+//! own copy (`vector-cloud/internal/token/compare_and_hash.go:33`), which runs
+//! on the robot rather than here. The live gate in `tests/token_hash.rs` is
+//! therefore the only thing that exercises this port's copy.
+//! `ClientToken` (`:36-41`) and `ClientTokenManager` (`:43-45`) are the shape
+//! `WriteTokenHash` marshals into the `vic.AppTokens` document (`token.go:102`,
+//! `token.go:109-115`), so they belong to whichever commit ports that function
+//! and should be added to this module rather than written a third time.
+//! `tests/token_hash.rs` carries a private copy of both today.
 
 use std::cmp::Ordering;
 use std::fmt;
@@ -83,16 +98,53 @@ pub enum TokenHashError {
     TokenTooShort,
     /// Either argument was not valid standard base64 (`hashing.go:91-98`).
     /// `at` is the offending input byte, which is what Go's
-    /// `base64.CorruptInputError` prints.
+    /// `base64.CorruptInputError` prints, subject to the second caveat below.
     ///
-    /// The offset agrees with Go's on every case the probe records, all of
-    /// which fault on the first byte. Beyond those the two decoders disagree
-    /// about malformed input in two ways that no valid GUID or hash can reach:
-    /// Go skips carriage returns and newlines anywhere in the input and ignores
-    /// non-zero bits left over in a padded final quantum, where the `base64`
-    /// crate rejects both. Being stricter can only turn a would-be
-    /// [`Self::Mismatch`] into this error, and every caller of
-    /// [`compare_hash_and_token`] logs the error rather than branching on it.
+    /// Two differences from Go live here, and neither can be reached by a GUID
+    /// or a hash that Go's own encoder wrote.
+    ///
+    /// The first is strictness, and it runs the opposite way from hardening.
+    /// Go's `StdEncoding` is not strict: it skips carriage returns and newlines
+    /// anywhere in its input (Go's `encoding/base64/base64.go:340-342`,
+    /// `:357-359`) and discards non-zero bits left over in a padded final
+    /// quantum, because the check that would reject them is guarded by
+    /// `enc.strict` (`base64.go:394-396`, `:401-403`). Go therefore decodes a
+    /// non-canonical spelling of a valid GUID back to that GUID's bytes and
+    /// answers `nil`, where the `base64` crate rejects the spelling and this
+    /// port answers `Decode`.
+    ///
+    /// So the port can turn one of Go's successful verifications into this
+    /// error, and that is the direction worth stating: a GUID Go would have
+    /// authenticated is one this port refuses. It cannot go the other way. The
+    /// four places the two decoders part company over whether to accept an
+    /// input at all (`base64.go:340-342` and `:357-359`, `:394-396` and
+    /// `:401-403`) are all places where Go lets something through that the
+    /// crate does not, so nothing this port accepts is something Go rejected.
+    /// Nothing stored is affected either, because Go's own encoder never writes
+    /// a line break and never leaves non-zero bits in a final quantum, so every
+    /// GUID and hash already on disk decodes identically under both. That makes
+    /// this hardening rather than a live regression, but it is still a
+    /// difference, and it is a candidate numbered deviation for C23 to record in
+    /// `docs/phases/P4-sdk-app/deviations.md`. The two inputs that reproduce it
+    /// are the recording's own sixteen-byte token vector respelled with
+    /// non-zero bits left in its final quantum, and the same vector with a
+    /// newline appended.
+    ///
+    /// The second difference is `at` itself. It agrees with Go whenever the
+    /// fault is a symbol outside the alphabet, wherever in the input that
+    /// symbol sits: the crate's `InvalidByte` offset and Go's
+    /// `CorruptInputError(si - 1)` (`base64.go:346`) are the same number, and
+    /// that is the shape both recorded cases take. It disagrees on every other
+    /// shape, because the crate's three remaining errors do not carry a Go
+    /// offset to begin with. `InvalidLength` counts valid symbols rather than
+    /// naming a position (`base64-0.22.1/src/decode.rs:19-21`), so a five
+    /// symbol input reports one more than Go does. `InvalidPadding` carries no
+    /// position at all and is reported here as zero, where Go names the offset
+    /// it stopped at, and that is the answer for a six symbol input and for one
+    /// missing a padding character. `InvalidLastSymbol` is the non-canonical
+    /// trailing bits above, where Go does not fault at all and so has no offset
+    /// to compare. Nothing branches on the number: every caller of
+    /// [`compare_hash_and_token`] logs the error and goes no further.
     Decode {
         /// The input byte Go's error names.
         at: usize,
@@ -100,6 +152,19 @@ pub enum TokenHashError {
     /// The OS random source refused. Go gets this from `crypto/rand`
     /// (`hashing.go:50-53`, `hashing.go:58-61`) and every call site discards it
     /// with `_` (`jdocs/server.go:135`, `token.go:225`, `token.go:235`).
+    ///
+    /// Go's underscore is safe there in a way the port's would not be here.
+    /// Modern Go documents `crypto/rand.Read` as never returning an error and
+    /// as crashing the program irrecoverably if the system source fails (Go's
+    /// `crypto/rand/rand.go:60-66`, read from the 1.24.4 toolchain installed
+    /// here), and the server's module asks for Go 1.25 or newer
+    /// (`chipper/go.mod:3`), so that is the behaviour it gets: the discarded
+    /// slot is always nil and the Go server never continues past a failed draw.
+    /// Here the variant is a real outcome, and a caller that mirrored Go by
+    /// dropping it would hand the robot an empty GUID and write an empty hash
+    /// into `vic.AppTokens`.
+    /// The commits that port `WriteTokenHash` and the token server must treat
+    /// it as fatal rather than discard it.
     Random(getrandom::Error),
 }
 
@@ -164,8 +229,10 @@ pub fn hash_token(token: &[u8], salt: &[u8]) -> [u8; HASH_SIZE] {
     digest.finalize().into()
 }
 
-/// The body of Go's `CreateTokenAndHashedToken` after its two `rand.Read`
-/// calls (`hashing.go:54-70`).
+/// The deterministic part of Go's `CreateTokenAndHashedToken`, with its two
+/// `rand.Read` calls lifted out (`hashing.go:54-70`). The cited range still
+/// straddles the second draw, because Go encodes the GUID at `:54` before
+/// drawing the salt at `:58`.
 ///
 /// Split out from [`create_token_and_hashed_token`] so that the probe's
 /// recorded vectors, which fix both the token and the salt, drive exactly the
@@ -186,6 +253,14 @@ pub fn encode_token_and_hash(token: &[u8; TOKEN_SIZE], salt: &[u8; SALT_SIZE]) -
 /// The token bytes are drawn before the salt bytes, as in Go, so a seeded
 /// source would hand both implementations the same pair. `crypto/rand` is the
 /// OS source, which `getrandom` is here.
+///
+/// The two draws are independent, and that matters more than it looks. The
+/// salt travels in the clear in the second half of the stored hash
+/// (`hashing.go:64-65`), so a build whose salt came from the token bytes would
+/// still verify against itself, still differ from the next generation, and
+/// would publish every robot's GUID inside `jdocs.json`. The probe's vectors
+/// cannot see that, because they fix both inputs and never reach a draw, so
+/// `tests/token_hash.rs` pins the independence directly.
 pub fn create_token_and_hashed_token() -> Result<TokenPair, TokenHashError> {
     let mut token = [0u8; TOKEN_SIZE];
     getrandom::getrandom(&mut token).map_err(TokenHashError::Random)?;
@@ -239,6 +314,14 @@ pub fn compare_hash_and_token(hashed_token: &str, token: &str) -> Result<(), Tok
 
 /// `base64.StdEncoding.DecodeString` with Go's error shape (`hashing.go:91`,
 /// `hashing.go:95`).
+///
+/// The offset carried out of here is the `base64` crate's. Only `InvalidByte`
+/// and `InvalidLastSymbol` name a position at all; the crate documents
+/// `InvalidLength` as a count of valid symbols rather than an offset
+/// (`base64-0.22.1/src/decode.rs:19-21`) and `InvalidPadding` carries nothing,
+/// which is why it is reported as zero. `InvalidByte` is the one that matches
+/// Go, and it is the only one a recorded case reaches;
+/// [`TokenHashError::Decode`] sets out the rest.
 fn decode_std(text: &str) -> Result<Vec<u8>, TokenHashError> {
     use base64::DecodeError;
 
