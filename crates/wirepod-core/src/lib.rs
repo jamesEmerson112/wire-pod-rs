@@ -40,9 +40,9 @@ pub mod wallclock;
 
 pub use crate::clock::{Clock, ManualClock, SystemClock};
 pub use crate::config::{
-    ApiConfig, BatteryConfig, BootConfig, BootOutcome, Env, Extra, GoFormatter, KnowledgeConfig,
-    ServerConfig, SttConfig, WeatherConfig, create_config_from_env, go_marshal, read_config,
-    write_config_to_disk,
+    ApiConfig, BatteryConfig, BootConfig, BootOutcome, DecodeError, DecodeFault, Env, Extra,
+    GoFormatter, KnowledgeConfig, ServerConfig, SttConfig, WeatherConfig, create_config_from_env,
+    go_marshal, read_config, write_config_to_disk,
 };
 pub use crate::esn::{Esn, Generation};
 pub use crate::gofmt::{

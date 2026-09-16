@@ -21,12 +21,28 @@
 //! ([`crate::gofmt::go_json_f32_raw`]); and every string is written through
 //! [`GoFormatter`], which reproduces `encoding/json`'s HTML escaping.
 //!
+//! **Decoding.** The file is also read back, and a hand-edited one is on-disk
+//! state like any other, so the decoder is Go's rather than `serde`'s.
+//! [`ApiConfig`] and the five nested structs carry hand-written
+//! [`Deserialize`] impls that reproduce `encoding/json`'s object loop
+//! (`decode.go:661-827`): a key matches a tag exactly or, failing that,
+//! case insensitively; a duplicate key is applied on top of what the earlier
+//! one left; a JSON `null` leaves a non-pointer field alone; and a value whose
+//! type does not fit its field records the first such fault and decoding
+//! carries on through every other field (`decode.go:243-247`). That last rule
+//! is why [`ApiConfig::from_json_bytes`]'s error carries a configuration:
+//! Go's `ReadConfig` leaves the partially decoded global in place for the rest
+//! of the process, and `vars.go:234` reads `APIConfig.STT.Service` out of it
+//! immediately afterwards.
+//!
 //! **Forward compatibility.** Go's decoder drops any key its struct does not
 //! name, so a fork-only or newer-version key is lost the moment the Go server
 //! rewrites the file. Every object here carries a `#[serde(flatten)]` map
 //! instead, so an unknown key survives a read-modify-write. That is what makes
 //! rolling back to the Go server safe in one direction and forward in the
 //! other, and it is a deliberate difference from Go rather than a shortfall.
+//! A key that folds to a tag is not unknown: it fills the field, as it does in
+//! Go, and the rewrite spells it Go's way.
 //!
 //! **Boot side effects.** [`read_config`] is not a loader. Go's `ReadConfig`
 //! rewrites the file on every successful boot and can change four things on
@@ -40,10 +56,12 @@
 //! binary is the boot commit's job, not this module's.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
 use serde::de::Error as _;
+use serde::de::{IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use serde_json::value::RawValue;
@@ -108,11 +126,12 @@ pub type Extra = BTreeMap<String, Value>;
 ///
 /// Go's `appendString` is called with `escapeHTML` true from `json.Marshal`,
 /// and escapes five characters that are legal unescaped JSON:
-/// `<`, `>` and `&`, "because they can lead to security holes when
-/// user-controlled strings are rendered into JSON and served to some browsers"
-/// (`encoding/json/encode.go:1000-1004`), and U+2028 and U+2029
+/// `<`, `>` and `&`, which the `htmlSafeSet` test at
+/// `encoding/json/encode.go:984` sends to the `\u` branch "because they can
+/// lead to security holes when user-controlled strings are rendered into JSON
+/// and served to some browsers" (`encode.go:1005-1007`), and U+2028 and U+2029
 /// unconditionally, because they are line terminators in JavaScript
-/// (`encode.go:1028-1042`). `serde_json` escapes none of the five.
+/// (`encode.go:1030-1043`). `serde_json` escapes none of the five.
 ///
 /// This matters here because `apiConfig.json` carries free text that an
 /// operator types: `knowledge.openai_prompt` and `knowledge.robotName` reach
@@ -123,10 +142,10 @@ pub type Extra = BTreeMap<String, Value>;
 /// Everything else the two encoders do agrees, which the escape tables make
 /// checkable rather than assumed: Go writes `\"`, `\\`, `\b`, `\f`, `\n`, `\r`
 /// and `\t` as short forms and every other byte below 0x20 as `\u00XX`
-/// (`encode.go:988-1008`), and `serde_json`'s `ESCAPE` table and
+/// (`encode.go:989-1008`), and `serde_json`'s `ESCAPE` table and
 /// `write_char_escape` name exactly the same set. Neither escapes `/`, and
 /// neither escapes non-ASCII. Go's one remaining case, invalid UTF-8 becoming
-/// `\ufffd` (`encode.go:1021-1027`), cannot arise: a Rust [`String`] is UTF-8
+/// `\ufffd` (`encode.go:1022-1028`), cannot arise: a Rust [`String`] is UTF-8
 /// by construction.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GoFormatter;
@@ -187,61 +206,547 @@ where
     Ok(out)
 }
 
-// ---------------------------------------------------------------------------
-// Decoding tolerances Go has and serde does not
-// ---------------------------------------------------------------------------
-
-/// Reads a field that may be JSON `null`, leaving it at its zero value when it
-/// is.
-///
-/// Go's decoder writes nothing into a non-pointer field for a `null`: the value
-/// keeps whatever it held, which at boot is the zero value, and no error is
-/// reported. `serde` instead refuses a `null` wherever the field is not an
-/// [`Option`], so without this a single `"battery":null` in a hand-edited file
-/// would fail the parse and take knowledge and weather down with it
-/// (`config.go:126-132`) where Go boots normally.
-///
-/// Applied to every field that is not already an [`Option`]. The one that is,
-/// `gohome_percent`, is a Go pointer, where `null` is meaningful rather than
-/// merely tolerated.
-fn null_is_zero<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de> + Default,
-{
-    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
-}
-
-/// Reads a Go `float32` field and re-renders it as the bytes `encoding/json`
-/// would write for it.
-///
-/// The rendering happens on the way in rather than on the way out so that the
-/// [`RawValue`] in the struct is always Go's spelling of some `float32`,
-/// whatever spelling the file used. That is Go's behaviour too: it parses into
-/// a `float32` and marshals from it, so a hand-edited `0.70` comes back as
-/// `0.7` and a `1.0` comes back as `1`.
-///
-/// It also keeps the field usable from a flattened struct. A [`RawValue`] can
-/// only be deserialized by a deserializer that knows its private newtype, and
-/// `serde`'s flatten support buffers every field into an intermediate value
-/// first, so a bare `Box<RawValue>` field beside a `#[serde(flatten)]` map
-/// cannot be read at all. Going through an [`f32`] side-steps that entirely.
-fn go_f32<'de, D>(deserializer: D) -> Result<Box<RawValue>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<f32>::deserialize(deserializer)?.unwrap_or_default();
-    // Only NaN and the infinities fail, and JSON can spell none of them. What
-    // can reach here is a literal so large it parses as an infinity, which Go
-    // rejects too, with `cannot unmarshal number ... into Go value of type
-    // float32`.
-    go_json_f32_raw(value).map_err(D::Error::custom)
-}
-
 /// The rendering of a zero `float32`, which is the Go zero value of `top_p` and
 /// `temp` and therefore what a missing one falls back to.
 fn zero_f32() -> Box<RawValue> {
     go_json_f32_raw(0.0).expect("zero is a finite float32")
+}
+
+// ---------------------------------------------------------------------------
+// Decoding the way `encoding/json` decodes
+// ---------------------------------------------------------------------------
+
+/// What `encoding/json` found where a value was expected.
+///
+/// `literalStore` switches on the first byte of a literal (`decode.go:891`) and
+/// the parser sends objects and arrays to `object` and `array` instead, so
+/// these six are the whole vocabulary a type error is reported in.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Kind {
+    /// `decode.go:892`.
+    Null,
+    /// `decode.go:904`.
+    Bool,
+    /// `decode.go:929`.
+    String,
+    /// `decode.go:966`.
+    Number,
+    /// `decode.go:650`.
+    Object,
+    /// `decode.go:529`.
+    Array,
+}
+
+impl Kind {
+    /// The word Go's `UnmarshalTypeError` carries for it (`decode.go:869-875`,
+    /// `:917`, `:939`, `:984`, `:650`, `:529`).
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Null => "null",
+            Self::Bool => "bool",
+            Self::String => "string",
+            Self::Number => "number",
+            Self::Object => "object",
+            Self::Array => "array",
+        }
+    }
+}
+
+/// The text of a captured value, without the whitespace around it.
+///
+/// `serde_json` hands a [`RawValue`] the exact bytes of the value it scanned,
+/// so the trim has nothing to do on any document this reads; it is here so that
+/// [`kind`] can index the first byte without depending on that.
+fn text(raw: &RawValue) -> &str {
+    raw.get().trim()
+}
+
+/// What `raw` is, which is what Go dispatches on (`decode.go:891`).
+fn kind(raw: &RawValue) -> Kind {
+    match text(raw).as_bytes().first() {
+        Some(b'n') => Kind::Null,
+        Some(b't' | b'f') => Kind::Bool,
+        Some(b'"') => Kind::String,
+        Some(b'{') => Kind::Object,
+        Some(b'[') => Kind::Array,
+        // A captured value is never empty, so the remaining head bytes are a
+        // digit or a minus sign.
+        _ => Kind::Number,
+    }
+}
+
+/// Go's `foldName` for one rune (`fold.go:39-48`): the smallest rune its simple
+/// fold set contains.
+///
+/// Only the two runes below can matter. A folded key matches a folded tag, and
+/// every tag in this file is ASCII, so a key rune that does not fold to ASCII
+/// can never be part of a match; sweeping the whole of Unicode against Go's own
+/// `unicode.SimpleFold` finds exactly two non-ASCII runes that do, U+017F LATIN
+/// SMALL LETTER LONG S and U+212A KELVIN SIGN. Every other non-ASCII rune is
+/// left alone, which is not always its fold but is always a rune that cannot
+/// match.
+fn fold_rune(character: char) -> char {
+    match character {
+        '\u{017f}' => 'S',
+        '\u{212a}' => 'K',
+        other => other,
+    }
+}
+
+/// Go's `foldName` (`fold.go:20-37`): ASCII lower case becomes upper case and
+/// everything else goes through [`fold_rune`].
+fn fold_name(name: &str) -> String {
+    name.chars()
+        .map(|character| {
+            if character.is_ascii() {
+                character.to_ascii_uppercase()
+            } else {
+                fold_rune(character)
+            }
+        })
+        .collect()
+}
+
+/// Go's field lookup (`decode.go:694-697`): the exact tag if there is one, and
+/// otherwise the first tag that folds to the same name.
+///
+/// Go breaks a tie between two fields that fold together by taking the first in
+/// name order and says it does so "for historical reasons"
+/// (`encode.go:1301-1304`). No two tags in this file fold together, which
+/// [`tests::no_two_tags_fold_together`] pins, so the tie-break is unobservable
+/// here and declaration order stands in for it.
+fn resolve(tags: &[&'static str], key: &str) -> Option<&'static str> {
+    if let Some(tag) = tags.iter().find(|tag| **tag == key) {
+        return Some(tag);
+    }
+    let folded = fold_name(key);
+    tags.iter().find(|tag| fold_name(tag) == folded).copied()
+}
+
+/// Why a document did not decode cleanly.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DecodeFault {
+    /// The bytes are not one JSON value. Go finds this in `checkValid` before
+    /// it decodes anything (`decode.go:98-105`), which is why a document with
+    /// this fault leaves the configuration at its zero value where one with a
+    /// [`DecodeFault::Type`] does not.
+    Malformed(String),
+    /// A value's type did not fit the field its key matched. Go records the
+    /// first of these, carries on to the end of the document, and returns it
+    /// (`decode.go:243-247`, `:182`).
+    Type {
+        /// The tag path from the document root, `knowledge.top_p` say, and the
+        /// empty string for the document as a whole.
+        path: String,
+        /// What was there, in `encoding/json`'s vocabulary, with the literal
+        /// appended for a number that does not fit the field, which is the one
+        /// case Go's own message quotes (`decode.go:1000`, `:1016`). A string
+        /// is never quoted, in Go or here, so no key or prompt can reach a log
+        /// line through this.
+        found: String,
+        /// The Go type the field is declared as (`config.go:17-59`), with
+        /// `struct` standing in for the five anonymous ones.
+        want: &'static str,
+    },
+}
+
+impl fmt::Display for DecodeFault {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Malformed(message) => formatter.write_str(message),
+            Self::Type { path, found, want } if path.is_empty() => {
+                write!(formatter, "cannot unmarshal {found} into {want}")
+            }
+            Self::Type { path, found, want } => {
+                write!(
+                    formatter,
+                    "cannot unmarshal {found} into {path} of type {want}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for DecodeFault {}
+
+/// What `json.Unmarshal` left behind when it reported an error
+/// (`decode.go:182`).
+///
+/// Go has no such type: it fills the package global as it goes and returns the
+/// error separately, so the caller reads a half-filled configuration out of the
+/// global whether it looks at the error or not. `ReadConfig` does exactly that
+/// (`config.go:125-132`), and `vars.go:234` reads `APIConfig.STT.Service` out
+/// of it on the next line, so the half-filled value is part of the contract and
+/// the error carries it here.
+#[derive(Debug)]
+pub struct DecodeError {
+    /// Every field that decoded, the ones before the fault and the ones after
+    /// it alike.
+    pub config: ApiConfig,
+    /// The first fault, which is the only one Go keeps.
+    pub fault: DecodeFault,
+}
+
+impl fmt::Display for DecodeError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.fault.fmt(formatter)
+    }
+}
+
+impl std::error::Error for DecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.fault)
+    }
+}
+
+/// The first fault one decode recorded, and nothing after it
+/// (`decode.go:241-247`).
+#[derive(Debug, Default)]
+struct Faults {
+    first: Option<DecodeFault>,
+}
+
+impl Faults {
+    /// Records a type mismatch against the field `prefix` + `tag`.
+    fn save(&mut self, prefix: &str, tag: &str, found: Kind, want: &'static str) {
+        self.save_text(format!("{prefix}{tag}"), found.as_str().to_owned(), want);
+    }
+
+    /// The same for a number whose literal Go puts in the message
+    /// (`decode.go:1000`, `:1016`).
+    fn save_number(&mut self, prefix: &str, tag: &str, literal: &str, want: &'static str) {
+        self.save_text(format!("{prefix}{tag}"), format!("number {literal}"), want);
+    }
+
+    /// The same against the document as a whole (`decode.go:650`).
+    fn save_root(&mut self, found: Kind, want: &'static str) {
+        self.save_text(String::new(), found.as_str().to_owned(), want);
+    }
+
+    /// `decode.go:243-246`: the first call wins and every later one is
+    /// discarded.
+    fn save_text(&mut self, path: String, found: String, want: &'static str) {
+        if self.first.is_none() {
+            self.first = Some(DecodeFault::Type { path, found, want });
+        }
+    }
+}
+
+/// One of Go's six configuration structs, seen the way `encoding/json` sees it.
+///
+/// The trait is what lets one object loop serve all six, which is the point:
+/// the loop is Go's and the structs only say which tags they have and what to
+/// do with a value once a key has been matched to one.
+trait GoObject: Default {
+    /// The tags a key is matched against, in Go's declaration order
+    /// (`decode.go:694-697`).
+    const TAGS: &'static [&'static str];
+    /// The path this object's fields hang off, `"knowledge."` say, and the
+    /// empty string at the root.
+    const PREFIX: &'static str;
+    /// What a fault raised against the object itself calls it.
+    const GO_TYPE: &'static str;
+
+    /// Stores one value into the field `tag` names, the way `d.value(subv)`
+    /// does (`decode.go:762`): `subv` points into the struct, so a second
+    /// occurrence of a key is applied on top of what the first one left rather
+    /// than into a fresh value.
+    ///
+    /// # Errors
+    ///
+    /// Only what a nested object's own parse reports, which is a key or a value
+    /// `serde_json` refuses to represent and never the shape of the document.
+    fn store(
+        &mut self,
+        tag: &'static str,
+        raw: &RawValue,
+        faults: &mut Faults,
+    ) -> serde_json::Result<()>;
+
+    /// The keys Go drops (`decode.go:734-736`) and this keeps.
+    fn unknown(&mut self) -> &mut Extra;
+}
+
+/// Go's object loop (`decode.go:661-827`), over a struct that already exists.
+fn merge_object<'de, T, A>(target: &mut T, mut map: A, faults: &mut Faults) -> Result<(), A::Error>
+where
+    T: GoObject,
+    A: MapAccess<'de>,
+{
+    while let Some(key) = map.next_key::<String>()? {
+        let raw: Box<RawValue> = map.next_value()?;
+        match resolve(T::TAGS, &key) {
+            // `decode.go:698-733`.
+            Some(tag) => target.store(tag, &raw, faults).map_err(A::Error::custom)?,
+            // `decode.go:734-736`, except that Go drops the key and this keeps
+            // it. A value `serde_json` cannot represent, a number outside
+            // `f64` say, is dropped rather than reported, which is what Go does
+            // with every unknown key.
+            None => {
+                if let Ok(value) = serde_json::from_str::<Value>(text(&raw)) {
+                    target.unknown().insert(key, value);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Go's `d.object(v)` for a struct that already exists (`decode.go:599`).
+struct MergeVisitor<'a, T> {
+    target: &'a mut T,
+    faults: &'a mut Faults,
+}
+
+impl<'de, T: GoObject> Visitor<'de> for MergeVisitor<'_, T> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a JSON object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+        merge_object(self.target, map, self.faults)
+    }
+}
+
+/// Runs the object loop over `raw`, which the caller has established is an
+/// object.
+fn merge_into<T: GoObject>(
+    target: &mut T,
+    raw: &RawValue,
+    faults: &mut Faults,
+) -> serde_json::Result<()> {
+    let mut deserializer = serde_json::Deserializer::from_str(text(raw));
+    serde::Deserializer::deserialize_map(&mut deserializer, MergeVisitor { target, faults })
+}
+
+/// Go's `d.value(rv)` at the top of an unmarshal (`decode.go:178`).
+///
+/// An object is decoded; a `null` changes nothing and reports nothing
+/// (`decode.go:899-903`); anything else is a type error against the struct
+/// itself and leaves it at its zero value (`decode.go:650-652`).
+struct RootVisitor<'a, T> {
+    target: &'a mut T,
+    faults: &'a mut Faults,
+}
+
+impl<'de, T: GoObject> Visitor<'de> for RootVisitor<'_, T> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a JSON object")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+        merge_object(self.target, map, self.faults)
+    }
+
+    fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+        self.faults.save_root(Kind::Bool, T::GO_TYPE);
+        Ok(())
+    }
+
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+        self.faults.save_root(Kind::Number, T::GO_TYPE);
+        Ok(())
+    }
+
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+        self.faults.save_root(Kind::Number, T::GO_TYPE);
+        Ok(())
+    }
+
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+        self.faults.save_root(Kind::Number, T::GO_TYPE);
+        Ok(())
+    }
+
+    fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Self::Value, E> {
+        self.faults.save_root(Kind::String, T::GO_TYPE);
+        Ok(())
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        // Go's `array` skips the whole value before it returns
+        // (`decode.go:529-530`), and `serde` needs the same: an element left
+        // unread is a parse still in the middle of the array.
+        while seq.next_element::<IgnoredAny>()?.is_some() {}
+        self.faults.save_root(Kind::Array, T::GO_TYPE);
+        Ok(())
+    }
+}
+
+/// One `json.Unmarshal` into a fresh value: what decoded, and the first fault.
+///
+/// It exists because a [`Deserialize`] impl can return a value or an error and
+/// Go's decoder produces both at once. The public impls below are this one with
+/// the fault dropped, and [`ApiConfig::from_json_bytes`] is the entry point that
+/// keeps it.
+struct Decoded<T> {
+    value: T,
+    fault: Option<DecodeFault>,
+}
+
+impl<'de, T: GoObject> Deserialize<'de> for Decoded<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut value = T::default();
+        let mut faults = Faults::default();
+        deserializer.deserialize_any(RootVisitor {
+            target: &mut value,
+            faults: &mut faults,
+        })?;
+        Ok(Self {
+            value,
+            fault: faults.first,
+        })
+    }
+}
+
+// The five field writers. Each is one arm of Go's `literalStore`, and each
+// leaves the field alone for a `null` the way Go does (`decode.go:899-903`).
+
+/// `decode.go:904-927`.
+fn store_bool(
+    slot: &mut bool,
+    raw: &RawValue,
+    prefix: &str,
+    tag: &'static str,
+    faults: &mut Faults,
+) {
+    match kind(raw) {
+        Kind::Null => {}
+        Kind::Bool => *slot = text(raw) == "true",
+        found => faults.save(prefix, tag, found, "bool"),
+    }
+}
+
+/// `decode.go:929-964`.
+fn store_string(
+    slot: &mut String,
+    raw: &RawValue,
+    prefix: &str,
+    tag: &'static str,
+    faults: &mut Faults,
+) {
+    match kind(raw) {
+        Kind::Null => {}
+        Kind::String => match serde_json::from_str::<String>(text(raw)) {
+            Ok(value) => *slot = value,
+            // Go's `unquoteBytes` replaces an escape it cannot decode, a lone
+            // surrogate say, with U+FFFD (`decode.go:930`); `serde_json`
+            // refuses it, so the field keeps what it had and the fault stands
+            // in for Go's replacement.
+            Err(_) => faults.save(prefix, tag, Kind::String, "string"),
+        },
+        found => faults.save(prefix, tag, found, "string"),
+    }
+}
+
+/// `decode.go:1013-1019`.
+///
+/// The literal is parsed once, directly to an [`f32`], which is what
+/// `strconv.ParseFloat(s, 32)` is: going through an [`f64`] first would round
+/// twice and put a literal with sixteen or more significant digits one unit in
+/// the last place away from Go's answer. The rendering happens here rather than
+/// on the way out so the field always holds Go's spelling of some `float32`,
+/// whatever spelling the file used, which is Go's behaviour too: a hand-edited
+/// `0.70` comes back as `0.7` and a `1.0` comes back as `1`.
+fn store_f32(
+    slot: &mut Box<RawValue>,
+    raw: &RawValue,
+    prefix: &str,
+    tag: &'static str,
+    faults: &mut Faults,
+) {
+    match kind(raw) {
+        Kind::Null => {}
+        Kind::Number => {
+            let literal = text(raw);
+            match literal.parse::<f32>() {
+                // Rust answers an infinity where `strconv.ParseFloat` answers
+                // one and an `ErrRange` beside it, and Go turns that range
+                // error into the same type error every other misfit gets.
+                Ok(value) if value.is_finite() => {
+                    *slot = go_json_f32_raw(value).expect("a finite float32 renders");
+                }
+                _ => faults.save_number(prefix, tag, literal, "float32"),
+            }
+        }
+        found => faults.save(prefix, tag, found, "float32"),
+    }
+}
+
+/// `decode.go:997-1003`, reached through the pointer `indirect` walks.
+///
+/// The pointer is the reason this is not [`store_bool`]'s shape. `indirect`
+/// allocates every pointer on the way to the value it is about to store
+/// (`decode.go:476-478`), so a field that then takes a type error is left
+/// pointing at a zero rather than at nothing; for a `null` it stops at the
+/// pointer instead (`decode.go:465-467`) and `literalStore` sets it back to nil
+/// (`decode.go:899-901`), whatever the field held before.
+fn store_gohome(
+    slot: &mut Option<i32>,
+    raw: &RawValue,
+    prefix: &str,
+    tag: &'static str,
+    faults: &mut Faults,
+) {
+    match kind(raw) {
+        Kind::Null => *slot = None,
+        Kind::Number => {
+            let literal = text(raw);
+            // `strconv.ParseInt(item, 10, 64)`, which refuses `25.0` and `1e2`
+            // as firmly as it refuses a word.
+            match literal
+                .parse::<i64>()
+                .ok()
+                .and_then(|value| i32::try_from(value).ok())
+            {
+                Some(value) => *slot = Some(value),
+                None => {
+                    allocate(slot);
+                    faults.save_number(prefix, tag, literal, "int");
+                }
+            }
+        }
+        found => {
+            allocate(slot);
+            faults.save(prefix, tag, found, "int");
+        }
+    }
+}
+
+/// `decode.go:476-478`: the pointer a value is about to be stored through is
+/// allocated before the store is attempted, and a failed store leaves it.
+fn allocate(slot: &mut Option<i32>) {
+    if slot.is_none() {
+        *slot = Some(0);
+    }
+}
+
+/// One nested object, which Go merges into whatever the field already holds
+/// rather than replacing (`decode.go:599-827` writes through a `subv` that
+/// points into the struct).
+fn store_object<T: GoObject>(
+    target: &mut T,
+    raw: &RawValue,
+    prefix: &str,
+    tag: &'static str,
+    faults: &mut Faults,
+) -> serde_json::Result<()> {
+    match kind(raw) {
+        Kind::Null => Ok(()),
+        Kind::Object => merge_into(target, raw, faults),
+        found => {
+            faults.save(prefix, tag, found, T::GO_TYPE);
+            Ok(())
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -254,33 +759,28 @@ fn zero_f32() -> Box<RawValue> {
 /// marshals in and therefore the order of the file on disk. The names are Go's
 /// tags. Both are a contract: the web UI reads this document, and so does the
 /// Go server after a rollback.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
-#[serde(default)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct ApiConfig {
     /// `config.go:18-23`.
-    #[serde(deserialize_with = "null_is_zero")]
     pub weather: WeatherConfig,
     /// `config.go:24-42`.
-    #[serde(deserialize_with = "null_is_zero")]
     pub knowledge: KnowledgeConfig,
     /// `config.go:43-46`. The tag is upper case where every other one is lower
     /// case, which is Go's inconsistency and not a typo here.
-    #[serde(rename = "STT", deserialize_with = "null_is_zero")]
+    #[serde(rename = "STT")]
     pub stt: SttConfig,
     /// `config.go:47-51`.
-    #[serde(deserialize_with = "null_is_zero")]
     pub server: ServerConfig,
     /// `config.go:52-56`.
-    #[serde(deserialize_with = "null_is_zero")]
     pub battery: BatteryConfig,
     /// Go's `HasReadFromEnv` (`config.go:57`). Set once, either by
     /// [`ApiConfig::from_env`] seeding a fresh file (`config.go:97`) or by the
     /// port-change rule in [`read_config`] (`config.go:137-142`).
-    #[serde(rename = "hasreadfromenv", deserialize_with = "null_is_zero")]
+    #[serde(rename = "hasreadfromenv")]
     pub has_read_from_env: bool,
     /// Go's `PastInitialSetup` (`config.go:58`), which the web UI reads to
     /// decide whether to show the first-run wizard.
-    #[serde(rename = "pastinitialsetup", deserialize_with = "null_is_zero")]
+    #[serde(rename = "pastinitialsetup")]
     pub past_initial_setup: bool,
     /// Top-level keys this struct does not name.
     #[serde(flatten)]
@@ -288,21 +788,16 @@ pub struct ApiConfig {
 }
 
 /// Go's anonymous weather struct (`config.go:18-23`).
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
-#[serde(default)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct WeatherConfig {
     /// `config.go:19`.
-    #[serde(deserialize_with = "null_is_zero")]
     pub enable: bool,
     /// `config.go:20`.
-    #[serde(deserialize_with = "null_is_zero")]
     pub provider: String,
     /// `config.go:21`. An API key: never log this, and never put it in a test
     /// fixture.
-    #[serde(deserialize_with = "null_is_zero")]
     pub key: String,
     /// `config.go:22`.
-    #[serde(deserialize_with = "null_is_zero")]
     pub unit: String,
     /// Keys inside `weather` this struct does not name.
     #[serde(flatten)]
@@ -317,62 +812,46 @@ pub struct WeatherConfig {
 /// and [`KnowledgeConfig::temp`] read them back as numbers and
 /// [`KnowledgeConfig::set_top_p`] and [`KnowledgeConfig::set_temp`] are the
 /// only way to change them.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(default)]
+#[derive(Clone, Debug, Serialize)]
 pub struct KnowledgeConfig {
     /// `config.go:25`.
-    #[serde(deserialize_with = "null_is_zero")]
     pub enable: bool,
     /// `config.go:26`.
-    #[serde(deserialize_with = "null_is_zero")]
     pub provider: String,
     /// `config.go:27`. The LLM API key: never log this, and never put it in a
     /// test fixture.
-    #[serde(deserialize_with = "null_is_zero")]
     pub key: String,
     /// `config.go:28`, the Houndify client ID, which only a `houndify`
     /// provider ever fills (`config.go:80-82`).
-    #[serde(deserialize_with = "null_is_zero")]
     pub id: String,
     /// `config.go:29`. [`read_config`] rewrites one value of this field
     /// (`config.go:144-147`).
-    #[serde(deserialize_with = "null_is_zero")]
     pub model: String,
     /// `config.go:30`.
-    #[serde(deserialize_with = "null_is_zero")]
     pub intentgraph: bool,
     /// `config.go:31`. The one camel-case tag in the file.
-    #[serde(rename = "robotName", deserialize_with = "null_is_zero")]
+    #[serde(rename = "robotName")]
     pub robot_name: String,
     /// `config.go:32`. Free text an operator types, which is the field that
     /// makes [`GoFormatter`]'s HTML escaping load-bearing.
-    #[serde(deserialize_with = "null_is_zero")]
     pub openai_prompt: String,
     /// `config.go:33`.
-    #[serde(deserialize_with = "null_is_zero")]
     pub openai_voice: String,
     /// `config.go:34`.
-    #[serde(deserialize_with = "null_is_zero")]
     pub openai_voice_with_english: bool,
     /// `config.go:35`.
-    #[serde(deserialize_with = "null_is_zero")]
     pub save_chat: bool,
     /// `config.go:36`.
-    #[serde(deserialize_with = "null_is_zero")]
     pub commands_enable: bool,
     /// `config.go:37`.
-    #[serde(deserialize_with = "null_is_zero")]
     pub endpoint: String,
     /// Go's `TopP float32` (`config.go:38`).
-    #[serde(deserialize_with = "go_f32")]
     top_p: Box<RawValue>,
     /// Go's `Temperature float32` (`config.go:39`), tagged `temp`.
-    #[serde(deserialize_with = "go_f32")]
     temp: Box<RawValue>,
     /// `config.go:41`. Go's comment above it is the whole vocabulary:
     /// "for gpt-5*/o* reasoning models: none|low|medium|high|xhigh
     /// (`""` = medium)" (`config.go:40`).
-    #[serde(deserialize_with = "null_is_zero")]
     pub reasoning_effort: String,
     /// Keys inside `knowledge` this struct does not name.
     #[serde(flatten)]
@@ -475,16 +954,13 @@ fn parse_rendered(raw: &RawValue) -> f32 {
 ///
 /// Go's field is `Service` and its tag is `provider`; the tag wins here,
 /// because the tag is what the file and the web UI use.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
-#[serde(default)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct SttConfig {
     /// Go's `Service` (`config.go:44`). The one setting the shell still
     /// controls, through `STT_SERVICE` (`config.go:133-136`).
-    #[serde(deserialize_with = "null_is_zero")]
     pub provider: String,
     /// `config.go:45`, filled only for the two services that have models per
     /// language (`config.go:106-108`).
-    #[serde(deserialize_with = "null_is_zero")]
     pub language: String,
     /// Keys inside `STT` this struct does not name.
     #[serde(flatten)]
@@ -492,16 +968,13 @@ pub struct SttConfig {
 }
 
 /// Go's anonymous server struct (`config.go:47-51`).
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
-#[serde(default)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct ServerConfig {
     /// `config.go:49`, with Go's comment at `:48`: "false for ip, true for
     /// escape pod".
-    #[serde(deserialize_with = "null_is_zero")]
     pub epconfig: bool,
     /// `config.go:50`. A string, not a number, because that is how Go declares
     /// it and how it is compared against `DDL_RPC_PORT` (`config.go:138`).
-    #[serde(deserialize_with = "null_is_zero")]
     pub port: String,
     /// Keys inside `server` this struct does not name.
     #[serde(flatten)]
@@ -509,8 +982,7 @@ pub struct ServerConfig {
 }
 
 /// Go's anonymous battery struct (`config.go:52-56`).
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
-#[serde(default)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct BatteryConfig {
     /// Go's `GoHomePercent *int` (`config.go:55`), with no `omitempty`, so an
     /// absent value is written as `null` rather than dropped.
@@ -522,13 +994,274 @@ pub struct BatteryConfig {
     ///
     /// An [`i32`] where Go's `int` is 64 bits on every platform this runs on. A
     /// percentage does not need the range, and the narrowing is visible only
-    /// for a value outside it: one already in the file fails the parse, and one
-    /// in `GOHOME_BATTERY_PERCENT` is ignored the way an unparseable one is
+    /// for a value outside it: one already in the file is the type error Go
+    /// gives a value outside `int64` instead, and one in
+    /// `GOHOME_BATTERY_PERCENT` is ignored the way an unparseable one is
     /// (`config.go:87-91`), leaving the default.
     pub gohome_percent: Option<i32>,
     /// Keys inside `battery` this struct does not name.
     #[serde(flatten)]
     pub extra: Extra,
+}
+
+// ---------------------------------------------------------------------------
+// Go's object loop, struct by struct
+// ---------------------------------------------------------------------------
+
+// Each pair below is one struct's half of `encoding/json`'s decoder: the tags
+// it answers to, and what one value does to one field. The loop itself is
+// `merge_object`, which is Go's and is shared.
+//
+// Every one of the six [`Deserialize`] impls is [`Decoded`] with the fault
+// dropped, because a `Deserialize` impl can hand back a value or an error and
+// Go's decoder produces both at once. [`ApiConfig::from_json_bytes`] is the
+// entry point that keeps the fault, and it is the one the boot path uses.
+//
+// All six read each value as a [`RawValue`], which only `serde_json` can
+// produce, so all six decode `apiConfig.json` and nothing else.
+
+impl GoObject for ApiConfig {
+    const TAGS: &'static [&'static str] = &[
+        "weather",
+        "knowledge",
+        "STT",
+        "server",
+        "battery",
+        "hasreadfromenv",
+        "pastinitialsetup",
+    ];
+    const PREFIX: &'static str = "";
+    const GO_TYPE: &'static str = "apiConfig";
+
+    fn store(
+        &mut self,
+        tag: &'static str,
+        raw: &RawValue,
+        faults: &mut Faults,
+    ) -> serde_json::Result<()> {
+        match tag {
+            "weather" => store_object(&mut self.weather, raw, Self::PREFIX, tag, faults),
+            "knowledge" => store_object(&mut self.knowledge, raw, Self::PREFIX, tag, faults),
+            "STT" => store_object(&mut self.stt, raw, Self::PREFIX, tag, faults),
+            "server" => store_object(&mut self.server, raw, Self::PREFIX, tag, faults),
+            "battery" => store_object(&mut self.battery, raw, Self::PREFIX, tag, faults),
+            "hasreadfromenv" => {
+                store_bool(&mut self.has_read_from_env, raw, Self::PREFIX, tag, faults);
+                Ok(())
+            }
+            "pastinitialsetup" => {
+                store_bool(&mut self.past_initial_setup, raw, Self::PREFIX, tag, faults);
+                Ok(())
+            }
+            // Unreachable: `resolve` only ever answers with a tag out of
+            // `TAGS`. A tag it does not place here would behave as an unknown
+            // key does, which the round-trip test would see.
+            _ => Ok(()),
+        }
+    }
+
+    fn unknown(&mut self) -> &mut Extra {
+        &mut self.extra
+    }
+}
+
+impl<'de> Deserialize<'de> for ApiConfig {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Decoded::<Self>::deserialize(deserializer)?.value)
+    }
+}
+
+impl GoObject for WeatherConfig {
+    const TAGS: &'static [&'static str] = &["enable", "provider", "key", "unit"];
+    const PREFIX: &'static str = "weather.";
+    const GO_TYPE: &'static str = "struct";
+
+    fn store(
+        &mut self,
+        tag: &'static str,
+        raw: &RawValue,
+        faults: &mut Faults,
+    ) -> serde_json::Result<()> {
+        match tag {
+            "enable" => store_bool(&mut self.enable, raw, Self::PREFIX, tag, faults),
+            "provider" => store_string(&mut self.provider, raw, Self::PREFIX, tag, faults),
+            "key" => store_string(&mut self.key, raw, Self::PREFIX, tag, faults),
+            "unit" => store_string(&mut self.unit, raw, Self::PREFIX, tag, faults),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn unknown(&mut self) -> &mut Extra {
+        &mut self.extra
+    }
+}
+
+impl<'de> Deserialize<'de> for WeatherConfig {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Decoded::<Self>::deserialize(deserializer)?.value)
+    }
+}
+
+impl GoObject for KnowledgeConfig {
+    const TAGS: &'static [&'static str] = &[
+        "enable",
+        "provider",
+        "key",
+        "id",
+        "model",
+        "intentgraph",
+        "robotName",
+        "openai_prompt",
+        "openai_voice",
+        "openai_voice_with_english",
+        "save_chat",
+        "commands_enable",
+        "endpoint",
+        "top_p",
+        "temp",
+        "reasoning_effort",
+    ];
+    const PREFIX: &'static str = "knowledge.";
+    const GO_TYPE: &'static str = "struct";
+
+    fn store(
+        &mut self,
+        tag: &'static str,
+        raw: &RawValue,
+        faults: &mut Faults,
+    ) -> serde_json::Result<()> {
+        match tag {
+            "enable" => store_bool(&mut self.enable, raw, Self::PREFIX, tag, faults),
+            "provider" => store_string(&mut self.provider, raw, Self::PREFIX, tag, faults),
+            "key" => store_string(&mut self.key, raw, Self::PREFIX, tag, faults),
+            "id" => store_string(&mut self.id, raw, Self::PREFIX, tag, faults),
+            "model" => store_string(&mut self.model, raw, Self::PREFIX, tag, faults),
+            "intentgraph" => store_bool(&mut self.intentgraph, raw, Self::PREFIX, tag, faults),
+            "robotName" => store_string(&mut self.robot_name, raw, Self::PREFIX, tag, faults),
+            "openai_prompt" => {
+                store_string(&mut self.openai_prompt, raw, Self::PREFIX, tag, faults);
+            }
+            "openai_voice" => store_string(&mut self.openai_voice, raw, Self::PREFIX, tag, faults),
+            "openai_voice_with_english" => store_bool(
+                &mut self.openai_voice_with_english,
+                raw,
+                Self::PREFIX,
+                tag,
+                faults,
+            ),
+            "save_chat" => store_bool(&mut self.save_chat, raw, Self::PREFIX, tag, faults),
+            "commands_enable" => {
+                store_bool(&mut self.commands_enable, raw, Self::PREFIX, tag, faults);
+            }
+            "endpoint" => store_string(&mut self.endpoint, raw, Self::PREFIX, tag, faults),
+            "top_p" => store_f32(&mut self.top_p, raw, Self::PREFIX, tag, faults),
+            "temp" => store_f32(&mut self.temp, raw, Self::PREFIX, tag, faults),
+            "reasoning_effort" => {
+                store_string(&mut self.reasoning_effort, raw, Self::PREFIX, tag, faults);
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn unknown(&mut self) -> &mut Extra {
+        &mut self.extra
+    }
+}
+
+impl<'de> Deserialize<'de> for KnowledgeConfig {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Decoded::<Self>::deserialize(deserializer)?.value)
+    }
+}
+
+impl GoObject for SttConfig {
+    const TAGS: &'static [&'static str] = &["provider", "language"];
+    const PREFIX: &'static str = "STT.";
+    const GO_TYPE: &'static str = "struct";
+
+    fn store(
+        &mut self,
+        tag: &'static str,
+        raw: &RawValue,
+        faults: &mut Faults,
+    ) -> serde_json::Result<()> {
+        match tag {
+            "provider" => store_string(&mut self.provider, raw, Self::PREFIX, tag, faults),
+            "language" => store_string(&mut self.language, raw, Self::PREFIX, tag, faults),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn unknown(&mut self) -> &mut Extra {
+        &mut self.extra
+    }
+}
+
+impl<'de> Deserialize<'de> for SttConfig {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Decoded::<Self>::deserialize(deserializer)?.value)
+    }
+}
+
+impl GoObject for ServerConfig {
+    const TAGS: &'static [&'static str] = &["epconfig", "port"];
+    const PREFIX: &'static str = "server.";
+    const GO_TYPE: &'static str = "struct";
+
+    fn store(
+        &mut self,
+        tag: &'static str,
+        raw: &RawValue,
+        faults: &mut Faults,
+    ) -> serde_json::Result<()> {
+        match tag {
+            "epconfig" => store_bool(&mut self.epconfig, raw, Self::PREFIX, tag, faults),
+            "port" => store_string(&mut self.port, raw, Self::PREFIX, tag, faults),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn unknown(&mut self) -> &mut Extra {
+        &mut self.extra
+    }
+}
+
+impl<'de> Deserialize<'de> for ServerConfig {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Decoded::<Self>::deserialize(deserializer)?.value)
+    }
+}
+
+impl GoObject for BatteryConfig {
+    const TAGS: &'static [&'static str] = &["gohome_percent"];
+    const PREFIX: &'static str = "battery.";
+    const GO_TYPE: &'static str = "struct";
+
+    fn store(
+        &mut self,
+        tag: &'static str,
+        raw: &RawValue,
+        faults: &mut Faults,
+    ) -> serde_json::Result<()> {
+        if tag == "gohome_percent" {
+            store_gohome(&mut self.gohome_percent, raw, Self::PREFIX, tag, faults);
+        }
+        Ok(())
+    }
+
+    fn unknown(&mut self) -> &mut Extra {
+        &mut self.extra
+    }
+}
+
+impl<'de> Deserialize<'de> for BatteryConfig {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Decoded::<Self>::deserialize(deserializer)?.value)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -570,7 +1303,8 @@ pub struct Env {
     /// `config.go:87`, parsed with `strconv.Atoi` at `:88`. An unparseable
     /// value is ignored rather than reported.
     pub gohome_battery_percent: String,
-    /// `config.go:105` and `:106` in `WriteSTT`, and `config.go:134` in
+    /// Read four times in Go: once at `config.go:105` and twice on
+    /// `config.go:106` in `WriteSTT`, and again at `config.go:134` in
     /// `ReadConfig`, which is the comparison that makes this the only setting
     /// the shell still controls.
     pub stt_service: String,
@@ -653,12 +1387,34 @@ impl ApiConfig {
     /// # Errors
     ///
     /// Anything malformed, and anything whose type does not fit the field.
-    /// Where Go keeps the fields that decoded before the first type error and
-    /// carries on, this keeps nothing; both then take the same failure path
-    /// (`config.go:126-132`), which writes nothing and disables knowledge and
-    /// weather, so the difference is confined to that boot's memory.
-    pub fn from_json_bytes(bytes: &[u8]) -> serde_json::Result<Self> {
-        serde_json::from_slice(bytes)
+    /// The two are not the same failure. Go checks the whole document before it
+    /// decodes anything (`decode.go:98-105`), so malformed bytes leave the
+    /// configuration at its zero value; a type error is recorded and decoding
+    /// carries on to the end of the document (`decode.go:243-247`), so every
+    /// other field is filled. [`DecodeError`] carries both the fault and
+    /// whatever decoded, because Go's caller reads the half-filled global
+    /// regardless of the error and `vars.go:234` does so on the line after
+    /// `ReadConfig` returns.
+    // The error is a whole configuration plus a fault, which is what the rule
+    // above asks of it, so it is one machine word or two larger than the `Ok`
+    // variant beside it. Boxing it would move the same bytes to the heap and
+    // make the shape harder to read for nothing.
+    #[allow(clippy::result_large_err)]
+    pub fn from_json_bytes(bytes: &[u8]) -> Result<Self, DecodeError> {
+        match serde_json::from_slice::<Decoded<Self>>(bytes) {
+            Ok(Decoded { value, fault: None }) => Ok(value),
+            Ok(Decoded {
+                value,
+                fault: Some(fault),
+            }) => Err(DecodeError {
+                config: value,
+                fault,
+            }),
+            Err(error) => Err(DecodeError {
+                config: Self::default(),
+                fault: DecodeFault::Malformed(error.to_string()),
+            }),
+        }
     }
 
     /// Go's `WriteSTT` (`config.go:102-109`).
@@ -813,8 +1569,10 @@ pub enum BootOutcome {
     /// was written.
     ReadFailed(io::Error),
     /// The file was read and was not the JSON this struct describes
-    /// (`config.go:125-132`). Nothing was written.
-    ParseFailed(serde_json::Error),
+    /// (`config.go:125-132`). Nothing was written, and whatever did decode is
+    /// in [`BootConfig::config`] with knowledge and weather off, which is what
+    /// Go leaves in its global.
+    ParseFailed(DecodeFault),
 }
 
 /// The configuration [`read_config`] produced and what happened on the way.
@@ -878,16 +1636,20 @@ pub async fn read_config(env: &Env, dir: &DataDir) -> BootConfig {
         }
         OnDisk::Bytes(bytes) => match ApiConfig::from_json_bytes(&bytes) {
             // `config.go:126-132`.
-            Err(error) => {
+            Err(DecodeError { mut config, fault }) => {
                 tracing::debug!(comp = "", "Failed to unmarshal API config JSON");
-                // `config.go:130`. Unlike Go's `UnmarshalTypeError`, a serde
-                // message can quote the offending scalar. The only scalars that
-                // can be quoted are ones whose declared type is not a string,
-                // so neither `key` can reach a log line this way.
-                tracing::debug!(comp = "", "{error}");
+                // `config.go:130`. The text is this module's rather than Go's
+                // `*json.UnmarshalTypeError`, but like Go's it quotes no string
+                // and only ever a number literal, so no key can reach a log
+                // line this way.
+                tracing::debug!(comp = "", "{fault}");
+                // `config.go:127-128`, over whatever decoded rather than over a
+                // zero value: Go's global holds every field that decoded and
+                // `vars.go:234` reads one of them.
+                disable(&mut config);
                 BootConfig {
-                    config: disabled(),
-                    outcome: BootOutcome::ParseFailed(error),
+                    config,
+                    outcome: BootOutcome::ParseFailed(fault),
                 }
             }
             Ok(mut config) => {
@@ -928,17 +1690,23 @@ pub async fn read_config(env: &Env, dir: &DataDir) -> BootConfig {
     }
 }
 
-/// The in-memory result of either failure arm (`config.go:119-120`,
-/// `:127-128`).
+/// What either failure arm does to the configuration in memory
+/// (`config.go:119-120`, `:127-128`).
 ///
-/// Go assigns `false` into a global that is already false at boot, so the
-/// assignments have no effect there either; they are written out because they
-/// are the whole of what Go does before returning, and because a later commit
-/// that gives `ReadConfig` a non-zero starting point would need them.
-fn disabled() -> ApiConfig {
-    let mut config = ApiConfig::default();
+/// On the read-failure arm nothing has decoded and Go is assigning `false` into
+/// a global that is already false, so the assignments have no effect there. On
+/// the parse-failure arm they do: the global holds every field the document
+/// filled before and after the fault, and either `enable` may be one of them.
+fn disable(config: &mut ApiConfig) {
     config.knowledge.enable = false;
     config.weather.enable = false;
+}
+
+/// The zero configuration with both of those off, which is what the
+/// read-failure arm leaves behind (`config.go:119-120`).
+fn disabled() -> ApiConfig {
+    let mut config = ApiConfig::default();
+    disable(&mut config);
     config
 }
 
@@ -1001,6 +1769,65 @@ mod tests {
             ],
             "the environment variables config.go reads moved"
         );
+    }
+
+    /// Go breaks a tie between two fields that fold together by taking the
+    /// first in name order (`encode.go:1301-1304`), and [`resolve`] takes the
+    /// first in declaration order instead. The two agree only while no two tags
+    /// in one object fold together, which is what this checks.
+    #[test]
+    fn no_two_tags_fold_together() {
+        for tags in [
+            ApiConfig::TAGS,
+            WeatherConfig::TAGS,
+            KnowledgeConfig::TAGS,
+            SttConfig::TAGS,
+            ServerConfig::TAGS,
+            BatteryConfig::TAGS,
+        ] {
+            let mut folded: Vec<String> = tags.iter().map(|tag| fold_name(tag)).collect();
+            folded.sort();
+            let count = folded.len();
+            folded.dedup();
+            assert_eq!(
+                folded.len(),
+                count,
+                "two tags in {tags:?} fold to the same name, so Go's tie-break is observable"
+            );
+        }
+    }
+
+    /// Go's fold is an ASCII upper-casing plus the two runes whose simple fold
+    /// set reaches ASCII, and nothing else may move: a fold that also
+    /// lower-cased, or that normalised an accent, would match keys Go leaves
+    /// alone.
+    #[test]
+    fn the_fold_is_gos() {
+        assert_eq!(fold_name("robotName"), "ROBOTNAME");
+        assert_eq!(fold_name("top_p"), "TOP_P");
+        assert_eq!(fold_name("STT"), "STT");
+        // `fold.go:23-30`: only a-z moves in the ASCII range.
+        assert_eq!(fold_name("a_1-Z{"), "A_1-Z{");
+        // `fold.go:39-48`, and the sweep of Unicode that found exactly these.
+        assert_eq!(fold_name("\u{017f}tt"), "STT");
+        assert_eq!(fold_name("\u{212a}ey"), "KEY");
+        // Every other non-ASCII rune is left as it is, which cannot match an
+        // ASCII tag either way.
+        assert_eq!(fold_name("\u{00e9}"), "\u{00e9}");
+    }
+
+    /// The lookup Go does per key: the exact tag first, and the folded one only
+    /// when there is no exact match (`decode.go:694-697`).
+    #[test]
+    fn a_key_finds_its_field_exactly_or_by_fold() {
+        assert_eq!(resolve(ApiConfig::TAGS, "weather"), Some("weather"));
+        assert_eq!(resolve(ApiConfig::TAGS, "WEATHER"), Some("weather"));
+        assert_eq!(resolve(ApiConfig::TAGS, "stt"), Some("STT"));
+        assert_eq!(resolve(ApiConfig::TAGS, "STT"), Some("STT"));
+        assert_eq!(resolve(ApiConfig::TAGS, "\u{017f}tt"), Some("STT"));
+        assert_eq!(resolve(ApiConfig::TAGS, "fork_only"), None);
+        assert_eq!(resolve(ApiConfig::TAGS, ""), None);
+        assert_eq!(resolve(KnowledgeConfig::TAGS, "TOP_P"), Some("top_p"));
     }
 
     /// [`parse_rendered`]'s `expect` rests on the field never holding anything

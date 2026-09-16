@@ -1,4 +1,4 @@
-//! `apiConfig.json`: the byte layout, the decoding tolerances, and the four
+//! `apiConfig.json`: the byte layout, `encoding/json`'s decoder, and the four
 //! things a boot changes on its way past.
 //!
 //! The load-bearing case is [`the_live_file_round_trips_byte_for_byte`], which
@@ -31,8 +31,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tracing_subscriber::layer::SubscriberExt;
 use wirepod_core::config::{
-    ApiConfig, BatteryConfig, BootOutcome, CONFIG_FILE_MODE, DEFAULT_GOHOME_PERCENT, Env,
-    LLAMA2_MODEL, LLAMA3_MODEL, create_config_from_env, go_marshal, read_config,
+    ApiConfig, BatteryConfig, BootOutcome, CONFIG_FILE_MODE, DEFAULT_GOHOME_PERCENT, DecodeFault,
+    Env, LLAMA2_MODEL, LLAMA3_MODEL, create_config_from_env, go_marshal, read_config,
     write_config_to_disk,
 };
 use wirepod_core::logger::{LogLayer, LogRing, ManualLogClock};
@@ -164,6 +164,63 @@ impl Drop for TempDir {
 /// exports none of the twelve.
 fn empty_env() -> Env {
     Env::default()
+}
+
+/// A denial of one step of [`wirepod_core::persist::write_atomic`], lifted when
+/// it is dropped so the directory can still be removed.
+struct WritesRefused<'a> {
+    directory: &'a TempDir,
+}
+
+/// Makes any write into `directory` fail, so that a write the code attempts is
+/// told apart from one it skipped without asking a clock.
+///
+/// Windows refuses to rename over a file carrying the read-only attribute, and
+/// Unix refuses to create the temporary in a directory with no write bit, so
+/// each platform denies one step of the replacement.
+fn refuse_writes(directory: &TempDir) -> WritesRefused<'_> {
+    #[cfg(windows)]
+    {
+        let path = directory.path().join("apiConfig.json");
+        let mut permissions = fs::metadata(&path)
+            .expect("the file to protect is missing")
+            .permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&path, permissions).expect("could not set the read-only attribute");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o555))
+            .expect("could not take the write bit off the directory");
+    }
+    WritesRefused { directory }
+}
+
+impl Drop for WritesRefused<'_> {
+    fn drop(&mut self) {
+        // The lint is about Unix, where clearing the read-only flag makes the
+        // file world writable; this arm is Windows only, where the flag is the
+        // whole of what `Permissions` carries and clearing it is the only way
+        // to let the directory be removed.
+        #[cfg(windows)]
+        #[allow(clippy::permissions_set_readonly_false)]
+        {
+            let path = self.directory.path().join("apiConfig.json");
+            if let Ok(metadata) = fs::metadata(&path) {
+                let mut permissions = metadata.permissions();
+                permissions.set_readonly(false);
+                let _ = fs::set_permissions(&path, permissions);
+            }
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let _ = fs::set_permissions(self.directory.path(), fs::Permissions::from_mode(0o755));
+        }
+    }
 }
 
 /// The instant every ring below stamps its entries with.
@@ -529,8 +586,157 @@ fn unknown_keys_survive_a_round_trip_at_every_level() {
 }
 
 // ---------------------------------------------------------------------------
-// Decoding tolerances
+// Go's decoder, rule by rule
 // ---------------------------------------------------------------------------
+//
+// Every document below was run through Go's own `encoding/json` against a copy
+// of `config.go:17-59`'s struct before it was written here, and the assertion
+// is what Go answered.
+
+/// `decode.go:661-827` walks the object one key at a time and writes through a
+/// pointer into the struct, so a key that appears twice is applied twice and
+/// the second application stands.
+///
+/// Go answers `hasreadfromenv` true for the first document and `STT.provider`
+/// `b` for the second. A derived `Deserialize` refuses both with a duplicate
+/// field error, and because the parse-failure arm writes nothing
+/// (`config.go:131`) the duplicate would stay in the file and every later boot
+/// would fail the same way, where Go boots and rewrites the file deduplicated.
+#[test]
+fn a_duplicate_key_takes_the_last_occurrence() {
+    let config = ApiConfig::from_json_bytes(br#"{"hasreadfromenv":false,"hasreadfromenv":true}"#)
+        .expect("Go accepts a duplicate key");
+    assert!(config.has_read_from_env, "the later occurrence did not win");
+
+    let config = ApiConfig::from_json_bytes(br#"{"hasreadfromenv":true,"hasreadfromenv":false}"#)
+        .expect("Go accepts a duplicate key");
+    assert!(
+        !config.has_read_from_env,
+        "the earlier occurrence won instead"
+    );
+
+    let config = ApiConfig::from_json_bytes(br#"{"STT":{"provider":"a"},"STT":{"provider":"b"}}"#)
+        .expect("Go accepts a duplicate key");
+    assert_eq!(config.stt.provider, "b", "the later occurrence did not win");
+
+    let config = ApiConfig::from_json_bytes(br#"{"STT":{"provider":"a","provider":"b"}}"#)
+        .expect("Go accepts a duplicate key inside a nested object too");
+    assert_eq!(config.stt.provider, "b");
+}
+
+/// The other half of writing through a pointer into the struct: a second
+/// object does not replace the first, it is decoded on top of it, so a field
+/// only the first one named survives.
+#[test]
+fn a_duplicate_object_is_merged_rather_than_replaced() {
+    let config = ApiConfig::from_json_bytes(br#"{"STT":{"provider":"a"},"STT":{"language":"x"}}"#)
+        .expect("Go accepts this");
+
+    assert_eq!(config.stt.provider, "a", "the first object was discarded");
+    assert_eq!(config.stt.language, "x", "the second object was discarded");
+
+    // And a null second occurrence changes nothing at all, because a null into
+    // a struct is ignored (`decode.go:899-903`).
+    let config = ApiConfig::from_json_bytes(br#"{"STT":{"provider":"a"},"STT":null}"#)
+        .expect("Go accepts this");
+    assert_eq!(config.stt.provider, "a");
+}
+
+/// `decode.go:694-697`: a key that is not a tag exactly is looked up again
+/// under Go's case-insensitive fold, so `WEATHER` fills `weather` and is not an
+/// unknown key.
+///
+/// The rollback hazard is why this matters rather than the tidiness. A key kept
+/// in the flatten map is written back last, and Go on rollback applies whichever
+/// of two matching keys comes last, so a `WEATHER` the port preserved would
+/// silently become the configuration the Go server reads.
+#[test]
+fn a_case_variant_key_fills_the_field_it_folds_to() {
+    let config = ApiConfig::from_json_bytes(br#"{"WEATHER":{"ENABLE":true,"PrOvIdEr":"x"}}"#)
+        .expect("Go accepts this");
+
+    assert!(
+        config.weather.enable,
+        "the folded nested key was not stored"
+    );
+    assert_eq!(config.weather.provider, "x");
+    assert!(
+        config.extra.is_empty() && config.weather.extra.is_empty(),
+        "a folded key was kept as an unknown one and would be written back"
+    );
+
+    // The exact match wins over the folded one wherever both are present, which
+    // is the order `decode.go:694-697` tries them in and not the order the keys
+    // are in.
+    let config =
+        ApiConfig::from_json_bytes(br#"{"WEATHER":{"provider":"a"},"Weather":{"key":"b"}}"#)
+            .expect("Go accepts this");
+    assert_eq!(config.weather.provider, "a");
+    assert_eq!(config.weather.key, "b");
+
+    // `fold.go:39-48`: the fold reaches two non-ASCII runes as well.
+    let config = ApiConfig::from_json_bytes("{\"\u{017f}tt\":{\"provider\":\"vosk\"}}".as_bytes())
+        .expect("Go accepts this");
+    assert_eq!(
+        config.stt.provider, "vosk",
+        "U+017F does not fold onto S the way Go folds it"
+    );
+}
+
+/// `decode.go:243-247` records the first type error and `decode.go:182` returns
+/// it only after the whole document has been walked, so every other field is
+/// filled, the ones before the fault and the ones after it alike.
+#[test]
+fn a_type_error_keeps_every_other_field_and_reports_the_first() {
+    let error = ApiConfig::from_json_bytes(
+        br#"{"weather":{"enable":"nope"},"knowledge":{"provider":5},"STT":{"provider":"vosk"},"hasreadfromenv":true}"#,
+    )
+    .expect_err("Go reports the first type error");
+
+    assert_eq!(
+        error.config.stt.provider, "vosk",
+        "a field after the fault was dropped"
+    );
+    assert!(
+        error.config.has_read_from_env,
+        "a field after the fault was dropped"
+    );
+    assert_eq!(
+        error.fault,
+        DecodeFault::Type {
+            path: "weather.enable".to_owned(),
+            found: "string".to_owned(),
+            want: "bool",
+        },
+        "the fault is not the first one in the document"
+    );
+    assert!(
+        !error.config.weather.enable,
+        "the field the fault hit was written anyway"
+    );
+    assert_eq!(
+        error.config.knowledge.provider, "",
+        "the second fault's field was written anyway"
+    );
+}
+
+/// The same rule one level up: a value that is not an object where a struct is
+/// leaves the struct alone and does not stop the document.
+#[test]
+fn a_scalar_where_a_struct_belongs_is_one_fault_and_no_more() {
+    let error = ApiConfig::from_json_bytes(br#"{"weather":5,"STT":{"provider":"vosk"}}"#)
+        .expect_err("Go reports a type error");
+
+    assert_eq!(error.config.stt.provider, "vosk");
+    assert_eq!(
+        error.fault,
+        DecodeFault::Type {
+            path: "weather".to_owned(),
+            found: "number".to_owned(),
+            want: "struct",
+        }
+    );
+}
 
 /// Go writes nothing into a non-pointer field for a `null` and reports no
 /// error, so a hand-edited file full of them still boots.
@@ -555,13 +761,159 @@ fn a_null_leaves_a_field_at_its_zero_value() {
         "a null pointer is an absence"
     );
     assert!(!config.has_read_from_env, "the flag did not stay false");
+
+    // A null is an absence rather than a no-op for the one field that is a Go
+    // pointer, even over a value an earlier occurrence set
+    // (`decode.go:465-467`, `:899-901`).
+    let config =
+        ApiConfig::from_json_bytes(br#"{"battery":{"gohome_percent":5,"gohome_percent":null}}"#)
+            .expect("Go accepts this");
+    assert_eq!(config.battery.gohome_percent, None);
+    let config =
+        ApiConfig::from_json_bytes(br#"{"battery":{"gohome_percent":null,"gohome_percent":5}}"#)
+            .expect("Go accepts this");
+    assert_eq!(config.battery.gohome_percent, Some(5));
+}
+
+/// The go-home pointer is allocated before the value is stored
+/// (`decode.go:476-478`), so a type error leaves it pointing at a zero rather
+/// than at nothing, which is `0 = disabled` and not `nil = default (25)`.
+#[test]
+fn a_type_error_on_the_go_home_pointer_leaves_it_at_zero() {
+    for document in [
+        &br#"{"battery":{"gohome_percent":"25"}}"#[..],
+        &br#"{"battery":{"gohome_percent":25.0}}"#[..],
+        &br#"{"battery":{"gohome_percent":true}}"#[..],
+        &br#"{"battery":{"gohome_percent":{"a":1}}}"#[..],
+        &br#"{"battery":{"gohome_percent":[1]}}"#[..],
+    ] {
+        let error = ApiConfig::from_json_bytes(document).expect_err("Go reports a type error");
+        assert_eq!(
+            error.config.battery.gohome_percent,
+            Some(0),
+            "{}: the pointer was not allocated",
+            String::from_utf8_lossy(document)
+        );
+    }
+
+    // A value that did store is not clobbered by a later fault.
+    let error =
+        ApiConfig::from_json_bytes(br#"{"battery":{"gohome_percent":5,"gohome_percent":"x"}}"#)
+            .expect_err("Go reports a type error");
+    assert_eq!(error.config.battery.gohome_percent, Some(5));
+}
+
+/// A `float32` literal is converted once, by `strconv.ParseFloat(s, 32)`
+/// (`decode.go:1014`).
+///
+/// Parsing to an [`f64`] and casting rounds twice, and for a literal with
+/// sixteen or more significant digits the two answers can be one unit in the
+/// last place apart. Each pair below is Go's answer and the answer the double
+/// rounding gives, both read off the installed Go toolchain.
+#[test]
+fn a_float_literal_is_rounded_once() {
+    for (literal, go, double_rounded) in [
+        ("0.10000002756714821", 0x3dcc_ccd1u32, 0x3dcc_ccd0u32),
+        ("3.9885270197714817e-08", 0x332b_4e51, 0x332b_4e52),
+        ("0.0016355645493604243", 0x3ad6_6071, 0x3ad6_6070),
+        ("5.4522778987884521", 0x40ae_790f, 0x40ae_7910),
+        ("0.015507491771131754", 0x3c7e_1323, 0x3c7e_1322),
+    ] {
+        assert_ne!(
+            go, double_rounded,
+            "{literal} is not a double-rounding case"
+        );
+
+        let document = format!(r#"{{"knowledge":{{"top_p":{literal},"temp":{literal}}}}}"#);
+        let config = ApiConfig::from_json_bytes(document.as_bytes()).expect("the document parses");
+
+        assert_eq!(
+            config.knowledge.top_p().to_bits(),
+            go,
+            "{literal} did not round the way strconv.ParseFloat(s, 32) rounds it"
+        );
+        assert_eq!(config.knowledge.temp().to_bits(), go);
+    }
+}
+
+/// `decode.go:1015-1017`: a literal `strconv.ParseFloat` answers an infinity
+/// and an `ErrRange` for is a type error, and the field keeps what it had.
+/// Underflow is not: `1e-46` is a zero and no error, in Go and here.
+#[test]
+fn a_float_that_does_not_fit_float32_is_a_type_error() {
+    for literal in ["1e39", "-1e39"] {
+        let document = format!(r#"{{"knowledge":{{"top_p":{literal},"model":"kept"}}}}"#);
+        let error = ApiConfig::from_json_bytes(document.as_bytes())
+            .expect_err("Go reports a range error as a type error");
+
+        assert_eq!(
+            error.config.knowledge.model, "kept",
+            "decoding stopped at the bad float"
+        );
+        assert_eq!(
+            error.config.knowledge.top_p().to_bits(),
+            0.0f32.to_bits(),
+            "the field took the infinity anyway"
+        );
+        assert_eq!(
+            error.fault,
+            DecodeFault::Type {
+                path: "knowledge.top_p".to_owned(),
+                found: format!("number {literal}"),
+                want: "float32",
+            }
+        );
+    }
+
+    let config = ApiConfig::from_json_bytes(br#"{"knowledge":{"top_p":1e-46}}"#)
+        .expect("Go accepts an underflow");
+    assert_eq!(config.knowledge.top_p().to_bits(), 0.0f32.to_bits());
+}
+
+/// `decode.go:98-105`: Go checks the whole document before it decodes anything,
+/// so bytes that are not one JSON value leave the configuration at its zero
+/// value where a type error does not.
+#[test]
+fn a_document_that_is_not_one_json_value_keeps_nothing() {
+    for document in [
+        &br#"{"STT":{"provider":"vosk"},"weather":"#[..],
+        &br#"{"hasreadfromenv":true} and then some"#[..],
+    ] {
+        let error = ApiConfig::from_json_bytes(document).expect_err("these are not JSON");
+        assert_eq!(
+            error.config,
+            ApiConfig::default(),
+            "{}: a half-decoded value survived a syntax error",
+            String::from_utf8_lossy(document)
+        );
+        assert!(matches!(error.fault, DecodeFault::Malformed(_)));
+    }
+
+    // A document that is one JSON value but not an object is the other shape:
+    // Go reports a type error against the struct and changes nothing.
+    let error = ApiConfig::from_json_bytes(br#"[1,2]"#).expect_err("Go reports a type error");
+    assert_eq!(error.config, ApiConfig::default());
+    assert_eq!(
+        error.fault,
+        DecodeFault::Type {
+            path: String::new(),
+            found: "array".to_owned(),
+            want: "apiConfig",
+        }
+    );
+
+    // And a bare `null` is neither: Go writes nothing and reports nothing.
+    assert_eq!(
+        ApiConfig::from_json_bytes(b"null").expect("Go accepts a bare null"),
+        ApiConfig::default()
+    );
 }
 
 /// Every string goes through the formatter that reproduces `encoding/json`'s
 /// HTML escaping, which `serde_json` does not do on its own.
 ///
 /// The five characters and their spellings are `encode.go:984` through
-/// `encode.go:1042`, and were confirmed against the installed Go toolchain
+/// `encode.go:1043`, and were confirmed against the installed Go toolchain
 /// before this test was written. `/` is in the case deliberately: neither
 /// encoder escapes it, so a formatter that over-escaped would fail here too.
 #[test]
@@ -950,6 +1302,55 @@ async fn every_boot_rewrites_the_file_even_when_nothing_changed() {
     );
 }
 
+/// The other half of `config.go:154-155`, which the test above cannot reach: a
+/// file already holding the exact bytes the rewrite would produce is rewritten
+/// anyway.
+///
+/// Comparing the two byte strings and skipping the write would leave that test
+/// green, because the document it seeds is a different spelling of the same
+/// configuration. What tells a write that happened from one that did not,
+/// without asking a clock, is a write that is refused: [`refuse_writes`] denies
+/// one step of the replacement, so the boot reports the failure if it wrote and
+/// reports success if it skipped.
+#[tokio::test]
+async fn a_file_already_holding_the_rewrite_is_rewritten_anyway() {
+    let directory = TempDir::new("rewrite-same");
+    let settled = ApiConfig {
+        battery: BatteryConfig {
+            gohome_percent: Some(DEFAULT_GOHOME_PERCENT),
+            ..BatteryConfig::default()
+        },
+        has_read_from_env: true,
+        past_initial_setup: true,
+        ..ApiConfig::default()
+    };
+    let canonical = settled.to_json_bytes();
+    directory.seed(&canonical);
+    let guard = refuse_writes(&directory);
+
+    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), &directory.data_dir()))
+        .await
+        .expect("read_config hung");
+
+    drop(guard);
+
+    assert!(
+        matches!(boot.outcome, BootOutcome::Read(Err(_))),
+        "the boot did not try to write a file whose bytes already matched: {:?}",
+        boot.outcome
+    );
+    assert_eq!(
+        directory.file(),
+        canonical,
+        "a refused write changed the file"
+    );
+    assert_eq!(
+        directory.entries(),
+        ["apiConfig.json"],
+        "the failed rewrite left a temporary behind"
+    );
+}
+
 /// `config.go:137-142`: the two setup flags move together, and only from a
 /// configuration that has never been seeded from the environment whose stored
 /// port differs from `DDL_RPC_PORT`.
@@ -1069,6 +1470,143 @@ async fn a_file_that_cannot_be_read_is_left_exactly_as_it_is() {
     );
 }
 
+/// The half of `config.go:117-124` the test above cannot see: the arm writes
+/// nothing where a write would have landed.
+///
+/// A directory in the file's place refuses a write as firmly as it refuses a
+/// read, so a boot that wrote a zeroed configuration on this arm would look the
+/// same. Here the file is real and the directory around it is ordinary: only
+/// the read is denied, so a write would land and changed bytes would show it.
+///
+/// `FILE_SHARE_DELETE` alone is what arranges that on Windows. An open for
+/// reading is refused, because the hold does not share reading; a rename is
+/// not, because to the sharing rules a rename is a delete.
+#[cfg(windows)]
+#[tokio::test]
+async fn an_unreadable_file_is_not_overwritten() {
+    use std::fs::OpenOptions;
+    use std::os::windows::fs::OpenOptionsExt;
+
+    const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+
+    let directory = TempDir::new("unreadable-bytes");
+    let seeded = br#"{"STT":{"provider":"vosk"},"hasreadfromenv":true}"#;
+    directory.seed(seeded);
+
+    let held = OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_DELETE)
+        .open(directory.path().join("apiConfig.json"))
+        .expect("could not hold the file open");
+
+    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), &directory.data_dir()))
+        .await
+        .expect("read_config hung");
+
+    drop(held);
+
+    assert!(
+        matches!(boot.outcome, BootOutcome::ReadFailed(_)),
+        "the held file took the wrong arm: {:?}",
+        boot.outcome
+    );
+    assert_eq!(
+        directory.file(),
+        seeded,
+        "config.go:123 returns before the write; the arm wrote anyway"
+    );
+    assert_eq!(
+        directory.entries(),
+        ["apiConfig.json"],
+        "the arm left a temporary behind"
+    );
+}
+
+/// The Unix twin of [`an_unreadable_file_is_not_overwritten`]: the file has no
+/// permission bits at all, so the read fails, while the directory around it
+/// stays writable so a write would land.
+///
+/// Root ignores the mode and would read the file, which would take the boot
+/// down the wrong arm; the same is true of the read-only-directory test beside
+/// this one in `tests/persist.rs`, and neither CI runner is root.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unreadable_file_is_not_overwritten() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = TempDir::new("unreadable-bytes");
+    let path = directory.path().join("apiConfig.json");
+    let seeded = br#"{"STT":{"provider":"vosk"},"hasreadfromenv":true}"#;
+    directory.seed(seeded);
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000))
+        .expect("could not take every permission bit off the file");
+
+    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), &directory.data_dir()))
+        .await
+        .expect("read_config hung");
+
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+        .expect("could not put the permissions back");
+
+    assert!(
+        matches!(boot.outcome, BootOutcome::ReadFailed(_)),
+        "the unreadable file took the wrong arm: {:?}",
+        boot.outcome
+    );
+    assert_eq!(
+        directory.file(),
+        seeded,
+        "config.go:123 returns before the write; the arm wrote anyway"
+    );
+    assert_eq!(
+        directory.entries(),
+        ["apiConfig.json"],
+        "the arm left a temporary behind"
+    );
+}
+
+/// `config.go:125-132` over a document with one type error: Go's global keeps
+/// every field that decoded, and the next line of `vars.Init` reads one of them.
+///
+/// `vars.go:234` chooses the STT engine from `APIConfig.STT.Service` right after
+/// `ReadConfig` returns, so a boot that threw the partial decode away would pick
+/// a different engine, port and model from the same broken file.
+#[tokio::test]
+async fn the_parse_failure_arm_keeps_what_decoded() {
+    let directory = TempDir::new("partial");
+    let garbage = br#"{"weather":{"enable":"not a bool","provider":"openweathermap"},"knowledge":{"enable":true},"STT":{"provider":"vosk","language":"en-US"},"server":{"port":"443"}}"#;
+    directory.seed(garbage);
+
+    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), &directory.data_dir()))
+        .await
+        .expect("read_config hung");
+
+    assert!(
+        matches!(boot.outcome, BootOutcome::ParseFailed(_)),
+        "the document took the wrong arm: {:?}",
+        boot.outcome
+    );
+    assert_eq!(
+        boot.config.stt.provider, "vosk",
+        "vars.go:234 would read an empty STT service out of this boot"
+    );
+    assert_eq!(boot.config.stt.language, "en-US");
+    assert_eq!(boot.config.server.port, "443");
+    assert_eq!(
+        boot.config.weather.provider, "openweathermap",
+        "the field after the fault in the same object was dropped"
+    );
+    // `config.go:127-128` still runs, over the half-filled value rather than
+    // over a zero one, so the `true` the document set is turned back off.
+    assert!(!boot.config.knowledge.enable, "config.go:127");
+    assert!(!boot.config.weather.enable, "config.go:128");
+    assert_eq!(
+        directory.file(),
+        garbage,
+        "the boot rewrote a file it could not read"
+    );
+}
+
 /// `config.go:125-132`: a file that is not the JSON this struct describes takes
 /// the same shape of failure, and the bytes on disk are untouched.
 #[tokio::test]
@@ -1156,6 +1694,84 @@ fn the_file_mode_is_gos() {
     assert_eq!(
         CONFIG_FILE_MODE, 0o644,
         "config.go:64, :99 and :155 all pass 0644"
+    );
+}
+
+/// The mode each write site passes reaches the file it creates.
+///
+/// The umask masks every mode this process asks for and there is no portable
+/// way to read it, so a file written at `0o777` says what survives: `mode &
+/// probe` is `mode & !umask` for any mode, which makes the expectation exact
+/// without touching a process-wide setting other tests share.
+///
+/// Two of Go's three sites create the file and are pinned here. The third,
+/// `config.go:155`, cannot be: the boot rewrite only runs on a file that
+/// already exists, and `os.WriteFile` hands its mode to an `O_CREATE` open
+/// (`os/file.go:849-859`) which applies it only when it creates the file, so
+/// the mode at that site never reaches the disk in Go either. What is
+/// observable there is that the file keeps the mode it had, which is the last
+/// case below.
+///
+/// Unix only, because the mode is: Windows has no permission bit set for the
+/// assertion to read. The `0o644`-against-`0o600` half of it is visible only
+/// while the umask leaves the group and other read bits alone, which is the
+/// default and is what CI runs with.
+#[cfg(unix)]
+#[tokio::test]
+async fn every_config_write_site_passes_gos_mode() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode_of = |path: &Path| {
+        fs::metadata(path)
+            .expect("the file is missing")
+            .permissions()
+            .mode()
+            & 0o777
+    };
+
+    let directory = TempDir::new("mode-probe");
+    let probe = directory.path().join("umask-probe");
+    wirepod_core::persist::write_atomic(&probe, b"x".to_vec(), 0o777)
+        .await
+        .expect("the probe write failed");
+    let want = CONFIG_FILE_MODE & mode_of(&probe);
+
+    // `config.go:99`, through the arm that seeds a fresh file.
+    let seeding = TempDir::new("mode-seed");
+    let (_config, written) = create_config_from_env(&empty_env(), &seeding.data_dir()).await;
+    written.expect("the seeding write failed");
+    assert_eq!(
+        mode_of(&seeding.path().join("apiConfig.json")),
+        want,
+        "config.go:99 did not pass CONFIG_FILE_MODE"
+    );
+
+    // `config.go:64`, the save path.
+    let saving = TempDir::new("mode-save");
+    write_config_to_disk(&ApiConfig::default(), &saving.data_dir())
+        .await
+        .expect("the save failed");
+    assert_eq!(
+        mode_of(&saving.path().join("apiConfig.json")),
+        want,
+        "config.go:64 did not pass CONFIG_FILE_MODE"
+    );
+
+    // `config.go:155`, where what is observable is that the existing mode
+    // survives the replacement.
+    let booting = TempDir::new("mode-boot");
+    let path = booting.path().join("apiConfig.json");
+    booting.seed(&ApiConfig::default().to_json_bytes());
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o640))
+        .expect("could not set the mode the file is to keep");
+    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), &booting.data_dir()))
+        .await
+        .expect("read_config hung");
+    assert!(matches!(boot.outcome, BootOutcome::Read(Ok(()))));
+    assert_eq!(
+        mode_of(&path),
+        0o640,
+        "the rewrite re-stamped a mode onto a file that already existed"
     );
 }
 
