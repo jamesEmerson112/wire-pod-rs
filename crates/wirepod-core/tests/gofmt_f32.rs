@@ -10,8 +10,10 @@
 //! is `#` are comments; every other line is three tab-separated fields, being
 //! the section name, the input as space-separated `key=value` pairs whose first
 //! pair is `kind=`, and the output as a Go `%q` quoted string literal. The
-//! parser below refuses anything it does not recognize, so neither a new probe
-//! line nor an unfamiliar escape can be silently skipped.
+//! parser below refuses anything it does not recognize within the section it
+//! was asked for, so neither a new probe line nor an unfamiliar escape can be
+//! silently skipped, and it leaves every other section's bytes alone so that a
+//! later section cannot fail a `float32` test for a reason of its own.
 //!
 //! `crates/wirepod-core/tests/gofmt.rs` reads the P4 recording, which predates
 //! this format and has an unquoted output column and a bare Go expression for
@@ -25,10 +27,9 @@ use wirepod_core::{GoJsonError, go_json_f32, go_json_f32_raw, go_json_f64};
 const EXPECTED: &str =
     include_str!("../../../docs/phases/P1-robot-connect-auth/go-probe/expected.txt");
 
-/// One parsed line: the section, the raw input column, its pairs in order, the
-/// unquoted output and the line number every failure message names.
+/// One parsed line: the raw input column, its pairs in order, the unquoted
+/// output and the line number every failure message names.
 struct Case {
-    section: &'static str,
     input: &'static str,
     pairs: Vec<(&'static str, &'static str)>,
     want: String,
@@ -96,8 +97,16 @@ fn unquote(quoted: &str, line: usize) -> String {
     out
 }
 
-/// Every case in the recording, with the comment lines dropped.
-fn cases() -> Vec<Case> {
+/// Every case in one section of the recording, with the comment lines dropped.
+///
+/// Only the named section's lines are split into pairs and unquoted. The whole
+/// file is still walked far enough to hold the README's promise that the
+/// (section, input) pair is unique, because that promise is what makes it safe
+/// to key anything on the pair, but a section this test does not assert is left
+/// as bytes: a later probe section that emits an escape outside the five
+/// [`unquote`] accepts is that section's own test to fix, not a `float32`
+/// failure.
+fn cases_in(wanted: &str) -> Vec<Case> {
     let mut parsed = Vec::new();
     let mut seen: BTreeMap<(&str, &str), usize> = BTreeMap::new();
 
@@ -127,6 +136,16 @@ fn cases() -> Vec<Case> {
             "line {line}: more than three columns"
         );
 
+        // The README promises the pair is unique, and keying anything on it is
+        // only safe while that holds.
+        if let Some(first) = seen.insert((section, input), line) {
+            panic!("line {line}: {section} / {input} already appeared on line {first}");
+        }
+
+        if section != wanted {
+            continue;
+        }
+
         let pairs: Vec<(&str, &str)> = input
             .split(' ')
             .map(|piece| {
@@ -141,14 +160,7 @@ fn cases() -> Vec<Case> {
             "line {line}: the first input pair is not kind="
         );
 
-        // The README promises the pair is unique, and keying anything on it is
-        // only safe while that holds.
-        if let Some(first) = seen.insert((section, input), line) {
-            panic!("line {line}: {section} / {input} already appeared on line {first}");
-        }
-
         parsed.push(Case {
-            section,
             input,
             pairs,
             want: unquote(output, line),
@@ -156,6 +168,10 @@ fn cases() -> Vec<Case> {
         });
     }
 
+    assert!(
+        !parsed.is_empty(),
+        "the recording has no {wanted} section at all"
+    );
     parsed
 }
 
@@ -173,10 +189,7 @@ fn go_float32_json_matches_the_recorded_probe() {
     let mut structs = 0usize;
     let mut errors = 0usize;
 
-    for case in cases() {
-        if case.section != "f32json" {
-            continue;
-        }
+    for case in cases_in("f32json") {
         let value = case.value();
         let (line, input) = (case.line, case.input);
 
@@ -218,16 +231,60 @@ fn go_float32_json_matches_the_recorded_probe() {
     }
 
     // Every finite value is recorded twice, once whole and once as the bare
-    // number, and the three values Go refuses are recorded once each.
+    // number, and the three values Go refuses are recorded once each. The
+    // counts are exact so that deleting a recorded line fails here instead of
+    // quietly shrinking the coverage; a struct and its number can otherwise be
+    // removed together without disturbing any other assertion. They are the
+    // recording's own numbers, recounted whenever the probe changes, so adding
+    // a case to `f32JSONSection` means editing these three lines in the same
+    // commit that regenerates `expected.txt`.
     assert_eq!(
-        numbers, structs,
-        "the probe pairs every struct with a number"
+        numbers, 34,
+        "the f32json section records 34 finite values as bare numbers"
     );
-    assert!(
-        numbers > 0,
-        "the probe file recorded no f32json number cases"
+    assert_eq!(
+        structs, 34,
+        "the f32json section records the same 34 values as whole documents"
     );
     assert_eq!(errors, 3, "the probe records NaN, +Inf and -Inf as errors");
+}
+
+/// Go breaks an exact decimal tie to even, and the recording carries one.
+///
+/// `0x3ee90000` is `0.455078125` exactly. That is nine significant digits and
+/// eight of them round-trip, so the shortest form sits exactly halfway between
+/// `0.45507812` and `0.45507813`, and both are legal shortest digits. `strconv`
+/// takes the even one (`strconv/ftoaryu.go:412`, the round-up flag at
+/// `:456-461`, which rounds an exact half up only away from an odd truncation)
+/// where Rust's own shortest digits round the half up unconditionally.
+///
+/// Every `float32` tie has a magnitude between `2^-12` and `2^22`, so a tie
+/// always reaches `encoding/json` through the plain form and the exponent form
+/// can never carry one. This is the only shape the rule is observable in, which
+/// is why the recording needs exactly one such case and why it sits in the
+/// plain-form group.
+#[test]
+fn an_exact_decimal_tie_is_broken_the_way_go_breaks_it() {
+    let case = cases_in("f32json")
+        .into_iter()
+        .find(|case| case.pair("kind") == "number" && case.pair("v") == "0x3ee90000")
+        .expect("the f32json section carries the exact-tie case");
+    let value = case.value();
+    assert_eq!(
+        f64::from(value),
+        0.455078125,
+        "0x3ee90000 is 0.455078125 exactly"
+    );
+
+    assert_eq!(go_json_f32(value).expect("finite"), case.want);
+    // The tie is the whole point: Rust's shortest digits are the other
+    // candidate, so passing them straight through would ship the wrong last
+    // digit into apiConfig.json.
+    assert_ne!(
+        format!("{value}"),
+        case.want,
+        "Rust's own shortest digits break this tie the other way"
+    );
 }
 
 /// The correction this function exists for: Go formats at 32 bits, so the
@@ -255,8 +312,9 @@ fn a_float32_field_is_not_widened_before_formatting() {
 ///
 /// This is the whole reason the raw helper exists. `serde_json` picks the same
 /// shortest `f32` digits Go does, so it gets `0.7` right, but it lays them out
-/// differently in two ways that both reach `apiConfig.json`: it always writes a
-/// decimal point, and it switches to exponent form far below Go's `1e21`.
+/// differently in two ways that both reach `apiConfig.json`: it writes a
+/// decimal point on every rendering it does not put in exponent form, and it
+/// switches to exponent form far below Go's `1e21`.
 #[test]
 fn the_raw_form_carries_the_go_digits_through_a_serializer() {
     for value in [
@@ -304,6 +362,22 @@ fn the_raw_form_carries_the_go_digits_through_a_serializer() {
         serde_json::to_string(&0.7f32).expect("an f32 serializes"),
         "0.7"
     );
+
+    // The doc comments say serde_json writes a decimal point on every rendering
+    // it does not put in exponent form, which is a claim no probe records.
+    // Check it over every finite value the recording carries rather than
+    // leaving it as an assertion about a library.
+    for case in cases_in("f32json") {
+        if case.pair("kind") != "number" {
+            continue;
+        }
+        let text = serde_json::to_string(&case.value()).expect("an f32 serializes");
+        assert!(
+            text.contains('e') || text.contains('.'),
+            "line {}: serde_json wrote {text} with neither an exponent nor a decimal point",
+            case.line
+        );
+    }
 }
 
 #[test]

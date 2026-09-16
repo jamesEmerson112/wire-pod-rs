@@ -702,6 +702,17 @@ func f32JSONSection() {
 		{"float32(2.5)", 2.5},
 		{"float32(0.05)", 0.05},
 		{"float32(0.123456789)", 0.123456789},
+		// An exact decimal tie. 0x3ee90000 is 0.455078125 exactly, nine
+		// significant digits, and eight digits round-trip, so the shortest
+		// form sits exactly halfway between 0.45507812 and 0.45507813.
+		// strconv breaks that half to even: ryuDigits32
+		// (strconv/ftoaryu.go:412, the round-up flag at :456-461) rounds an
+		// exact half up only when the truncation is odd. A formatter that
+		// rounds a half up unconditionally, which is what Rust does, writes
+		// the other digit here. Every float32 tie has a magnitude between
+		// 2^-12 and 2^22, so a tie always reaches encoding/json through the
+		// plain form and the exponent form can never carry one.
+		{"math.Float32frombits(0x3ee90000)", math.Float32frombits(0x3ee90000)},
 		// The small end cutoff. encode.go:557 compares float32(abs) < 1e-6, so
 		// the boundary is float32(1e-6) itself: at it the format stays 'f', and
 		// one ulp below it flips to 'e'.

@@ -19,9 +19,10 @@
 //! and rewriting the config file must reproduce that.
 //!
 //! Rust's own `Display` agrees with none of them: it writes `14` as `14`, but
-//! also `1e6` as `1000000` where Go writes `1e+06`, and `serde_json` always
-//! emits a decimal point. Rust's shortest digits also break an exact tie the
-//! other way from Go, which [`Decimal::break_tie_to_even`] undoes.
+//! also `1e6` as `1000000` where Go writes `1e+06`, and `serde_json` emits a
+//! decimal point on every rendering it does not put in exponent form. Rust's
+//! shortest digits also break an exact tie the other way from Go, which
+//! [`Decimal::break_tie_to_even`] undoes.
 //!
 //! `go_format_f32` and the `float64` pair are pinned by
 //! `docs/phases/P4-sdk-app/gofmt-probe/expected.txt`; the `float32` JSON pair
@@ -100,10 +101,11 @@ pub fn go_format_f32(x: f32) -> String {
 /// value to get precise cutoffs right". The condition at `encode.go:557` is
 /// `float32(abs) < 1e-6 || float32(abs) >= 1e21`, and `encode.go:561` passes a
 /// bit size of 32 to `strconv.AppendFloat`, so the digits are the shortest
-/// ones that round-trip through a `float32`. That is why `0.7` marshals as
-/// `0.7` and not as the `0.699999988079071` its exact `float64` value would
-/// give. Reproducing the widening instead would rewrite every `top_p` and
-/// `temp` in the config file on the first boot after cutover.
+/// ones that round-trip through a `float32`, with an exact decimal tie broken
+/// to even the way `strconv` breaks it ([`Decimal::break_tie_to_even`]). That
+/// is why `0.7` marshals as `0.7` and not as the `0.699999988079071` its exact
+/// `float64` value would give. Reproducing the widening instead would rewrite
+/// every `top_p` and `temp` in the config file on the first boot after cutover.
 ///
 /// Everything else matches the `float64` encoder: plain form when the value is
 /// zero or its magnitude is in `[1e-6, 1e21)` and exponent form otherwise,
@@ -141,12 +143,13 @@ pub fn go_json_f32(x: f32) -> Result<String, GoJsonError> {
 /// serialized struct without being re-encoded.
 ///
 /// `serde_json` picks the same shortest `f32` digits Go does, but not the same
-/// layout for them. It always writes a decimal point, so a `temp` of `1`
-/// reaches the file as `1.0` where Go writes `1`, and its large-end switch to
-/// exponent form comes far earlier than Go's `1e21`, so `1e20` reaches the file
-/// as `1e+20` where Go writes the twenty-one digit plain form. A [`RawValue`]
-/// field carries [`go_json_f32`]'s bytes through the serializer untouched,
-/// which is what lets the rest of `apiConfig.json` still be built by `serde`.
+/// layout for them. It writes a decimal point on every rendering it does not
+/// put in exponent form, so a `temp` of `1` reaches the file as `1.0` where Go
+/// writes `1`, and its switch to exponent form comes far earlier than Go's
+/// `1e21`, so `1e20` reaches the file as `1e+20`, with no decimal point at all,
+/// where Go writes the twenty-one digit plain form. A [`RawValue`] field
+/// carries [`go_json_f32`]'s bytes through the serializer untouched, which is
+/// what lets the rest of `apiConfig.json` still be built by `serde`.
 ///
 /// # Panics
 ///
@@ -220,6 +223,18 @@ pub fn go_json_f64_raw(x: f64) -> Result<Box<RawValue>, GoJsonError> {
 ///
 /// Go runs this only when it chose the `'e'` format, and so do both callers:
 /// a plain-form rendering has no exponent for the test to match.
+///
+/// This and [`Decimal::exponent_form`]'s padding cancel exactly for every JSON
+/// rendering at either width, so no JSON case can tell the two apart. Both
+/// encoders reach exponent form only below `1e-6` or at and above `1e21`, so a
+/// JSON exponent is either negative with a magnitude of at least 7 or positive
+/// with a magnitude of at least 21. The only single-digit magnitudes that can
+/// occur are therefore 7, 8 and 9, and on exactly those the padding adds a zero
+/// that this function removes again; every other exponent already has two
+/// digits and neither function touches it. What keeps the padding itself honest
+/// is [`go_format_f32`], whose `'g'` renderings keep it: `float32(5e-05)` is
+/// recorded as `5e-05` in `docs/phases/P4-sdk-app/gofmt-probe/expected.txt`, so
+/// dropping the padding fails `tests/gofmt.rs` rather than `tests/gofmt_f32.rs`.
 fn clean_negative_exponent(mut rendered: String) -> String {
     let bytes = rendered.as_bytes();
     let n = bytes.len();
@@ -308,7 +323,7 @@ impl Decimal {
     ///
     /// Both candidates round-trip, so both are legal shortest forms. Go picks
     /// the one whose last digit is even: in `ryuDigits32`
-    /// (`strconv/ftoaryu.go`) the round-up flag is
+    /// (`strconv/ftoaryu.go:412`) the round-up flag at `ftoaryu.go:456-461` is
     /// `cNextDigit > 5 || (cNextDigit == 5 && !c0) || (cNextDigit == 5 && c0 &&
     /// central&1 == 1)`, where `c0` means every trimmed digit after the 5 was a
     /// zero, so an exact half rounds up only away from an odd truncation. Rust
