@@ -72,10 +72,13 @@ pub fn begin(entry: &RobotEntry) -> Response {
             }
             Some(Err(err)) => {
                 // Go's `logger.Println("event stream: " + err.Error())`
-                // (`server.go:498`). On this path the receiver is nil and the
-                // loop would panic on its first receive, so the claim is handed
-                // straight back instead.
-                tracing::debug!(target: "sdkapp", "event stream: {err}");
+                // (`server.go:498`), which is DEBUG with an *empty* component
+                // (`logger.go:234-238`); the explicit `comp` field is what keeps
+                // the component column empty, and the target stays `sdkapp` so
+                // `RUST_LOG` still names this module. On this path the receiver
+                // is nil and the loop would panic on its first receive, so the
+                // claim is handed straight back instead.
+                tracing::debug!(target: "sdkapp", comp = "", "event stream: {err}");
                 owner.release(generation);
             }
             // Abandoned before the stream existed. A stop already took

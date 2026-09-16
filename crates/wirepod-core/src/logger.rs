@@ -12,14 +12,26 @@
 //! Nothing in the port calls [`LogRing::record`] directly. Code emits `tracing`
 //! events and [`LogLayer`] fills the ring from them, which is what lets one
 //! call site feed both the ring and whatever formatting layer the binary
-//! installs. [`LogLayer`] must be installed **unfiltered**, because Go's ring
-//! records every line the server ever writes including the DEBUG ones that only
-//! `/api/get_debug_logs` and `/api/get_logs_json` ever show. An `EnvFilter`
-//! belongs on the formatting layer, attached per-layer with
-//! `Layer::with_filter`, and never on this one: putting it here would make
-//! `RUST_LOG` silently decide what the web UI is allowed to see. Filtering
-//! happens on the way out instead, in [`LogRing::get_entries`], exactly as it
-//! does in Go.
+//! installs.
+//!
+//! [`LogLayer`] applies **no level filter**, because Go's ring records every
+//! level including the DEBUG lines that only `/api/get_debug_logs` and
+//! `/api/get_logs_json` ever show. Level filtering happens on the way out
+//! instead, in [`LogRing::get_entries`], exactly as it does in Go. An
+//! `EnvFilter` therefore belongs on the formatting layer, attached per-layer
+//! with `Layer::with_filter`, and never on this one: putting it here would make
+//! `RUST_LOG` silently decide what the web UI is allowed to see.
+//!
+//! What the layer does filter, and the only thing it filters, is the target.
+//! Go's ring is fed by `logger.Debug`, `Info`, `Warn`, `Error` and `Println`
+//! (`logger.go:191-214`, `:234-238`) and by nothing else, so the only lines
+//! that ever reach it are the ones wire-pod itself writes. A layer that
+//! admitted every event would also collect h2's per-frame events and the spans
+//! hyper, tower and tonic open, plus the `log` records rustls and mdns-sd emit
+//! once a binary installs the `tracing-log` bridge. The tray buffer holds 199
+//! lines and the ring 500, so one robot conn-check would push wire-pod's own
+//! lines out of both before the web UI could ask for them.
+//! [`is_wire_pod_target`] is the admission rule.
 //!
 //! Go's `DEBUG_LOGGING` stdout mirror (`logger.go:82`, `:186-188`) has no
 //! counterpart here on purpose. Printing events to stdout is what a `tracing`
@@ -624,10 +636,35 @@ pub fn component_for_target(target: &str) -> &'static str {
         .unwrap_or("")
 }
 
+/// The prefix a target inside this workspace begins with.
+///
+/// Cargo turns the hyphen in `wirepod-core` into an underscore, so the default
+/// target of a `tracing` event, which is its module path, reads
+/// `wirepod_core::logger`, and every other crate here is spelled the same way.
+const CRATE_TARGET_PREFIX: &str = "wirepod_";
+
+/// Whether an event's target names something this port wrote, which is the only
+/// thing [`LogLayer`] admits into the ring.
+///
+/// Two spellings count, and they are the two a ported call site can have. One
+/// of [`COMPONENTS`], which is a call site that named its Go component as its
+/// target, and any module path inside this workspace, which always begins
+/// [`CRATE_TARGET_PREFIX`]. Everything else belongs to a library, and Go's ring
+/// never sees a line a library wrote: `logger.Debug` and its siblings are the
+/// only doors into it (`logger.go:191-214`, `:234-238`).
+///
+/// This is a target test and not a level test. Go's ring takes every level, so
+/// an admitted target's TRACE event is recorded exactly like its ERROR one.
+pub fn is_wire_pod_target(target: &str) -> bool {
+    target.starts_with(CRATE_TARGET_PREFIX) || COMPONENTS.contains(&target)
+}
+
 /// The `tracing` layer that fills a [`LogRing`].
 ///
-/// Install it **unfiltered**, as the module docs explain, and put any
-/// `EnvFilter` on the formatting layer beside it:
+/// It filters by target and by nothing else, as the module docs explain: an
+/// event [`is_wire_pod_target`] rejects is dropped, every level of everything
+/// it admits is kept, and any `EnvFilter` goes on the formatting layer beside
+/// it rather than on this one:
 ///
 /// ```no_run
 /// # use std::sync::Arc;
@@ -672,10 +709,17 @@ where
     S: Subscriber,
 {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        let metadata = event.metadata();
+        // The whole filter, and the only one. A library's event is not one of
+        // Go's log lines, and the web UI's two text buffers are small enough
+        // that admitting one would bury wire-pod's own lines within seconds.
+        if !is_wire_pod_target(metadata.target()) {
+            return;
+        }
+
         let mut fields = EventFields::default();
         event.record(&mut fields);
 
-        let metadata = event.metadata();
         let level = LogLevel::from_tracing(*metadata.level());
         // An explicit `comp` field wins even when it is empty, which is how a
         // call site says "this is one of Go's component-less lines" without

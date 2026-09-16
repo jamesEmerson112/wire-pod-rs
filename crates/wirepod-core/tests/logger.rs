@@ -4,19 +4,28 @@
 //! `docs/phases/P1-robot-connect-auth/go-probe/expected.txt`, which is Go's own
 //! stdout, rather than written out here. Nothing in this file drives
 //! `LogRing::record` directly: the events go through a real `tracing`
-//! subscriber, so the layer's level folding, component derivation and bot
-//! derivation are covered along with the ring itself.
+//! subscriber, so the layer's target filter, level folding, component
+//! derivation and bot derivation are covered along with the ring itself.
+//!
+//! Every event below names its target, because the layer admits only wire-pod's
+//! own targets and this test binary's default target is its own crate name,
+//! `logger`, which is not one of them. [`OURS`] is the workspace target the
+//! tests that do not care about the target use.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::layer::SubscriberExt;
 use wirepod_core::logger::{
     COMPONENTS, INFO_TRIM_AT, LogLayer, LogLevel, LogRing, ManualLogClock, RING_LEN, TRAY_TRIM_AT,
-    component_for_target, strip_ansi,
+    component_for_target, is_wire_pod_target, strip_ansi,
 };
+use wirepod_core::test_support::FakeReceiver;
+use wirepod_core::{ConnError, EventLoopExit, EventOwner, StatusCode, run_event_stream};
 
 const EXPECTED: &str =
     include_str!("../../../docs/phases/P1-robot-connect-auth/go-probe/expected.txt");
@@ -24,6 +33,25 @@ const EXPECTED: &str =
 /// The stamp every `legacystamp` line layout case in the probe was recorded
 /// with, so a clock fixed here reproduces the recorded bytes exactly.
 const STAMP: &str = "2026.01.02 03:04:05";
+
+/// A target the layer admits because it is a module path inside this workspace,
+/// which is what an ordinary call site in a wire-pod crate has.
+const OURS: &str = "wirepod_core::logger";
+
+/// How many `legacy_line` cases the recording holds. The three counts below are
+/// literals rather than a second count of the same filtered list, so a filter
+/// that quietly stopped matching fails the test instead of running fewer cases.
+const LEGACY_LINE_CASES: usize = 7;
+/// How many `file_line` cases the recording holds.
+const FILE_LINE_CASES: usize = 7;
+/// How many `level_string` cases the recording holds.
+const LEVEL_STRING_CASES: usize = 5;
+/// How many `stamp` cases the recording holds. They are the wall clock's, not
+/// this module's, and are asserted there; the count is here so a probe change
+/// cannot move them out from under that test unnoticed.
+const STAMP_CASES: usize = 7;
+/// How many `const` cases the recording holds, the `stamp_layout` line.
+const CONST_CASES: usize = 1;
 
 // ---------------------------------------------------------------------------
 // Reading the probe recording
@@ -136,23 +164,40 @@ fn legacystamp_cases() -> Vec<Case> {
     cases
 }
 
-/// Every kind the section can contain is either asserted below or explicitly
-/// declared as belonging to another module, so a new probe case cannot slip
-/// through untested.
+/// The section's exact census.
+///
+/// Every kind is either asserted below with its own count or explicitly handed
+/// to another module, so neither a new probe case nor a case that stopped being
+/// produced can slip through. The `stamp` cases and the `stamp_layout` constant
+/// are the `2006.01.02 15:04:05` formatting itself, which belongs to the wall
+/// clock and `timefmt`: this module never formats a time, it takes an
+/// already-formatted stamp from its `LogClock`, and the wall clock's own test
+/// asserts those eight lines against `legacy_stamp`. The three kinds that test
+/// hands back are asserted here, each with its own count.
 #[test]
 fn every_recorded_kind_is_accounted_for() {
+    let mut census: BTreeMap<&str, usize> = BTreeMap::new();
     for case in legacystamp_cases() {
         match case.kind() {
             // Asserted by the tests below.
             "legacy_line" | "file_line" | "level_string" => {}
-            // The `2006.01.02 15:04:05` stamp itself, and the layout constant
-            // that produces it, belong to the wall clock and `timefmt`. This
-            // module never formats a time: it takes an already-formatted stamp
-            // from its `LogClock`.
+            // The wall clock's.
             "stamp" | "const" => {}
             other => panic!("line {}: unhandled kind {other}", case.line),
         }
+        *census.entry(case.kind()).or_default() += 1;
     }
+
+    assert_eq!(
+        census,
+        BTreeMap::from([
+            ("const", CONST_CASES),
+            ("file_line", FILE_LINE_CASES),
+            ("legacy_line", LEGACY_LINE_CASES),
+            ("level_string", LEVEL_STRING_CASES),
+            ("stamp", STAMP_CASES),
+        ])
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -178,10 +223,10 @@ fn fixed_ring(unix_millis: i64) -> (Arc<LogRing>, Arc<ManualLogClock>) {
 /// to be a literal in the macro, so the recording's string picks the arm.
 fn emit(level: &str, comp: &str, bot: &str, msg: &str) {
     match level {
-        "DEBUG" => tracing::debug!(comp = comp, bot = bot, "{msg}"),
-        "INFO" => tracing::info!(comp = comp, bot = bot, "{msg}"),
-        "WARN" => tracing::warn!(comp = comp, bot = bot, "{msg}"),
-        "ERROR" => tracing::error!(comp = comp, bot = bot, "{msg}"),
+        "DEBUG" => tracing::debug!(target: OURS, comp = comp, bot = bot, "{msg}"),
+        "INFO" => tracing::info!(target: OURS, comp = comp, bot = bot, "{msg}"),
+        "WARN" => tracing::warn!(target: OURS, comp = comp, bot = bot, "{msg}"),
+        "ERROR" => tracing::error!(target: OURS, comp = comp, bot = bot, "{msg}"),
         other => panic!("the recording names an unknown level {other}"),
     }
 }
@@ -252,7 +297,7 @@ fn an_empty_result_serialises_as_an_empty_array() {
     );
 
     // Also when the ring holds entries but none of them pass the filters.
-    drive(&ring, || tracing::debug!("only a debug line"));
+    drive(&ring, || tracing::debug!(target: OURS, "only a debug line"));
     assert_eq!(
         serde_json::to_string(&ring.get_entries(LogLevel::Info, 0)).expect("it serialises"),
         "[]"
@@ -272,7 +317,7 @@ fn the_ring_wraps_and_walks_in_insertion_order() {
     let (ring, _clock) = fixed_ring(1);
     drive(&ring, || {
         for index in 0..total {
-            tracing::info!("m{index}");
+            tracing::info!(target: OURS, "m{index}");
         }
     });
 
@@ -294,7 +339,7 @@ fn a_partly_filled_ring_walks_from_the_start() {
     let (ring, _clock) = fixed_ring(1);
     drive(&ring, || {
         for index in 0..3 {
-            tracing::info!("m{index}");
+            tracing::info!(target: OURS, "m{index}");
         }
     });
     assert_eq!(ring.len(), 3);
@@ -308,11 +353,11 @@ fn a_partly_filled_ring_walks_from_the_start() {
 fn since_is_strictly_greater_at_the_boundary() {
     let (ring, clock) = fixed_ring(10);
     drive(&ring, || {
-        tracing::info!("a");
+        tracing::info!(target: OURS, "a");
         clock.set_unix_millis(20);
-        tracing::info!("b");
+        tracing::info!(target: OURS, "b");
         clock.set_unix_millis(30);
-        tracing::info!("c");
+        tracing::info!(target: OURS, "c");
     });
 
     assert_eq!(messages(&ring), ["a", "b", "c"]);
@@ -340,10 +385,10 @@ fn since_is_strictly_greater_at_the_boundary() {
 fn the_minimum_level_filters_the_walk() {
     let (ring, _clock) = fixed_ring(1);
     drive(&ring, || {
-        tracing::debug!("d");
-        tracing::info!("i");
-        tracing::warn!("w");
-        tracing::error!("e");
+        tracing::debug!(target: OURS, "d");
+        tracing::info!(target: OURS, "i");
+        tracing::warn!(target: OURS, "w");
+        tracing::error!(target: OURS, "e");
     });
 
     assert_eq!(ring.get_entries(LogLevel::Debug, 0).len(), 4);
@@ -369,7 +414,7 @@ fn the_tray_buffer_settles_one_short_of_its_bound() {
     // One below the bound: nothing has been dropped yet.
     drive(&ring, || {
         for index in 0..steady {
-            tracing::debug!("m{index}");
+            tracing::debug!(target: OURS, "m{index}");
         }
     });
     assert_eq!(ring.tray_len(), steady);
@@ -378,7 +423,7 @@ fn the_tray_buffer_settles_one_short_of_its_bound() {
     assert!(lines[0].ends_with(": m0"), "{}", lines[0]);
 
     // One more append reaches the bound, the test fires, the front line goes.
-    drive(&ring, || tracing::debug!("m{steady}"));
+    drive(&ring, || tracing::debug!(target: OURS, "m{steady}"));
     assert_eq!(ring.tray_len(), steady);
     let lines: Vec<String> = ring.tray_text().lines().map(str::to_owned).collect();
     assert!(lines[0].ends_with(": m1"), "{}", lines[0]);
@@ -387,7 +432,7 @@ fn the_tray_buffer_settles_one_short_of_its_bound() {
     // And it stays there however many more arrive.
     drive(&ring, || {
         for index in 0..250 {
-            tracing::debug!("later {index}");
+            tracing::debug!(target: OURS, "later {index}");
         }
     });
     assert_eq!(ring.tray_len(), steady);
@@ -410,14 +455,14 @@ fn the_info_buffer_settles_one_short_of_its_bound() {
 
     drive(&ring, || {
         for index in 0..steady {
-            tracing::info!("m{index}");
+            tracing::info!(target: OURS, "m{index}");
         }
     });
     assert_eq!(ring.info_len(), steady);
     let lines: Vec<String> = ring.info_text().lines().map(str::to_owned).collect();
     assert!(lines[0].ends_with(": m0"), "{}", lines[0]);
 
-    drive(&ring, || tracing::info!("m{steady}"));
+    drive(&ring, || tracing::info!(target: OURS, "m{steady}"));
     assert_eq!(ring.info_len(), steady);
     let lines: Vec<String> = ring.info_text().lines().map(str::to_owned).collect();
     assert_eq!(lines.len(), steady);
@@ -425,7 +470,7 @@ fn the_info_buffer_settles_one_short_of_its_bound() {
 
     drive(&ring, || {
         for index in 0..250 {
-            tracing::warn!("later {index}");
+            tracing::warn!(target: OURS, "later {index}");
         }
     });
     assert_eq!(ring.info_len(), steady);
@@ -454,7 +499,10 @@ fn the_text_buffers_use_gos_legacy_line_layout() {
         assert_eq!(ring.info_text(), case.want, "line {}", case.line);
         seen += 1;
     }
-    assert!(seen > 0, "the recording has no legacy_line cases");
+    assert_eq!(
+        seen, LEGACY_LINE_CASES,
+        "the recording's legacy_line cases did not all run"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -475,7 +523,11 @@ fn the_file_sink_writes_gos_line_layout() {
         .into_iter()
         .filter(|case| case.kind() == "file_line")
         .collect();
-    assert!(!cases.is_empty(), "the recording has no file_line cases");
+    assert_eq!(
+        cases.len(),
+        FILE_LINE_CASES,
+        "the recording's file_line cases did not all run"
+    );
 
     let mut want = String::new();
     drive(&ring, || {
@@ -497,6 +549,80 @@ fn the_file_sink_writes_gos_line_layout() {
     fs::remove_dir_all(&dir).expect("the temporary directory is removable");
 }
 
+/// The one recorded `file_line` case with no component and no bot, which the
+/// two tests below build their expectation from rather than writing the layout
+/// out by hand.
+fn plain_info_file_line() -> Case {
+    let mut found: Vec<Case> = legacystamp_cases()
+        .into_iter()
+        .filter(|case| {
+            case.kind() == "file_line"
+                && case.need("level") == "INFO"
+                && case.need("comp").is_empty()
+                && case.need("bot").is_empty()
+        })
+        .collect();
+    assert_eq!(
+        found.len(),
+        1,
+        "the recording holds one plain INFO file_line case"
+    );
+    found.pop().expect("the length was just checked")
+}
+
+/// Go opens the sink `O_APPEND|O_CREATE|O_WRONLY` (`logger.go:84`), so a
+/// restarted server adds to the log it already has rather than destroying it.
+///
+/// Nothing inside one process can tell append from truncate, because one ring
+/// owns the file and every write is sequential from the position the open left.
+/// Two openings of the same path can, which is what this does.
+#[test]
+fn the_file_sink_appends_across_openings() {
+    let dir = temp_dir("append");
+    let path = dir.join("wire-pod.log");
+    let case = plain_info_file_line();
+
+    for _ in 0..2 {
+        let clock = Arc::new(ManualLogClock::new(1, STAMP));
+        let ring = Arc::new(LogRing::with_log_file(clock, &path));
+        assert!(ring.has_log_file());
+        drive(&ring, || {
+            emit("INFO", "", "", case.need("msg"));
+        });
+    }
+
+    let got = fs::read_to_string(&path).expect("the sink file is readable");
+    assert_eq!(got, case.want.repeat(2), "line {}", case.line);
+
+    fs::remove_dir_all(&dir).expect("the temporary directory is removable");
+}
+
+/// Go strips ANSI once and hands the *stripped* text to both line builders
+/// (`logger.go:139`, `:178`), so the sink gets it too.
+///
+/// The expectation is the recorded line for `msg=hello`: a message that is
+/// `hello` wrapped in the escapes `startserver.go:106` really writes has to land
+/// on exactly those bytes.
+#[test]
+fn the_file_sink_writes_the_stripped_message() {
+    let dir = temp_dir("file-ansi");
+    let path = dir.join("wire-pod.log");
+    let case = plain_info_file_line();
+
+    let clock = Arc::new(ManualLogClock::new(1, STAMP));
+    let ring = Arc::new(LogRing::with_log_file(clock, &path));
+    let dressed = format!("\u{1b}[33m\u{1b}[1m{}\u{1b}[0m", case.need("msg"));
+    drive(&ring, || {
+        emit("INFO", "", "", &dressed);
+    });
+
+    let got = fs::read_to_string(&path).expect("the sink file is readable");
+    assert_eq!(got, case.want, "line {}", case.line);
+
+    drop(ring);
+    fs::remove_dir_all(&dir).expect("the temporary directory is removable");
+}
+
 /// A sink that cannot be opened is disabled for good, with no panic and no
 /// effect on the ring. A directory is a path no platform will open for writing.
 #[test]
@@ -506,11 +632,114 @@ fn an_unopenable_sink_is_disabled_silently() {
     let ring = Arc::new(LogRing::with_log_file(clock, &dir));
     assert!(!ring.has_log_file());
 
-    drive(&ring, || tracing::info!("hello"));
+    drive(&ring, || tracing::info!(target: OURS, "hello"));
     assert_eq!(messages(&ring), ["hello"]);
 
     drop(ring);
     fs::remove_dir_all(&dir).expect("the temporary directory is removable");
+}
+
+// ---------------------------------------------------------------------------
+// The target filter
+// ---------------------------------------------------------------------------
+
+/// Go's ring is fed by `logger.Debug`, `Info`, `Warn`, `Error` and `Println`
+/// (`logger.go:191-214`, `:234-238`) and by nothing else, so it holds the lines
+/// wire-pod itself wrote. The layer's one filter reproduces that: a library's
+/// event never reaches the ring, and a wire-pod target's always does, whatever
+/// its level.
+#[test]
+fn only_wire_pods_own_targets_reach_the_ring() {
+    let (ring, _clock) = fixed_ring(1);
+    drive(&ring, || {
+        // The libraries this binary already links. h2, hyper, tower and tonic
+        // emit `tracing` directly; rustls and mdns-sd emit `log` records, which
+        // become events the moment a binary installs the `tracing-log` bridge.
+        tracing::error!(target: "hyper", "foreign");
+        tracing::info!(target: "tonic::transport", "foreign");
+        tracing::trace!(target: "h2::codec::framed_write", "foreign");
+        tracing::debug!(target: "rustls::client::hs", "foreign");
+        tracing::info!(target: "mdns_sd", "foreign");
+        // No target at all, which is this test binary's own crate name. It is
+        // not a wire-pod crate either, which is why every other event in this
+        // file names its target.
+        tracing::info!("foreign");
+
+        // A workspace crate, at the two levels furthest apart.
+        tracing::trace!(target: "wirepod_core", "kept trace");
+        tracing::error!(target: "wirepod_server::sdkapp::stim", "kept error");
+        // And a call site that named its Go component as its target.
+        tracing::info!(target: "sdkapp", "kept comp");
+    });
+
+    assert_eq!(messages(&ring), ["kept trace", "kept error", "kept comp"]);
+
+    for target in COMPONENTS {
+        assert!(is_wire_pod_target(target), "{target}");
+    }
+    for target in ["wirepod_core", "wirepod_core::logger", "wirepod_app"] {
+        assert!(is_wire_pod_target(target), "{target}");
+    }
+    for target in [
+        "",
+        "logger",
+        "hyper",
+        "tonic::transport",
+        "h2::codec::framed_write",
+        "rustls::client::hs",
+        "mdns_sd",
+        "wirepod",
+        "log",
+    ] {
+        assert!(!is_wire_pod_target(target), "{target}");
+    }
+}
+
+/// Both ported `logger.Println` sites (`server.go:498`, `:652`) record an empty
+/// component, because `Println` passes one (`logger.go:234-238`). They keep
+/// `target: "sdkapp"` so `RUST_LOG` still names the module, which is exactly
+/// the case the layer's explicit-empty arm exists for.
+///
+/// This drives the real receive loop into its error arm through the real layer
+/// rather than imitating the call site, so a site that lost its `comp` field
+/// fails here.
+#[test]
+fn the_event_stream_failure_line_records_gos_empty_component() {
+    let (ring, _clock) = fixed_ring(1);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("a current-thread runtime builds");
+
+    drive(&ring, || {
+        runtime.block_on(async {
+            let owner = Arc::new(EventOwner::new());
+            let cancel = CancellationToken::new();
+            let generation = owner
+                .claim(cancel.clone())
+                .expect("the first claim is admitted");
+            let (receiver, handle) = FakeReceiver::new();
+            handle.fail(ConnError::new(StatusCode::Unavailable, "robot went away"));
+            let exit = run_event_stream(Box::new(receiver), owner, generation, cancel).await;
+            assert!(
+                matches!(exit, EventLoopExit::Failed(_)),
+                "the loop took the wrong exit: {exit:?}"
+            );
+        });
+    });
+
+    let entries = ring.get_entries(LogLevel::Debug, 0);
+    assert_eq!(entries.len(), 1, "the error arm logs exactly one line");
+    let entry = &entries[0];
+    assert_eq!(entry.level, "DEBUG", "logger.Println logs at DEBUG");
+    assert_eq!(entry.comp, "", "logger.Println passes an empty component");
+    assert_eq!(entry.bot, "", "and an empty bot");
+    assert!(entry.msg.starts_with("event stream: "), "{}", entry.msg);
+
+    // An empty component means `legacyLine` writes no bracket at all, which is
+    // the half of the difference the web UI's plain-text logs show. The layout
+    // itself is pinned against the recording above.
+    assert_eq!(ring.tray_text(), format!("{STAMP}: {}\n", entry.msg));
 }
 
 // ---------------------------------------------------------------------------
@@ -541,22 +770,25 @@ fn the_level_names_match_gos_level_string() {
         assert_eq!(got, case.want, "line {}", case.line);
         seen += 1;
     }
-    assert!(seen > 0, "the recording has no level_string cases");
+    assert_eq!(
+        seen, LEVEL_STRING_CASES,
+        "the recording's level_string cases did not all run"
+    );
 }
 
 /// TRACE and DEBUG both land on Go's DEBUG, and the other three map straight
-/// across. This is also what proves the layer carries no filter of its own: an
-/// `EnvFilter` on this layer with `RUST_LOG` unset admits ERROR only, so four
-/// of these five entries would be missing.
+/// across. This is also what proves the layer carries no *level* filter of its
+/// own: an `EnvFilter` on this layer with `RUST_LOG` unset admits ERROR only,
+/// so four of these five entries would be missing.
 #[test]
 fn trace_and_debug_both_fold_onto_gos_debug() {
     let (ring, _clock) = fixed_ring(1);
     drive(&ring, || {
-        tracing::trace!("t");
-        tracing::debug!("d");
-        tracing::info!("i");
-        tracing::warn!("w");
-        tracing::error!("e");
+        tracing::trace!(target: OURS, "t");
+        tracing::debug!(target: OURS, "d");
+        tracing::info!(target: OURS, "i");
+        tracing::warn!(target: OURS, "w");
+        tracing::error!(target: OURS, "e");
     });
 
     let entries = ring.get_entries(LogLevel::Debug, 0);
@@ -588,11 +820,12 @@ fn the_component_comes_from_the_field_then_the_target_then_nothing() {
         // No field and a target that is not one of the twelve: empty, so a
         // module path never reaches the web UI's component column.
         tracing::info!(target: "wirepod_server::sdkapp::stim", "three");
-        // The default target, which is this test binary's module path.
-        tracing::info!("four");
+        // This crate's own module path, which the layer admits and which is not
+        // one of the twelve either.
+        tracing::info!(target: OURS, "four");
         // An explicit empty field wins too, which is how a call site keeps its
         // target for `RUST_LOG` while reproducing one of Go's component-less
-        // lines.
+        // lines. Both ported `logger.Println` sites have exactly this shape.
         tracing::info!(target: "mdns", comp = "", "five");
     });
 
@@ -630,9 +863,9 @@ fn only_gos_twelve_component_names_are_recognised() {
 fn the_bot_comes_from_bot_then_esn_then_nothing() {
     let (ring, _clock) = fixed_ring(1);
     drive(&ring, || {
-        tracing::info!(bot = "00000001", esn = "00000002", "one");
-        tracing::info!(esn = "00000002", "two");
-        tracing::info!("three");
+        tracing::info!(target: OURS, bot = "00000001", esn = "00000002", "one");
+        tracing::info!(target: OURS, esn = "00000002", "two");
+        tracing::info!(target: OURS, "three");
     });
 
     let bots: Vec<String> = ring
@@ -653,7 +886,7 @@ fn the_bot_comes_from_bot_then_esn_then_nothing() {
 fn ansi_escapes_are_stripped_from_the_message() {
     let (ring, _clock) = fixed_ring(1);
     drive(&ring, || {
-        tracing::info!("\u{1b}[31mred\u{1b}[0m and \u{1b}[1;32mgreen\u{1b}[0m");
+        tracing::info!(target: OURS, "\u{1b}[31mred\u{1b}[0m and \u{1b}[1;32mgreen\u{1b}[0m");
     });
 
     assert_eq!(messages(&ring), ["red and green"]);

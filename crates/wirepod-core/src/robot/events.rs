@@ -70,8 +70,12 @@ pub async fn run_event_stream(
             Ok(None) => break EventLoopExit::StreamEnded,
             Err(err) => {
                 // Go's only visibility into teardown, at `server.go:652`.
-                // `logger.Println` is DEBUG (`logger.go:234-238`).
-                tracing::debug!(target: "sdkapp", "event stream: {err}");
+                // `logger.Println` is DEBUG with an *empty* component
+                // (`logger.go:234-238`), so the explicit `comp` field is what
+                // keeps the web UI's component column empty and `legacyLine`'s
+                // bracket off the line. The target stays `sdkapp` so `RUST_LOG`
+                // still names this module on the formatting layer.
+                tracing::debug!(target: "sdkapp", comp = "", "event stream: {err}");
                 break EventLoopExit::Failed(err);
             }
         }
