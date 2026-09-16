@@ -174,6 +174,9 @@ async fn a_target_whose_directory_does_not_exist_reports_the_error() {
 /// Go's per-call-site mode reaches the new file, masked by the umask the way
 /// `os.WriteFile` is. The assertion is that no bit beyond the requested ones is
 /// set, which is umask independent.
+///
+/// Unix only, because the mode is: Windows has no permission bit set for the
+/// assertion to read.
 #[cfg(unix)]
 #[tokio::test]
 async fn the_requested_mode_reaches_the_new_file() {
@@ -199,6 +202,52 @@ async fn the_requested_mode_reaches_the_new_file() {
         );
         assert_ne!(got & 0o400, 0, "the owner cannot read mode {got:o}");
     }
+}
+
+/// The other half of `os.WriteFile`'s mode handling: a file that already exists
+/// keeps the mode it already had, whatever the call site asks for.
+///
+/// Go hands the mode to an `O_CREATE` open (`os/file.go:849-859`), and `open(2)`
+/// applies a mode only when it creates the file. The shape that makes this
+/// observable is Go's own: four writers create `botSdkInfo.json` at `0644`
+/// (`jdocs/server.go:52`, `:77`, `token/token.go:95`,
+/// `jdocs/botInfoStorer.go:152`) and the pinger writes the same file at `0777`
+/// (`sdkapp/jdocspinger.go:250`), where in Go that `0777` never reaches the
+/// disk.
+///
+/// Unix only, because the mode is. `0640` is set with `chmod`, which no umask
+/// touches, so the expected value is exact.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_file_that_already_exists_keeps_its_own_mode() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = TempDir::new("keepmode");
+    let target = directory.path().join("botSdkInfo.json");
+
+    write_atomic(&target, b"created".to_vec(), 0o644)
+        .await
+        .expect("the creating write failed");
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o640))
+        .expect("could not set the mode the file is to keep");
+
+    write_atomic(&target, b"replaced".to_vec(), 0o777)
+        .await
+        .expect("the replacing write failed");
+
+    assert_eq!(
+        fs::read(&target).expect("the target is missing"),
+        b"replaced"
+    );
+    let got = fs::metadata(&target)
+        .expect("the target is missing")
+        .permissions()
+        .mode()
+        & 0o7777;
+    assert_eq!(
+        got, 0o640,
+        "a write re-stamped mode {got:o} onto a file that already existed"
+    );
 }
 
 /// A failure before the temporary exists: the directory refuses new files, so
@@ -244,14 +293,103 @@ async fn a_write_into_a_read_only_directory_leaves_the_original_and_no_temporary
     );
 }
 
-/// A failure after the temporary exists, in the shape Windows really produces:
-/// another handle holds the target with no sharing, so the rename is refused
-/// however many times it is retried.
+/// The case the Windows retry exists for: another handle holds the target with
+/// no sharing for a moment, which on that platform is a virus scanner or a
+/// search indexer opening the state file just after it changed, and then lets
+/// go. The write has to land anyway.
+///
+/// The budget is the test's rather than production's, and
+/// `write_atomic_with_retry_budget` says why: the production budget is shorter
+/// than the time this machine takes to create, fill and sync the temporary, so
+/// a test using it would be racing its own setup.
 #[cfg(windows)]
 #[tokio::test]
-async fn a_rename_blocked_by_an_open_handle_leaves_the_original_and_no_temporary() {
+async fn a_hold_that_clears_does_not_lose_the_write() {
     use std::fs::OpenOptions;
     use std::os::windows::fs::OpenOptionsExt;
+    use std::sync::mpsc;
+
+    use wirepod_core::test_support::write_atomic_with_retry_budget;
+
+    /// Long enough to outlast creating, filling and syncing the temporary,
+    /// which this machine does in about three milliseconds, so the first rename
+    /// is attempted while the hold is still on.
+    const HOLD: Duration = Duration::from_millis(40);
+    /// Ten attempts backing off from two milliseconds, just over a second of
+    /// waiting in total, so the hold is gone many attempts before the budget
+    /// is.
+    const ATTEMPTS: u32 = 10;
+    const FIRST_BACKOFF: Duration = Duration::from_millis(2);
+
+    let directory = TempDir::new("transient");
+    let target = directory.path().join("botSdkInfo.json");
+    fs::write(&target, b"original").expect("could not seed the target");
+
+    let (opened, is_open) = mpsc::channel();
+    let holder = {
+        let target = target.clone();
+        std::thread::spawn(move || {
+            let held = OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .open(&target)
+                .expect("could not hold the target open");
+            opened.send(()).expect("nobody is waiting for the hold");
+            std::thread::sleep(HOLD);
+            drop(held);
+        })
+    };
+    is_open.recv().expect("the holder never opened the target");
+
+    let write = tokio::time::timeout(
+        CEILING,
+        write_atomic_with_retry_budget(
+            &target,
+            b"replacement".to_vec(),
+            MODE,
+            ATTEMPTS,
+            FIRST_BACKOFF,
+        ),
+    )
+    .await
+    .expect("the write did not finish within the ceiling");
+    write.expect("a hold that clears must not cost the write");
+
+    holder.join().expect("the holder panicked");
+
+    assert_eq!(
+        fs::read(&target).expect("the target is missing"),
+        b"replacement"
+    );
+    assert_eq!(
+        entry_names(directory.path()),
+        ["botSdkInfo.json"],
+        "a temporary survived a write that had to wait"
+    );
+}
+
+/// A failure after the temporary exists, in the shape Windows really produces:
+/// another handle holds the target with no sharing and never lets go, so the
+/// rename is refused however many times it is retried.
+///
+/// What is asserted about how it ends is that it does: the call comes back with
+/// the error rather than waiting on a hold that is never coming, and it comes
+/// back on the production budget rather than on the ceiling. How long that
+/// budget is is not asserted here, because it cannot be: creating, filling and
+/// syncing the temporary costs more on a busy machine than the fourteen
+/// milliseconds the whole budget spends waiting, so no elapsed time tells four
+/// attempts from one. The unit test beside `RetryBudget` pins the number
+/// instead.
+#[cfg(windows)]
+#[tokio::test]
+async fn a_permanently_held_target_reports_an_error_rather_than_spinning() {
+    use std::fs::OpenOptions;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::time::Instant;
+
+    /// Generous, and far under the ceiling, because the point is only that the
+    /// loop ends on its own.
+    const NOT_SPINNING: Duration = Duration::from_secs(5);
 
     let directory = TempDir::new("locked");
     let target = directory.path().join("jdocs.json");
@@ -263,11 +401,23 @@ async fn a_rename_blocked_by_an_open_handle_leaves_the_original_and_no_temporary
         .open(&target)
         .expect("could not hold the target open");
 
-    write_atomic(&target, b"replacement".to_vec(), MODE)
-        .await
-        .expect_err("a rename over a file held without sharing must fail");
+    let started = Instant::now();
+    let write = tokio::time::timeout(
+        CEILING,
+        write_atomic(&target, b"replacement".to_vec(), MODE),
+    )
+    .await
+    .expect("the write never gave up at all");
+    let elapsed = started.elapsed();
 
     drop(held);
+
+    write.expect_err("a rename over a file held without sharing must fail");
+
+    assert!(
+        elapsed < NOT_SPINNING,
+        "the write took {elapsed:?}, so it is waiting for a hold that is never coming"
+    );
 
     assert_eq!(
         fs::read(&target).expect("the target is missing"),

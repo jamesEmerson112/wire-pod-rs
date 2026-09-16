@@ -1,8 +1,9 @@
 //! Core domain state for the wire-pod SDK app: robot identity, the injectable
 //! timing constants, Go-compatible number formatting, the robot seam, the
 //! per-robot stream ownership state machines, the stim receive loop, the camera
-//! guard and frame pump, the never-pruned camera meters, and the bot-info and
-//! jdocs-pinger stores.
+//! guard and frame pump, the never-pruned camera meters, the bot-info and
+//! jdocs-pinger stores, the resolution of Go's two on-disk layouts, and the
+//! atomic replacement every state file is written through.
 //!
 //! The seam in [`robot::conn`] is expressed in domain types, so this crate
 //! depends on neither `wirepod-proto` nor tonic. `wirepod-vector` implements it
@@ -16,8 +17,8 @@
 //!
 //! [`state::AppState`] is the one shared value the handlers read, replacing
 //! Go's roughly thirty unsynchronized globals. The rest of the crate's
-//! eventual responsibility (config, path resolution, the logger ring, and the
-//! jdocs and session-cert stores) arrives in later commits.
+//! eventual responsibility (config, the logger ring, and the jdocs and
+//! session-cert stores) arrives in later commits.
 #![deny(clippy::await_holding_lock)]
 
 pub mod clock;

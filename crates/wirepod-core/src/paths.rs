@@ -100,6 +100,17 @@ impl DataDir {
     /// The packaged layout rooted at an explicit directory, which is what
     /// `--data-dir` selects. `root` is the pod directory itself, not the config
     /// directory above it.
+    ///
+    /// `root` is used exactly as it is given, and only the components below it
+    /// are joined on. Go's `filepath.Join` would have cleaned the whole result
+    /// into the platform separator, so `rooted("C:/wire-pod")` answers a path
+    /// that keeps the forward slash the operator typed where Go would have
+    /// rewritten it. Nothing in Go reaches this constructor to be compared
+    /// with: its packaged branch is only ever handed `os.UserConfigDir()`,
+    /// which is already backslashed, and `--data-dir` has no Go counterpart.
+    /// The spelling an operator supplies is therefore the spelling the log line
+    /// and the accessors show, which is the more useful of the two answers when
+    /// the point of the flag is to say where the state went.
     pub fn rooted(root: impl Into<PathBuf>) -> Self {
         Self {
             root: Root::Under(root.into()),
@@ -324,11 +335,19 @@ impl AssetDir {
 ///
 /// A `String` with a trailing slash, both faithfully. The concatenation means
 /// that on Windows the value mixes separators exactly the way
-/// [`DataDir::jdocs_path`] does, and Go prints it at `vars.go:228`. The
-/// trailing slash is load bearing: every reader concatenates a file name
-/// straight onto it with no separator of its own, as
-/// `jdocs/botInfoStorer.go:32` does for `sdk_config.ini` and `:43` does for a
-/// robot's `.cert`.
+/// [`DataDir::jdocs_path`] does, and Go prints it at `vars.go:228`.
+///
+/// The trailing slash is load bearing because Go's readers disagree about how
+/// they attach a file name to it, and on Windows the two spellings differ.
+/// Everything that touches `sdk_config.ini` concatenates, with no separator of
+/// its own: the ini file itself at `jdocs/botInfoStorer.go:32`, `:60`, `:70`,
+/// `:127` and `token/token.go:177`, and the `cert` value stored inside it at
+/// `jdocs/botInfoStorer.go:43`, `:55`, `:83` and `:106`. The certificate file
+/// that value names is the exception: `jdocs/server.go:114` builds its path
+/// with `filepath.Join`, which cleans every separator to a backslash, and
+/// writes it at `:121`. So the path recorded in the ini and the path of the
+/// file on disk are the same file spelled two ways, and a caller writing the
+/// ini has to reproduce the concatenated spelling rather than the joined one.
 ///
 /// The Linux branch (`vars.go:212-227`), which reconstructs the path from
 /// `os.Getwd`, is deviation 38 and is not reproduced; the caller passes the

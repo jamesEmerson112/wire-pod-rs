@@ -8,6 +8,10 @@
 //! These stand in for the two seams Go opens for the same reason: the
 //! `eventReceiver` interface (`server.go:637`) and the `enableImageStreaming`
 //! function variable (`server.go:670`).
+//!
+//! The one item here that is not a fake is `write_atomic_with_retry_budget`,
+//! which opens the persistence path's Windows rename retry to a test that needs
+//! a budget it can rely on. It exists only on Windows, because the retry does.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -915,6 +919,39 @@ impl SinkLog {
     fn lock(&self) -> MutexGuard<'_, SinkState> {
         self.state.lock().expect("recording sink mutex poisoned")
     }
+}
+
+/// [`crate::persist::write_atomic`] with the Windows rename retry's budget
+/// chosen by the caller.
+///
+/// The production budget is four attempts over fourteen milliseconds of
+/// waiting, which is shorter than the few milliseconds it takes to create, fill
+/// and `sync_all` the temporary, so a test that arranges a hold on the target
+/// and then uses the production budget is racing its own setup: whether the
+/// hold is still there when the first rename is attempted decides what the test
+/// measures. A test that passes a wide budget drives the same loop with the
+/// race gone.
+///
+/// Windows only, because the retry is. `attempts` counts the first try, and
+/// each wait after `first_backoff` is double the last.
+#[cfg(windows)]
+pub async fn write_atomic_with_retry_budget(
+    path: impl Into<std::path::PathBuf>,
+    contents: impl Into<Vec<u8>>,
+    mode: u32,
+    attempts: u32,
+    first_backoff: Duration,
+) -> std::io::Result<()> {
+    crate::persist::write_atomic_with_budget(
+        path,
+        contents,
+        mode,
+        crate::persist::RetryBudget {
+            attempts,
+            first_backoff,
+        },
+    )
+    .await
 }
 
 #[cfg(test)]
