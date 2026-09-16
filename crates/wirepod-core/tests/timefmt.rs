@@ -17,7 +17,9 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::str::FromStr;
 
-use wirepod_core::timefmt::{add_months, days_from_civil, legacy_stamp, rfc3339_nano};
+use wirepod_core::timefmt::{
+    CivilDate, add_months, civil_from_days, days_from_civil, legacy_stamp, rfc3339_nano,
+};
 use wirepod_core::wallclock::{FixedWallClock, WallClock, WallTime};
 
 const EXPECTED: &str =
@@ -25,6 +27,26 @@ const EXPECTED: &str =
 
 /// Seconds in a day, for building an instant out of a recorded civil date.
 const SECS_PER_DAY: i64 = 86_400;
+
+/// The `legacystamp` kinds this file owns, and how many lines the recording
+/// holds of each.
+///
+/// `timefmt` owns the stamp itself and the layout constant that produces it,
+/// which is all this crate's formatter does with that section.
+const TIMEFMT_STAMP_KINDS: [(&str, usize); 2] = [("stamp", 7), ("const", 1)];
+
+/// The `legacystamp` kinds the logger owns, and how many lines the recording
+/// holds of each.
+///
+/// `legacy_line` and `file_line` are Go's whole-line layouts (`logger.go:102`,
+/// `logger.go:113`) and `level_string` is `Level.String`. None of them is a
+/// time format: the logger takes an already formatted stamp, so
+/// `crates/wirepod-core/tests/logger.rs` asserts these against these same
+/// lines and this file asserts only that they are still there and still this
+/// many. Between the two counts, a line added to either half fails a suite
+/// rather than falling into the gap between them.
+const LOGGER_STAMP_KINDS: [(&str, usize); 3] =
+    [("legacy_line", 7), ("file_line", 7), ("level_string", 5)];
 
 /// One recorded case: its section, its input pairs, and its unquoted output.
 struct Case {
@@ -381,10 +403,39 @@ fn add_months_matches_the_recorded_local_zone_probe() {
     );
 }
 
+/// The `legacystamp` section is split between this file and the logger's, and
+/// the split is asserted rather than assumed.
+///
+/// Both halves are counted here: the kinds this file formats, and the kinds it
+/// deliberately leaves alone. A new kind fails the final arm, and a new line of
+/// an existing kind fails its count, so a probe change cannot land in the gap
+/// between the two suites with neither of them noticing.
+#[test]
+fn the_legacystamp_section_is_split_between_this_file_and_the_logger() {
+    let cases = recorded_cases();
+    let mut counted: HashMap<&str, usize> = HashMap::new();
+    for case in section(&cases, "legacystamp") {
+        *counted.entry(case.kind()).or_default() += 1;
+    }
+    for (kind, lines) in TIMEFMT_STAMP_KINDS.iter().chain(LOGGER_STAMP_KINDS.iter()) {
+        assert_eq!(
+            counted.remove(kind).unwrap_or(0),
+            *lines,
+            "the recording no longer holds {lines} legacystamp {kind} lines"
+        );
+    }
+    assert!(
+        counted.is_empty(),
+        "the legacystamp section grew kinds neither this file nor the logger claims: {:?}",
+        counted.keys().collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn legacy_stamp_matches_the_recorded_probe() {
     let cases = recorded_cases();
     let mut stamps = 0usize;
+    let mut layouts = 0usize;
     for case in section(&cases, "legacystamp") {
         match case.kind() {
             "stamp" => {
@@ -416,14 +467,178 @@ fn legacy_stamp_matches_the_recorded_probe() {
                     "line {}: the reference time does not write itself as the layout",
                     case.number
                 );
+                layouts += 1;
             }
             // The whole-line layouts and the level names are the logger's, and
-            // the logger commit tests them against these same lines.
-            "legacy_line" | "file_line" | "level_string" => {}
+            // `tests/logger.rs` asserts them against these same lines. Their
+            // counts are asserted above rather than here.
+            kind if LOGGER_STAMP_KINDS.iter().any(|(name, _)| *name == kind) => {}
             other => panic!("line {}: unknown legacystamp kind {other}", case.number),
         }
     }
-    assert!(stamps > 0, "the recording holds no stamp cases");
+    // Every line of the two kinds this file owns ran, counted against the
+    // recording rather than against a lower bound.
+    assert_eq!(
+        [("stamp", stamps), ("const", layouts)],
+        TIMEFMT_STAMP_KINDS,
+        "the stamp and layout cases this file formats are no longer all of them"
+    );
+}
+
+/// The civil date pair is hand-rolled, so it is pinned by its own algebra
+/// rather than by the handful of dates the probe happens to carry.
+///
+/// Every formatter here and the Windows `SYSTEMTIME` conversion in
+/// [`wirepod_core::wallclock`] are built on these two functions, but the
+/// recording only ever reaches dates between 1999 and 2100, which leaves the
+/// century rule and the 400 year era boundary untested. Walking the round trip
+/// over roughly 875 AD to 3065 AD covers three era boundaries and every
+/// century inside them, and hand-writes no expected value: the property is
+/// that the two functions are inverses.
+#[test]
+fn the_civil_date_conversion_round_trips_over_two_millennia() {
+    for days in -400_000..=400_000 {
+        let date = civil_from_days(days);
+        assert!(
+            (1..=12).contains(&date.month),
+            "day {days} decoded to month {}",
+            date.month
+        );
+        assert!(
+            (1..=31).contains(&date.day),
+            "day {days} decoded to day {}",
+            date.day
+        );
+        assert_eq!(
+            days_from_civil(date.year, date.month, date.day),
+            days,
+            "day {days} decoded to {date:?}, which encodes to a different day"
+        );
+    }
+
+    // The anchors the round trip alone cannot name: the epoch itself, the leap
+    // day at the end of a 400 year era, the century that is not a leap year,
+    // the day after the February before it, and the two neighbouring era
+    // boundaries the 800 year window above reaches.
+    for (year, month, day) in [
+        (1970, 1, 1),
+        (2000, 2, 29),
+        (2100, 2, 28),
+        (1900, 3, 1),
+        (1600, 2, 29),
+        (2400, 2, 29),
+    ] {
+        let days = days_from_civil(year, month, day);
+        assert_eq!(
+            civil_from_days(days),
+            CivilDate { year, month, day },
+            "{year}-{month}-{day} does not survive the round trip"
+        );
+    }
+    assert_eq!(days_from_civil(1970, 1, 1), 0, "the epoch is day zero");
+}
+
+/// The two zone-writing quirks the recording cannot reach, taken from Go's
+/// source rather than from the probe.
+///
+/// `format_rfc3339.go:49-58` computes `zone := offset / 60` and only then asks
+/// `if zone < 0`, so an offset is truncated toward zero to whole minutes and
+/// the sign comes from the truncated count. Every offset the probe records is
+/// a whole number of minutes, which cannot tell that apart from taking the
+/// sign from the raw seconds. These three are written by hand because the
+/// recording holds nothing like them: a sub-minute offset, the historical
+/// `America/Los_Angeles` LMT offset of -28378 seconds that a tzdata build
+/// returns for an instant before 1883, and a half-hour zone for the positive
+/// side.
+#[test]
+fn the_zone_writer_truncates_to_minutes_the_way_go_does() {
+    assert_eq!(
+        rfc3339_nano(WallTime::new(0, 0), -30),
+        "1969-12-31T23:59:30+00:00",
+        "an offset smaller than a minute truncates to zero minutes, and the \
+         sign follows the truncated count rather than the seconds"
+    );
+    assert_eq!(
+        rfc3339_nano(WallTime::new(0, 0), -28_378),
+        "1969-12-31T16:07:02-07:52",
+        "the seconds in the offset are dropped from the zone but not from the \
+         wall time it shifts"
+    );
+    assert_eq!(
+        rfc3339_nano(WallTime::new(0, 0), 34_200),
+        "1970-01-01T09:30:00+09:30",
+        "a half hour zone writes its minutes"
+    );
+    assert_eq!(
+        rfc3339_nano(WallTime::new(0, 0), 0),
+        "1970-01-01T00:00:00Z",
+        "a zero offset is Z and never +00:00"
+    );
+}
+
+/// Go's `appendInt` puts the minus sign outside the width, which only a year
+/// before 1 AD can show.
+///
+/// `format.go:418-423` appends the sign first and pads the digits of the
+/// absolute value to the full width afterwards, so year -1 is `-0001` where
+/// Rust's own `{:04}` would give `-001`. Nothing the server formats produces
+/// such a year, which is exactly why the rule would otherwise ship on the
+/// strength of a comment alone.
+#[test]
+fn a_year_before_the_common_era_pads_the_way_go_does() {
+    let at_midnight = |year: i64| WallTime::new(days_from_civil(year, 1, 1) * SECS_PER_DAY, 0);
+    assert_eq!(
+        rfc3339_nano(at_midnight(0), 0),
+        "0000-01-01T00:00:00Z",
+        "year zero fills the width with zeros"
+    );
+    assert_eq!(
+        rfc3339_nano(at_midnight(-1), 0),
+        "-0001-01-01T00:00:00Z",
+        "the sign sits outside the four digit width"
+    );
+    assert_eq!(
+        rfc3339_nano(at_midnight(-12_345), 0),
+        "-12345-01-01T00:00:00Z",
+        "a year wider than the width is written whole, with no padding"
+    );
+}
+
+/// The system clock has to read the system clock.
+///
+/// Everything else in this file runs on a fixed or a recorded clock, so a
+/// [`SystemWallClock`] that returned a constant would pass the whole suite
+/// while stamping the same `iat` into every token the robot is handed. The
+/// bracket is the two readings taken around the call, widened by two seconds
+/// on each side so a slow machine cannot fail it, which is still far tighter
+/// than any constant a wrong implementation would return.
+#[test]
+fn the_system_wall_clock_reads_the_system_clock() {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    use wirepod_core::wallclock::SystemWallClock;
+
+    let epoch_secs = || {
+        let since = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("this machine's clock is set after the epoch");
+        i64::try_from(since.as_secs()).expect("the epoch offset fits in an i64")
+    };
+
+    let before = epoch_secs();
+    let reading = SystemWallClock::new().now();
+    let after = epoch_secs();
+
+    assert!(
+        reading.nanos < 1_000_000_000,
+        "the nanosecond field has to stay inside its second, but it is {}",
+        reading.nanos
+    );
+    assert!(
+        (before - 2..=after + 2).contains(&reading.unix_secs),
+        "the clock read {}, which is outside the {before} to {after} the call \
+         was bracketed by",
+        reading.unix_secs
+    );
 }
 
 /// A fixed clock has to answer the same thing every time it is asked, which is
@@ -544,10 +759,12 @@ fn the_probe_file_holds_no_unrecognized_case() {
                 case.kind(),
                 "const" | "add_months_local" | "out_unix" | "out_off" | "offset"
             ),
-            "legacystamp" => matches!(
-                case.kind(),
-                "stamp" | "const" | "legacy_line" | "file_line" | "level_string"
-            ),
+            // Split with the logger, kind by kind and line for line, by
+            // [`the_legacystamp_section_is_split_between_this_file_and_the_logger`].
+            "legacystamp" => TIMEFMT_STAMP_KINDS
+                .iter()
+                .chain(LOGGER_STAMP_KINDS.iter())
+                .any(|(kind, _)| *kind == case.kind()),
             // Tested by the token hashing, float formatting and JWT commits.
             "hash" | "f32json" | "claims" => true,
             _ => false,

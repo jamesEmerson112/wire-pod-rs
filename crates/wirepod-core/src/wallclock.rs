@@ -14,8 +14,16 @@
 //! daylight saving transition. For roughly two months a year `expires` carries
 //! a different offset from `iat`, which is the rule the probe's
 //! `addmonth_local` section records.
+//!
+//! The clock is read twice there as well, once per claim (`token.go:195`,
+//! `token.go:196`), so Go's two claims carry sub-second fractions a few
+//! hundred nanoseconds apart rather than the same one. A caller that wants the
+//! bytes Go writes calls [`WallClock::now`] twice too. Nothing downstream can
+//! observe the difference, and nothing can pin it either, since both values
+//! are timestamps, but the claim payload is a byte contract and matching it
+//! costs a second call.
 
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// A point on the wall clock, as Go's `time.Time` reaches the format layer.
 ///
@@ -76,30 +84,45 @@ impl SystemWallClock {
 
 impl WallClock for SystemWallClock {
     fn now(&self) -> WallTime {
-        match SystemTime::now().duration_since(UNIX_EPOCH) {
-            Ok(since) => WallTime::new(
-                i64::try_from(since.as_secs()).unwrap_or(i64::MAX),
-                since.subsec_nanos(),
-            ),
-            // Before the epoch, which a badly set clock can produce. Go keeps
-            // the nanosecond field non-negative and borrows a second for it,
-            // so this does the same rather than handing the formatters a
-            // negative fraction.
-            Err(before) => {
-                let since = before.duration();
-                let secs = i64::try_from(since.as_secs()).unwrap_or(i64::MAX);
-                let nanos = since.subsec_nanos();
-                if nanos == 0 {
-                    WallTime::new(-secs, 0)
-                } else {
-                    WallTime::new(-secs - 1, 1_000_000_000 - nanos)
-                }
-            }
-        }
+        wall_time_from_reading(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|before| before.duration()),
+        )
     }
 
     fn utc_offset_secs_at(&self, unix_secs: i64) -> i32 {
         platform::utc_offset_secs_at(unix_secs)
+    }
+}
+
+/// Splits a system clock reading into Go's seconds plus non-negative fraction.
+///
+/// `Ok` is the distance after the epoch and `Err` the distance before it,
+/// which is the shape [`SystemTime::duration_since`] reports. A reading before
+/// the epoch, which a badly set clock can produce, borrows a second so the
+/// nanosecond field stays in `[0, 1e9)`: that is the invariant `time.Time`
+/// keeps, and every formatter in [`timefmt`](crate::timefmt) writes the
+/// fraction as unsigned digits, so a negative one would come out as garbage
+/// rather than as an earlier instant.
+///
+/// This is split out of [`SystemWallClock::now`] because the pre-epoch arm is
+/// unreachable from a correctly set machine and would otherwise ship untested.
+fn wall_time_from_reading(reading: Result<Duration, Duration>) -> WallTime {
+    match reading {
+        Ok(since) => WallTime::new(
+            i64::try_from(since.as_secs()).unwrap_or(i64::MAX),
+            since.subsec_nanos(),
+        ),
+        Err(before) => {
+            let secs = i64::try_from(before.as_secs()).unwrap_or(i64::MAX);
+            let nanos = before.subsec_nanos();
+            if nanos == 0 {
+                WallTime::new(-secs, 0)
+            } else {
+                WallTime::new(-secs - 1, 1_000_000_000 - nanos)
+            }
+        }
     }
 }
 
@@ -155,10 +178,11 @@ mod platform {
     ///
     /// A null zone argument means the currently active zone, which is the same
     /// `TIME_ZONE_INFORMATION` Go builds `time.Local` from on Windows
-    /// (`time/zoneinfo_windows.go`, `initLocal`). That carries Go's documented
-    /// Windows bug with it, that this year's daylight saving rule is assumed
-    /// to hold for every year, so the two disagree with a tzdata build in the
-    /// same way and agree with each other.
+    /// (`time/zoneinfo_windows.go:230`, `initLocal`, on
+    /// `syscall.GetTimeZoneInformation`). That carries Go's documented Windows
+    /// bug with it (`time/zoneinfo_windows.go:17-20`), that this year's
+    /// daylight saving rule is assumed to hold for every year, so the two
+    /// disagree with a tzdata build in the same way and agree with each other.
     ///
     /// Go falls back to UTC when the zone cannot be read at all, and so does
     /// this, which is also what an instant outside the `SYSTEMTIME` range
@@ -230,7 +254,17 @@ mod platform {
     use std::sync::Once;
 
     /// `localtime_r`'s `tm_gmtoff`, which is the offset the timezone database
-    /// gives for that instant, exactly what Go reads from a `Location`.
+    /// gives for that instant.
+    ///
+    /// Go does not call libc here. It reads the same zone files itself, with
+    /// its own tzfile parser, from the directories listed at
+    /// `time/zoneinfo_unix.go:21-26` and through `initLocal` at
+    /// `time/zoneinfo_unix.go:28`. So the two read one database through two
+    /// readers: they agree on a host whose libc reads those same files, which
+    /// is every glibc host, but an unusual `TZ` value or a musl build can part
+    /// them. The Windows arm above is the call Go itself makes and is the
+    /// platform this server runs on, so this arm is the one a Linux cutover
+    /// would have to re-check.
     ///
     /// `tzset` runs once before the first conversion because POSIX does not
     /// require `localtime_r` to run it, unlike `localtime`. A failed
@@ -262,5 +296,38 @@ mod platform {
     /// UTC, because there is no call to ask on a platform that is neither.
     pub(super) fn utc_offset_secs_at(_unix_secs: i64) -> i32 {
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Duration, WallTime, wall_time_from_reading};
+
+    /// Go's `time.Time` keeps its nanosecond field in `[0, 1e9)` on both sides
+    /// of the epoch, so a reading before it borrows a second rather than
+    /// carrying a negative fraction. Nothing on a correctly set machine
+    /// reaches this arm, which is exactly why it is asserted here.
+    #[test]
+    fn a_reading_before_the_epoch_borrows_a_second_for_its_fraction() {
+        assert_eq!(
+            wall_time_from_reading(Ok(Duration::ZERO)),
+            WallTime::new(0, 0)
+        );
+        assert_eq!(
+            wall_time_from_reading(Ok(Duration::new(1, 500_000_000))),
+            WallTime::new(1, 500_000_000)
+        );
+        assert_eq!(
+            wall_time_from_reading(Err(Duration::new(1, 500_000_000))),
+            WallTime::new(-2, 500_000_000)
+        );
+        assert_eq!(
+            wall_time_from_reading(Err(Duration::new(1, 0))),
+            WallTime::new(-1, 0)
+        );
+        assert_eq!(
+            wall_time_from_reading(Err(Duration::new(0, 1))),
+            WallTime::new(-1, 999_999_999)
+        );
     }
 }

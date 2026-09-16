@@ -122,8 +122,8 @@ fn break_down(unix_secs: i64, utc_offset_secs: i32) -> Broken {
     }
 }
 
-/// Go's `appendInt`: a minus sign if negative, then the digits zero padded to
-/// `width`.
+/// Go's `appendInt` (`format.go:418-423`): a minus sign if negative, then the
+/// digits zero padded to `width`.
 ///
 /// Rust's own `{:04}` counts the sign inside the width, so it writes `-001`
 /// where Go writes `-0001`. Only a year before 1 AD can tell the two apart,
@@ -180,7 +180,11 @@ fn push_fraction(out: &mut String, nanos: u32) {
 /// `Z` for UTC, and otherwise a sign and `HH:MM`. Two quirks are Go's and are
 /// kept: the offset is truncated to whole minutes, so a zone with seconds in
 /// its offset loses them, and the sign comes from that minute count, so an
-/// offset smaller than a minute but not zero is written `+00:00`.
+/// offset smaller than a minute but not zero is written `+00:00`. Both follow
+/// from `zone := offset / 60` preceding `if zone < 0` at
+/// `format_rfc3339.go:49-58`. The probe records only whole-minute offsets, so
+/// these two are pinned by hand-written cases derived from that source rather
+/// than from the recording.
 fn push_zone(out: &mut String, utc_offset_secs: i32) {
     if utc_offset_secs == 0 {
         out.push('Z');
@@ -255,11 +259,21 @@ pub fn legacy_stamp(at: WallTime, utc_offset_secs: i32) -> String {
 /// was in, which is the reason this takes a clock at all. `time.Date` looks
 /// the zone up at the wall time read as if it were UTC, and then again at the
 /// instant that first offset implies, keeping the second answer
-/// (`time/time.go`, `Date`). Two things fall out of that and both are
+/// (`time/time.go:1752-1760`). Two things fall out of that and both are
 /// recorded in the probe's `addmonth_local` section: a target on the far side
 /// of a daylight saving transition carries the offset in effect there, and a
 /// target wall time that does not exist, because the clocks jumped over it,
 /// lands one gap earlier rather than one gap later.
+///
+/// Go guards the pair with `if offset != 0`, which is a no-op: a zero first
+/// offset leaves the candidate instant equal to the wall value the lookup
+/// already placed inside its own interval, so the unconditional two-step below
+/// is equivalent rather than merely close. What the recording cannot pin is
+/// where the *first* lookup happens. A zone whose transitions are hours from
+/// local midnight answers the same whether the guess is taken at the target
+/// wall time or at the input instant, so the probe fixes only the pair's joint
+/// answer; the order here is Go's and the next reader has to check it against
+/// `time/time.go:1752-1760` rather than against the tests.
 pub fn add_months(at: WallTime, clock: &dyn WallClock) -> WallTime {
     let broken = break_down(at.unix_secs, clock.utc_offset_secs_at(at.unix_secs));
     let (year, month) = if broken.date.month == 12 {
