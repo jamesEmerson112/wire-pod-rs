@@ -253,6 +253,15 @@ mod platform {
 mod platform {
     use std::sync::Once;
 
+    // `tzset` from the C library. The pinned `libc` crate (0.2.189) declares
+    // it only for Windows (`libc/src/windows/mod.rs:454`), so the Unix arm
+    // binds it here itself; every libc this crate can link on Unix exports
+    // it, since POSIX requires it. A plain comment, because rustdoc does not
+    // document extern blocks and a doc comment here is a lint error.
+    unsafe extern "C" {
+        fn tzset();
+    }
+
     /// `localtime_r`'s `tm_gmtoff`, which is the offset the timezone database
     /// gives for that instant.
     ///
@@ -275,8 +284,12 @@ mod platform {
         // SAFETY: `tzset` reads the environment and writes the libc zone
         // globals. The `Once` is what keeps it off the path of a concurrent
         // `localtime_r` after the first call.
-        TZSET.call_once(|| unsafe { libc::tzset() });
+        TZSET.call_once(|| unsafe { tzset() });
 
+        // `time_t` is 64 bits wide on the targets this server builds for and
+        // 32 bits on some others, so the conversion is infallible on the
+        // former and the lint would otherwise fire there.
+        #[allow(irrefutable_let_patterns)]
         let Ok(when) = libc::time_t::try_from(unix_secs) else {
             return 0;
         };
