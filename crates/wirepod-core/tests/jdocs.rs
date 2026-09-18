@@ -529,6 +529,76 @@ async fn add_jdoc_answers_the_stored_version_on_a_replace_and_zero_on_an_append(
     );
 }
 
+/// `vars.go:352` reads `latestVersion` back out of the document it has just
+/// stored, so the number answered is the incoming one whether it rose, fell or
+/// is zero. A store that answered the higher of the two would pass the rising
+/// case on its own, and `WriteDoc` would then tell the robot its write had been
+/// accepted at a version nothing holds (`jdocs/server.go:58`).
+///
+/// Go answered 2, 0 and 7 for these three replacements of a stored 5.
+#[tokio::test]
+async fn a_replace_answers_the_incoming_version_even_when_it_falls() {
+    for incoming in [2u64, 0, 7] {
+        let directory = TempDir::new(&format!("replace-version-{incoming}"));
+        let store = JdocsStore::with_docs(
+            directory.data_dir().jdocs_path(),
+            vec![entry(THING, "vic.AppTokens", doc(5, "{}"))],
+        );
+
+        let outcome = add(&store, THING, "vic.AppTokens", doc(incoming, "{}")).await;
+
+        assert_eq!(
+            outcome.latest_version, incoming,
+            "vars.go:352 answers the incoming version, not the larger of the two"
+        );
+        assert_eq!(
+            store.snapshot()[0].jdoc.doc_version,
+            incoming,
+            "vars.go:351 stores the incoming document whatever version it carries"
+        );
+    }
+}
+
+/// `vars.go:354` breaks out of the loop on the first match, so a file that
+/// holds the same `(thing, name)` pair twice has only its first entry replaced
+/// and its second left exactly as it was. A store that replaced every match
+/// would rewrite a file the Go server would have left alone.
+///
+/// The expected bytes are the stdout of a throwaway Go program running
+/// `AddJdoc` verbatim over this list; it answered 9 and left the second entry
+/// at `doc_version` 2.
+#[tokio::test]
+async fn a_replace_stops_at_the_first_of_a_duplicated_pair() {
+    let directory = TempDir::new("duplicate-pair");
+    let store = JdocsStore::with_docs(
+        directory.data_dir().jdocs_path(),
+        vec![
+            entry("vic:1", "vic.RobotSettings", doc(1, "first")),
+            entry("vic:1", "vic.RobotSettings", doc(2, "second")),
+        ],
+    );
+
+    let outcome = add(&store, "vic:1", "vic.RobotSettings", doc(9, "incoming")).await;
+
+    assert_eq!(outcome.latest_version, 9);
+    let docs = store.snapshot();
+    assert_eq!(docs.len(), 2, "vars.go:357 appended instead of replacing");
+    assert_eq!(
+        docs[0].jdoc.json_doc, "incoming",
+        "the first of the pair was not the one replaced"
+    );
+    assert_eq!(
+        (docs[1].jdoc.doc_version, docs[1].jdoc.json_doc.as_str()),
+        (2, "second"),
+        "vars.go:354 breaks, so the second of a duplicated pair is untouched"
+    );
+    assert_eq!(
+        String::from_utf8(directory.file()).expect("the file is not UTF-8"),
+        r#"[{"thing":"vic:1","name":"vic.RobotSettings","jdoc":{"doc_version":9,"fmt_version":1,"json_doc":"incoming"}},{"thing":"vic:1","name":"vic.RobotSettings","jdoc":{"doc_version":2,"fmt_version":1,"json_doc":"second"}}]"#,
+        "the file is not the bytes Go's AddJdoc left over the same list"
+    );
+}
+
 /// `vars.go:351` assigns to `.Jdoc` and not to the entry, so a replace drops
 /// whatever unknown keys the old document carried and keeps the ones the entry
 /// itself carried.
@@ -715,9 +785,10 @@ async fn write_puts_the_marshalled_list_in_the_file() {
 }
 
 /// Every write goes through [`wirepod_core::persist::write_atomic`], so the
-/// file is swapped rather than truncated and refilled. That is deviation 29,
-/// and it is what makes the state file safe against a crash and against two
-/// writers at once where Go's `os.WriteFile` (`vars.go:317`) is neither.
+/// file is swapped rather than truncated and refilled. That is the
+/// atomic-persistence deviation C23 records, and it is what makes the state
+/// file safe against a crash and against two writers at once where Go's
+/// `os.WriteFile` (`vars.go:317`) is neither.
 ///
 /// A second hard link to the original file is the witness: a rename unlinks the
 /// name and leaves the witness pointing at the old bytes, while a write in
@@ -1067,6 +1138,45 @@ async fn a_file_that_is_there_is_announced_however_it_parses() {
     }
 }
 
+/// The fourth arm, which no file contents can reach. `vars.go:239` stats and
+/// `vars.go:240` reads, and both errors are discarded, so a path that stats and
+/// will not read carries nil bytes into the unmarshal and is still announced by
+/// the line at `vars.go:242`. A directory in the file's place is that path on
+/// both platforms: `os.Stat` and `fs::metadata` describe it, and `os.ReadFile`
+/// and `fs::read` refuse it.
+#[tokio::test]
+async fn a_file_that_stats_but_cannot_be_read_is_announced_and_loads_nothing() {
+    let directory = TempDir::new("load-unreadable");
+    fs::create_dir(directory.jdocs_file()).expect("could not put a directory in the file's place");
+    let ring = ring();
+
+    let loaded = {
+        let _guard = watching(&ring);
+        tokio::time::timeout(CEILING, JdocsStore::load(&directory.data_dir()))
+            .await
+            .expect("the load hung")
+    };
+
+    assert!(
+        matches!(&loaded.outcome, JdocsLoadOutcome::Unreadable(_)),
+        "a path that stats and will not read took the wrong arm: {:?}",
+        loaded.outcome
+    );
+    assert!(
+        loaded.store.snapshot().is_empty(),
+        "vars.go:241 unmarshals nil bytes, so nothing is in the list"
+    );
+    assert_eq!(
+        recorded_lines(&ring),
+        [(
+            "DEBUG".to_owned(),
+            String::new(),
+            "Loaded jdocs file".to_owned()
+        )],
+        "vars.go:242 sits outside the discarded read error, so the line is still logged"
+    );
+}
+
 /// The good file loads the whole list, and nothing was written on the way: Go's
 /// loader reads and never writes.
 #[tokio::test]
@@ -1160,13 +1270,13 @@ async fn the_jdocs_write_site_passes_gos_mode() {
 
 /// Sixteen concurrent `AddJdoc` calls, each writing the whole file.
 ///
-/// Every one marshals under the lock and replaces the file by rename, so the
-/// file on disk is always one writer's bytes in full: it parses, and every
-/// entry in it is one of the sixteen. What the discipline deliberately does not
-/// order is the writes themselves, so the file may hold an earlier state than
-/// the list until the next write, which is why the final assertion writes once
-/// more. Go has the same race and, because `os.WriteFile` truncates in place,
-/// a worse one: there a reader can catch a half-written file.
+/// Each takes the list's lock to change it, then the gate to marshal and
+/// write it, so the file on disk is always one writer's bytes in full: it
+/// parses, and every entry in it is one of the sixteen. Once all sixteen have
+/// returned it is the whole list, because the last of them to take the gate
+/// marshalled after the last of them had changed the list. Go has the first
+/// property nowhere, because `os.WriteFile` truncates in place and a reader can
+/// catch a half-written file, and the second only where a caller writes twice.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_adds_never_leave_a_torn_file() {
     const WRITERS: u64 = 16;
@@ -1197,11 +1307,6 @@ async fn concurrent_adds_never_leave_a_torn_file() {
     }
 
     let on_disk = parse_jdocs(&directory.file()).expect("the file on disk is torn");
-    assert!(
-        !on_disk.is_empty() && on_disk.len() <= WRITERS as usize,
-        "the file holds {} entries, which is no state any writer produced",
-        on_disk.len()
-    );
     for held in &on_disk {
         assert_eq!(held.name, "vic.RobotSettings");
         assert!(
@@ -1215,14 +1320,109 @@ async fn concurrent_adds_never_leave_a_torn_file() {
         "a failed rename left a temporary behind"
     );
 
-    store.write().await.expect("the settling write failed");
-    let settled = parse_jdocs(&directory.file()).expect("the settled file did not parse");
+    let settled = store.snapshot();
     assert_eq!(
         settled.len(),
         WRITERS as usize,
         "an add was lost from the list itself, which the lock has to prevent"
     );
-    assert_eq!(settled, store.snapshot());
+    assert_eq!(
+        on_disk, settled,
+        "the file is not the list, so a write landed out of the order it marshalled in"
+    );
+}
+
+/// Two mutations that overlap leave the file holding the state the later one
+/// produced, whatever the two marshals cost.
+///
+/// Go's four `AddJdoc` call sites genuinely overlap. The jdocs pinger calls it
+/// from a ticker goroutine (`sdkapp/jdocspinger.go:126`) while a robot's
+/// `WriteDoc` (`jdocs/server.go:40`) or the `DeleteData` its `ReadDocs` reaches
+/// (`jdocs/server.go:83`) runs on a gRPC handler. A store that marshals its
+/// list and only then awaits the write lets those two land their replacements
+/// in the opposite order from their marshals, and a six-megabyte document
+/// against a forty-byte one makes that ordering a foregone conclusion rather
+/// than a coincidence: the small write always finishes first, so the large one
+/// lands last and the file keeps a state the list has moved past.
+///
+/// Go converges anyway at its two robot-facing sites, because each calls
+/// `WriteJdocs` again right after `AddJdoc` (`jdocs/server.go:40-41`,
+/// `token/token.go:125-126`) and that second write re-marshals the list at a
+/// later instant. [`wirepod_core::persist::WriteGate`] does the same for every
+/// site rather than two: the marshal happens under the gate, so whichever write
+/// takes the gate last writes the list as it is then.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn an_overlapping_mutation_does_not_leave_the_file_behind_the_list() {
+    /// Big enough that writing and flushing it takes far longer than writing
+    /// the forty bytes the delete produces, so the two renames are ordered by
+    /// the size of the writes and not by how the runtime happened to schedule
+    /// them.
+    const BIG: usize = 6 * 1024 * 1024;
+
+    let directory = TempDir::new("overlap");
+    let store = Arc::new(JdocsStore::with_docs(
+        directory.data_dir().jdocs_path(),
+        vec![entry(
+            "vic:big",
+            "vic.RobotSettings",
+            doc(1, &"a".repeat(BIG)),
+        )],
+    ));
+    store.write().await.expect("the seed write failed");
+
+    let adding = Arc::clone(&store);
+    let add = tokio::spawn(async move {
+        adding
+            .add_jdoc("vic:tiny", "vic.RobotSettings", doc(1, "{}"))
+            .await
+    });
+
+    // The add is let get as far as its mutation before the delete starts, so
+    // the two overlap rather than simply queueing. Without the gate that
+    // mutation and the six-megabyte marshal are one critical section, so
+    // reading the list back here waits for the marshal too and the delete is
+    // guaranteed to be the second of the two to marshal and the first to land.
+    tokio::time::timeout(CEILING, async {
+        while store.snapshot().len() < 2 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the add never reached its mutation");
+
+    tokio::time::timeout(CEILING, store.delete_data("vic:big"))
+        .await
+        .expect("the delete hung")
+        .expect("the delete failed to write");
+    tokio::time::timeout(CEILING, add)
+        .await
+        .expect("the add hung")
+        .expect("the add panicked")
+        .written
+        .expect("the add failed to write");
+
+    let held = store.snapshot();
+    assert_eq!(
+        held.len(),
+        1,
+        "the list is not the state the two mutations left"
+    );
+    assert_eq!(held[0].thing, "vic:tiny");
+    assert_eq!(
+        directory.file().len(),
+        marshal_jdocs(&held).len(),
+        "the file holds a state the list has moved past"
+    );
+    assert_eq!(
+        directory.file(),
+        marshal_jdocs(&held),
+        "the file is not the list"
+    );
+    assert_eq!(
+        directory.entries(),
+        ["jdocs.json"],
+        "a write left a temporary behind"
+    );
 }
 
 /// The one helper every operation test uses, so that the ceiling and the write

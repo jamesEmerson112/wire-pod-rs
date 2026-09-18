@@ -63,7 +63,7 @@ use crate::config::{
     DecodeFault, Extra, Faults, GoObject, Kind, go_marshal, store_object, store_string, store_u64,
 };
 use crate::paths::DataDir;
-use crate::persist::write_atomic;
+use crate::persist::WriteGate;
 
 /// The permission bit set Go hands `os.WriteFile` at the one jdocs write site
 /// (`vars.go:317`).
@@ -495,23 +495,26 @@ pub struct LoadedJdocs {
 /// The jdocs file: Go's `vars.BotJdocs` (`vars.go:61`) and the four functions
 /// that touch it.
 ///
-/// The list is behind a [`std::sync::Mutex`] where Go has none at all. Every
-/// mutator takes the lock, changes the list, marshals it while still holding
-/// the lock and drops the guard before awaiting the write, so the bytes that
-/// reach the disk are always one consistent state of the list and no guard
-/// crosses an `.await`. What that does not order is the writes themselves: two
-/// mutators can marshal in one order and rename in the other, leaving the file
-/// holding an earlier state than the one in memory until the next write. Go has
-/// the same race and a worse one on top of it, because it marshals outside any
-/// lock and `os.WriteFile` truncates in place, so a Go reader can catch a
-/// half-written file where a reader here cannot.
+/// The list is behind a [`std::sync::Mutex`] where Go has none at all, so two
+/// mutators cannot interleave a change to it. The writes go through a
+/// [`WriteGate`], so they cannot interleave either: each takes the gate,
+/// marshals the list as it stands, and writes. Whichever write takes the gate
+/// last therefore marshals after every mutation that has already asked to be
+/// written, and the file ends up holding the state the list is in rather than
+/// whichever bytes were marshalled first.
+///
+/// That is what Go's second write buys it at two of its four call sites
+/// (`jdocs/server.go:40-41`, `token/token.go:125-126`) and what its other two
+/// (`sdkapp/jdocspinger.go:126`, `sdkapp/server.go:223`) go without. Go is
+/// worse off again on top of that, because `os.WriteFile` truncates in place,
+/// so a Go reader can catch a half-written file where a reader here cannot.
 #[derive(Debug)]
 pub struct JdocsStore {
-    /// `vars.JdocsPath` as [`DataDir::jdocs_path`] spells it, mixed separators
-    /// and all.
-    path: String,
     /// Go's `vars.BotJdocs` (`vars.go:61`).
     docs: Mutex<Vec<BotJdoc>>,
+    /// `vars.JdocsPath` as [`DataDir::jdocs_path`] spells it, mixed separators
+    /// and all, with the turn every write of it takes.
+    gate: WriteGate,
 }
 
 impl JdocsStore {
@@ -524,8 +527,8 @@ impl JdocsStore {
     /// A store holding `docs`, for a test and for the loader below.
     pub fn with_docs(path: impl Into<String>, docs: Vec<BotJdoc>) -> Self {
         Self {
-            path: path.into(),
             docs: Mutex::new(docs),
+            gate: WriteGate::new(path, JDOCS_FILE_MODE),
         }
     }
 
@@ -574,7 +577,7 @@ impl JdocsStore {
 
     /// The file this store writes to, as Go spells it.
     pub fn path(&self) -> &str {
-        &self.path
+        self.gate.path()
     }
 
     /// A copy of the whole list, for a caller that has to hold it across an
@@ -621,19 +624,25 @@ impl JdocsStore {
     /// document carried, while the entry's own unknown keys survive, because Go
     /// assigns to `.Jdoc` and not to the entry.
     ///
-    /// Go then calls `WriteJdocs` (`vars.go:364`) and both of its callers call
-    /// it again immediately (`jdocs/server.go:40-41`, `token/token.go:125-126`),
-    /// so the file is written twice with the same bytes. This writes once. The
-    /// second write is unobservable for the same reason the first one is
-    /// atomic: a reader sees one whole file or the other, and the two are
-    /// identical.
+    /// Go then calls `WriteJdocs` (`vars.go:364`) and two of its four callers
+    /// call it again immediately (`jdocs/server.go:40-41`,
+    /// `token/token.go:125-126`). This writes once, because the one thing that
+    /// second write does is re-marshal the list at a later instant, and
+    /// [`WriteGate`] already marshals inside the turn. The other two callers
+    /// (`sdkapp/jdocspinger.go:126`, `sdkapp/server.go:223`) never write twice
+    /// in Go and gain the ordering here.
     pub async fn add_jdoc(&self, thing: &str, name: &str, jdoc: Jdoc) -> AddOutcome {
-        let (latest_version, bytes) = {
+        let latest_version = {
             let mut docs = self.locked();
             let found = docs
                 .iter()
                 .position(|entry| entry.thing == thing && entry.name == name);
-            let latest_version = match found {
+            match found {
+                // `vars.go:351-352` assigns the incoming document and then
+                // reads the version back out of the entry it has just written,
+                // and `vars.go:354` breaks, so the answer is the incoming
+                // version however it compares with the one it replaced and a
+                // duplicated pair's second entry is untouched.
                 Some(index) => {
                     docs[index].jdoc = jdoc;
                     docs[index].jdoc.doc_version
@@ -647,13 +656,12 @@ impl JdocsStore {
                     });
                     0
                 }
-            };
-            (latest_version, marshal_jdocs(&docs))
+            }
         };
 
         AddOutcome {
             latest_version,
-            written: self.write_bytes(bytes).await,
+            written: self.write().await,
         }
     }
 
@@ -665,21 +673,21 @@ impl JdocsStore {
     /// removing the last entry leaves Go's nil slice, which marshals to the
     /// literal `null`.
     pub async fn delete_data(&self, thing: &str) -> io::Result<()> {
-        let bytes = {
-            let mut docs = self.locked();
-            docs.retain(|entry| entry.thing != thing);
-            marshal_jdocs(&docs)
-        };
-        self.write_bytes(bytes).await
+        self.locked().retain(|entry| entry.thing != thing);
+        self.write().await
     }
 
-    /// Go's `WriteJdocs` (`vars.go:315-318`).
+    /// Go's `WriteJdocs` (`vars.go:315-318`), which is the only writer: the two
+    /// mutators above reach the file through this and nothing else, exactly as
+    /// `AddJdoc` and `DeleteData` reach `os.WriteFile` through it
+    /// (`vars.go:329`, `:364`).
     ///
-    /// The mode is the one that call site passes, [`JDOCS_FILE_MODE`], and the
-    /// replacement is atomic where Go's `os.WriteFile` truncates in place.
+    /// The mode is the one that call site passes, [`JDOCS_FILE_MODE`]; the
+    /// replacement is atomic where Go's `os.WriteFile` truncates in place; and
+    /// the marshal happens inside the gate's turn, so two writes cannot land in
+    /// the opposite order from their bytes.
     pub async fn write(&self) -> io::Result<()> {
-        let bytes = marshal_jdocs(&self.locked());
-        self.write_bytes(bytes).await
+        self.gate.write(|| marshal_jdocs(&self.locked())).await
     }
 
     /// The list, with a poisoned lock read through rather than panicked on.
@@ -690,11 +698,6 @@ impl JdocsStore {
     /// guard is gone.
     fn locked(&self) -> std::sync::MutexGuard<'_, Vec<BotJdoc>> {
         self.docs.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// The one write, so that the mode and the path are stated once.
-    async fn write_bytes(&self, bytes: Vec<u8>) -> io::Result<()> {
-        write_atomic(PathBuf::from(&self.path), bytes, JDOCS_FILE_MODE).await
     }
 }
 

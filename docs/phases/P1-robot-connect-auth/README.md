@@ -1,13 +1,46 @@
 # P1: robot connects and authenticates
 
 This folder is the Phase 1 spec folder. Today it holds the two Go probe
-programs whose recorded stdout the Rust tests read through `include_str!`.
+programs whose recorded stdout the Rust tests read through `include_str!`, and
+`fixtures/`, which holds two state files the same tests read the same way.
 Commit C23 adds the rest of the phase spec beside them (`routes.md`,
 `state.md`, `startup-and-restart.md`) and extends this file.
 
 `.gitignore` carries `docs/*` plus `!docs/phases/`, so everything here is
 tracked normally with `git add`. Nothing under `docs/` outside `docs/phases/`
 is.
+
+## The fixtures
+
+`fixtures/apiConfig.json` and `fixtures/jdocs.json` are this machine's own live
+state files, copied byte for byte out of `%APPDATA%\wire-pod` and then redacted
+in place. Each is `include_str!`'d by a test that asserts the parse and the
+rewrite reproduce every byte, so the byte count is part of what they pin:
+`apiConfig.json` is 743 bytes and `jdocs.json` is 5336, both without a trailing
+newline.
+
+Redaction replaced whole leaf values, named by key, with ASCII placeholders of
+exactly the length the original had:
+
+| File | Keys replaced |
+|---|---|
+| `apiConfig.json` | `knowledge.key`, `knowledge.openai_prompt` |
+| `jdocs.json` | every `hash` inside the `vic.AppTokens` document's `json_doc`, and the `vic.RobotSettings` `default_location` |
+
+Every other byte is the live one, the serials, versions and timestamps
+included, which is the point: the fixture has the real file's shape, key order
+and length and none of its secrets. The scripts that did the substitutions
+worked on the raw bytes, printed neither original, and asserted that the output
+was the same length as the input and still re-marshalled to itself through Go's
+own structs. They are deliberately not committed, because a committed
+redactor invites regenerating a fixture by running it over a fresh copy, and
+the thing that has to be checked at that point is the output, not the script.
+
+A regenerated fixture therefore keeps every byte outside the table above and
+replaces every value in it with a same-length placeholder. Never hand-edit
+one, for the same reason an `expected.txt` is never hand-edited: the file is a
+recording, and an edit that makes a test pass has changed the recording rather
+than the port.
 
 ## The probes
 

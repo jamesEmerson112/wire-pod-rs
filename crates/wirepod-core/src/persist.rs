@@ -14,8 +14,15 @@
 //! beside it, flushes it to the disk, and renames the temporary over the
 //! target, which is a single directory operation: a reader sees either the old
 //! file or the new one, never a partial one, and a failure anywhere leaves the
-//! old file exactly as it was. That is deviation 29, and it is the reason the
-//! stores may write once where Go writes twice.
+//! old file exactly as it was. That is the atomic-persistence deviation C23
+//! records, and it is the reason the stores may write once where Go writes
+//! twice.
+//!
+//! What one atomic write cannot do on its own is order two of them.
+//! [`WriteGate`] is that second half: one state file's writes taken in turn,
+//! with the marshal moved inside the turn, so the file always ends up holding
+//! the state its store was in rather than whichever bytes were marshalled
+//! first.
 //!
 //! The whole sequence runs inside `spawn_blocking`, because these are blocking
 //! file operations on a runtime whose worker threads are also carrying gRPC
@@ -108,6 +115,89 @@ pub(crate) async fn write_atomic_with_budget(
     tokio::task::spawn_blocking(move || write_blocking(&path, &contents, mode, budget))
         .await
         .map_err(io::Error::other)?
+}
+
+/// One state file, with every write of it taken in turn.
+///
+/// [`write_atomic`] makes a single write indivisible, but two of them can still
+/// finish in either order, and a store that marshals its list and only then
+/// awaits the write can have the two orders disagree. A large mutation and a
+/// small one issued at nearly the same instant land their renames in the order
+/// the writes finish, which is the order of their sizes, while their bytes were
+/// decided in the order they marshalled; the file is then left holding a state
+/// the store itself has moved past, and stays that way until something writes
+/// again. Go's jdocs file has exactly that shape: the pinger's ticker calls
+/// `AddJdoc` from its own goroutine (`sdkapp/jdocspinger.go:126`) while a
+/// robot's `WriteDoc` (`jdocs/server.go:40`) or the `DeleteData` its `ReadDocs`
+/// reaches (`jdocs/server.go:83`) runs on a gRPC handler.
+///
+/// Go converges anyway wherever a caller writes twice, which two of its four
+/// `AddJdoc` callers do: `WriteDoc` and `WriteTokenHash` each call `WriteJdocs`
+/// again straight after (`jdocs/server.go:40-41`, `token/token.go:125-126`),
+/// and that second write re-marshals the list at a later instant. A gate gives
+/// every call site what only those two have: [`WriteGate::write`] takes the
+/// turn first and marshals inside it, so whichever write takes the gate last
+/// marshals after every mutation that has already asked to be written, and the
+/// writes themselves finish in the order they took the gate.
+///
+/// The turn is a [`tokio::sync::Mutex`] and its guard is deliberately held
+/// across the write's `.await`, which is why it is a `tokio` one and not a
+/// [`std::sync::Mutex`], the same reason the per-serial connect lock in
+/// [`crate::robot::registry`] is. The lists the stores keep stay behind
+/// [`std::sync::Mutex`], their guards are taken and dropped inside the
+/// marshalling closure, and the crate-level `deny(clippy::await_holding_lock)`
+/// keeps it that way.
+///
+/// One gate covers one file. Two gates over the same path would order nothing,
+/// so a file with more than one writer hands them all the same gate.
+#[derive(Debug)]
+pub struct WriteGate {
+    /// The file, as the caller spelled it. A [`String`] because that is what
+    /// [`crate::paths::DataDir`] hands out: Go builds these paths by
+    /// concatenation and they reach the disk with the separators Go put in
+    /// them.
+    path: String,
+    /// The mode of the `os.WriteFile` call site being reproduced, as
+    /// [`write_atomic`] takes it.
+    mode: u32,
+    /// Whose turn it is. The unit is the point: the gate orders writes and
+    /// guards nothing.
+    turn: tokio::sync::Mutex<()>,
+}
+
+impl WriteGate {
+    /// The gate for `path`, whose writes carry `mode`.
+    pub fn new(path: impl Into<String>, mode: u32) -> Self {
+        Self {
+            path: path.into(),
+            mode,
+            turn: tokio::sync::Mutex::new(()),
+        }
+    }
+
+    /// The file this gate writes, as the caller spelled it.
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    /// Takes the gate, calls `marshal`, and replaces the file with what it
+    /// produced.
+    ///
+    /// `marshal` runs inside the turn and nowhere else, which is what makes the
+    /// bytes reaching the disk no older than the moment this write began. It is
+    /// called exactly once, synchronously, so a closure that reads a
+    /// [`std::sync::Mutex`] may take its guard and drop it inside the closure
+    /// body without that guard ever meeting an `.await`.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`write_atomic`] reports. A failure leaves the file exactly as
+    /// it was and releases the gate, so a later write is unaffected.
+    pub async fn write(&self, marshal: impl FnOnce() -> Vec<u8>) -> io::Result<()> {
+        let _turn = self.turn.lock().await;
+        let contents = marshal();
+        write_atomic(PathBuf::from(&self.path), contents, self.mode).await
+    }
 }
 
 /// The blocking half: create, write, flush, rename, and clean up after a
