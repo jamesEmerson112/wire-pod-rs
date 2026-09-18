@@ -488,16 +488,24 @@ fn legacy_stamp_matches_the_recorded_probe() {
 /// The civil date pair is hand-rolled, so it is pinned by its own algebra
 /// rather than by the handful of dates the probe happens to carry.
 ///
-/// Every formatter here and the Windows `SYSTEMTIME` conversion in
+/// Every formatter here and the Windows zone table in
 /// [`wirepod_core::wallclock`] are built on these two functions, but the
 /// recording only ever reaches dates between 1999 and 2100, which leaves the
 /// century rule and the 400 year era boundary untested. Walking the round trip
-/// over roughly 875 AD to 3065 AD covers three era boundaries and every
-/// century inside them, and hand-writes no expected value: the property is
-/// that the two functions are inverses.
+/// over roughly 400 BC to 3065 AD covers six era boundaries and every century
+/// inside them, and hand-writes no expected value: the property is that the two
+/// functions are inverses.
+///
+/// The lower end is not a round number. `civil_from_days` corrects the era
+/// division for a negative day by subtracting `DAYS_PER_ERA - 1` before
+/// dividing, and subtracting `DAYS_PER_ERA` instead gives the same answer
+/// everywhere except on a day that is an exact negative multiple of 146097.
+/// The first of those below the epoch is day -865565, 1 March of the proleptic
+/// year -400, so the walk starts there. Year -400 is not a date anything
+/// formats; it is the nearest day on which that correction decides an answer.
 #[test]
 fn the_civil_date_conversion_round_trips_over_two_millennia() {
-    for days in -400_000..=400_000 {
+    for days in -865_565..=400_000 {
         let date = civil_from_days(days);
         assert!(
             (1..=12).contains(&date.month),
@@ -518,8 +526,8 @@ fn the_civil_date_conversion_round_trips_over_two_millennia() {
 
     // The anchors the round trip alone cannot name: the epoch itself, the leap
     // day at the end of a 400 year era, the century that is not a leap year,
-    // the day after the February before it, and the two neighbouring era
-    // boundaries the 800 year window above reaches.
+    // the day after the February before it, the two neighbouring era boundaries
+    // the window above reaches, and the era boundary it starts on.
     for (year, month, day) in [
         (1970, 1, 1),
         (2000, 2, 29),
@@ -527,6 +535,7 @@ fn the_civil_date_conversion_round_trips_over_two_millennia() {
         (1900, 3, 1),
         (1600, 2, 29),
         (2400, 2, 29),
+        (-400, 3, 1),
     ] {
         let days = days_from_civil(year, month, day);
         assert_eq!(
@@ -536,6 +545,12 @@ fn the_civil_date_conversion_round_trips_over_two_millennia() {
         );
     }
     assert_eq!(days_from_civil(1970, 1, 1), 0, "the epoch is day zero");
+    assert_eq!(
+        days_from_civil(-400, 3, 1),
+        -865_565,
+        "the era correction is only visible on an exact negative multiple of \
+         146097, and this is the first one below the epoch"
+    );
 }
 
 /// The two zone-writing quirks the recording cannot reach, taken from Go's
@@ -579,7 +594,7 @@ fn the_zone_writer_truncates_to_minutes_the_way_go_does() {
 /// Go's `appendInt` puts the minus sign outside the width, which only a year
 /// before 1 AD can show.
 ///
-/// `format.go:418-423` appends the sign first and pads the digits of the
+/// `format.go:418-446` appends the sign first and pads the digits of the
 /// absolute value to the full width afterwards, so year -1 is `-0001` where
 /// Rust's own `{:04}` would give `-001`. Nothing the server formats produces
 /// such a year, which is exactly why the rule would otherwise ship on the
@@ -717,6 +732,206 @@ fn the_system_offset_follows_the_zone_daylight_rule() {
         (summer - winter).abs(),
         ((zone.DaylightBias - zone.StandardBias) * 60).abs(),
         "the two offsets differ by exactly the zone's declared daylight bias"
+    );
+}
+
+/// This machine's `TIME_ZONE_INFORMATION`, or `None` when there is none.
+///
+/// A machine with no readable zone is a machine setting rather than a failure
+/// of the code under test, so the tests below return instead of failing.
+#[cfg(windows)]
+fn live_zone() -> Option<windows_sys::Win32::System::Time::TIME_ZONE_INFORMATION> {
+    use windows_sys::Win32::System::Time::{
+        GetTimeZoneInformation, TIME_ZONE_ID_INVALID, TIME_ZONE_INFORMATION,
+    };
+
+    // SAFETY: the struct is plain integers and arrays of them, so an all-zero
+    // value is a valid one, and the pointer is to a live local that outlives
+    // the call, which writes only through it.
+    let mut zone: TIME_ZONE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetTimeZoneInformation(&mut zone) } == TIME_ZONE_ID_INVALID {
+        return None;
+    }
+    Some(zone)
+}
+
+/// The UTC year Go centres its Windows transition table on
+/// (`time/zoneinfo_windows.go:188-189`).
+#[cfg(windows)]
+fn base_year() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("this machine's clock is set after the epoch")
+        .as_secs();
+    let secs = i64::try_from(secs).expect("the epoch offset fits in an i64");
+    civil_from_days(secs.div_euclid(SECS_PER_DAY)).year
+}
+
+/// The instant a Windows daylight rule names in `year`, derived here rather
+/// than asked of the code under test.
+///
+/// Windows writes a rule as a month, a weekday counting from Sunday, a week
+/// within that month from 1 to 5 where 5 means the last one, and the wall time
+/// the change happens at. `offset_before` is the offset in effect just before
+/// it, which is what turns that wall time into an instant.
+///
+/// This is deliberately not the arithmetic
+/// [`wirepod_core::wallclock`](wirepod_core::wallclock) uses. It finds the end
+/// of the month from the first day of the next one instead of from a table of
+/// month lengths, so the two agree only because both read the same rule out of
+/// the same struct.
+#[cfg(windows)]
+fn declared_transition(
+    year: i64,
+    rule: &windows_sys::Win32::Foundation::SYSTEMTIME,
+    offset_before: i32,
+) -> i64 {
+    let month = u32::from(rule.wMonth);
+    let first = days_from_civil(year, month, 1);
+    // 1 January 1970 was a Thursday, which is 4 counting from Sunday.
+    let weekday = (first + 4).rem_euclid(7);
+    let mut day = 1 + (i64::from(rule.wDayOfWeek) - weekday).rem_euclid(7);
+    if rule.wDay >= 5 {
+        let next_month = if month == 12 {
+            days_from_civil(year + 1, 1, 1)
+        } else {
+            days_from_civil(year, month + 1, 1)
+        };
+        day += 4 * 7;
+        if first + day > next_month {
+            day -= 7;
+        }
+    } else {
+        day += (i64::from(rule.wDay) - 1) * 7;
+    }
+    (first + day - 1) * SECS_PER_DAY
+        + i64::from(rule.wHour) * 3600
+        + i64::from(rule.wMinute) * 60
+        + i64::from(rule.wSecond)
+        - i64::from(offset_before)
+}
+
+/// Each offset is the one the zone declares, sign and all, and it changes at
+/// the exact minute the rule names.
+///
+/// [`the_system_offset_follows_the_zone_daylight_rule`] asks only that January
+/// and July differ by the declared bias. An implementation that negated every
+/// offset passes that, and so does one that reads the rule's hour and drops its
+/// minute, because the difference between the two offsets is untouched by
+/// either. This test derives both of this year's transition instants from the
+/// `TIME_ZONE_INFORMATION` and then asserts the whole offset on each side of
+/// each of them, a minute apart, which neither mistake survives.
+///
+/// Reading the transitions from the rules rather than naming dates is what
+/// keeps this honest on a machine set to some other zone: a southern hemisphere
+/// zone changes into daylight saving in October and out of it in April, and
+/// both are still the instant its own `DaylightDate` and `StandardDate` name.
+#[cfg(windows)]
+#[test]
+fn the_system_offset_changes_at_the_minute_the_zone_declares() {
+    use wirepod_core::wallclock::SystemWallClock;
+
+    let Some(zone) = live_zone() else {
+        return;
+    };
+    // A zero standard month is Windows saying the zone has no daylight rule, so
+    // there is no transition to sit either side of.
+    if zone.StandardDate.wMonth == 0 {
+        return;
+    }
+
+    let standard = -(zone.Bias + zone.StandardBias) * 60;
+    let daylight = -(zone.Bias + zone.DaylightBias) * 60;
+    let clock = SystemWallClock::new();
+    let year = base_year();
+    let into_daylight = declared_transition(year, &zone.DaylightDate, standard);
+    let into_standard = declared_transition(year, &zone.StandardDate, daylight);
+
+    assert_eq!(
+        clock.utc_offset_secs_at(into_daylight - 60),
+        standard,
+        "a minute before the zone starts daylight saving the offset is \
+         -(Bias + StandardBias) * 60"
+    );
+    assert_eq!(
+        clock.utc_offset_secs_at(into_daylight),
+        daylight,
+        "at the minute the zone starts daylight saving the offset is \
+         -(Bias + DaylightBias) * 60"
+    );
+    assert_eq!(
+        clock.utc_offset_secs_at(into_standard - 60),
+        daylight,
+        "a minute before the zone ends daylight saving it is still in it"
+    );
+    assert_eq!(
+        clock.utc_offset_secs_at(into_standard),
+        standard,
+        "at the minute the zone ends daylight saving the offset is the \
+         standard one again"
+    );
+}
+
+/// The offset stops changing outside the two hundred year window.
+///
+/// Go builds two transitions a year for a hundred years each side of the year
+/// it starts in (`time/zoneinfo_windows.go:185-201`), and nothing outside that.
+/// Windows itself would answer for any year at all, so this is the difference
+/// the Windows arm exists to reproduce and the bound has to be pinned on both
+/// sides. A year inside the window has transitions and so cannot answer the
+/// same in every month; a year outside it has none and so must.
+///
+/// Which offset holds above the window depends on the hemisphere, so only the
+/// year below it is asserted by value: everything under the first transition is
+/// the standard zone, whatever the zone is (`lookupFirstZone`,
+/// `time/zoneinfo.go:233-257`).
+#[cfg(windows)]
+#[test]
+fn the_system_offset_has_no_transition_outside_the_two_hundred_year_window() {
+    use wirepod_core::wallclock::SystemWallClock;
+
+    let Some(zone) = live_zone() else {
+        return;
+    };
+    if zone.StandardDate.wMonth == 0 {
+        return;
+    }
+
+    let clock = SystemWallClock::new();
+    let base = base_year();
+    let varies = |year: i64| {
+        let offsets: Vec<i32> = (1..=12)
+            .map(|month| {
+                clock
+                    .utc_offset_secs_at(days_from_civil(year, month, 15) * SECS_PER_DAY + 12 * 3600)
+            })
+            .collect();
+        offsets.iter().any(|offset| *offset != offsets[0])
+    };
+
+    assert!(
+        varies(base - 100),
+        "the first year of the window still has its two transitions"
+    );
+    assert!(
+        varies(base + 99),
+        "the last year of the window still has its two transitions"
+    );
+    assert!(
+        !varies(base - 101),
+        "the year below the window has no transition, so one offset covers it"
+    );
+    assert!(
+        !varies(base + 100),
+        "the year above the window has no transition, so one offset covers it"
+    );
+
+    assert_eq!(
+        clock.utc_offset_secs_at(days_from_civil(base - 101, 1, 1) * SECS_PER_DAY),
+        -(zone.Bias + zone.StandardBias) * 60,
+        "below the first transition every zone answers its standard offset"
     );
 }
 

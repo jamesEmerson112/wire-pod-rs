@@ -239,12 +239,12 @@ fn go_float32_json_matches_the_recorded_probe() {
     // a case to `f32JSONSection` means editing these three lines in the same
     // commit that regenerates `expected.txt`.
     assert_eq!(
-        numbers, 34,
-        "the f32json section records 34 finite values as bare numbers"
+        numbers, 35,
+        "the f32json section records 35 finite values as bare numbers"
     );
     assert_eq!(
-        structs, 34,
-        "the f32json section records the same 34 values as whole documents"
+        structs, 35,
+        "the f32json section records the same 35 values as whole documents"
     );
     assert_eq!(errors, 3, "the probe records NaN, +Inf and -Inf as errors");
 }
@@ -284,6 +284,40 @@ fn an_exact_decimal_tie_is_broken_the_way_go_breaks_it() {
         format!("{value}"),
         case.want,
         "Rust's own shortest digits break this tie the other way"
+    );
+}
+
+/// A tail that merely starts with a 5 is not a tie, and must not be broken.
+///
+/// This is the other half of the rule above, and the recording carries an input
+/// for it. `0x00000060` is `96 * 2^-149`, whose exact expansion is
+/// `1.345246525751824388086780399958e-43`: the digit after the shortest three
+/// is a 5, and the digits after that one are not all zeros, so the value is
+/// strictly nearer `1.35e-43` than `1.34e-43`. `ryuDigits32` rounds up on any
+/// non-zero tail without consulting parity (`strconv/ftoaryu.go:456-461`), and
+/// Go writes `1.35e-43`.
+///
+/// A tie breaker that tested only the 5 would see a tie here, break it to the
+/// even `1.34e-43`, and still pass
+/// [`an_exact_decimal_tie_is_broken_the_way_go_breaks_it`], because there the
+/// tail really is a lone 5. The two cases only mean something together.
+#[test]
+fn a_tail_that_only_begins_with_a_five_is_not_a_tie() {
+    let case = cases_in("f32json")
+        .into_iter()
+        .find(|case| case.pair("kind") == "number" && case.pair("v") == "0x00000060")
+        .expect("the f32json section carries the near-tie case");
+    let value = case.value();
+
+    assert_eq!(case.want, "1.35e-43", "this is what Go recorded");
+    assert_eq!(go_json_f32(value).expect("finite"), case.want);
+    // Unlike the exact tie, Rust's own shortest digits are already right here,
+    // because neither formatter is breaking anything: the value is nearer one
+    // candidate than the other and both round to it.
+    assert_eq!(
+        format!("{value:e}"),
+        "1.35e-43",
+        "the shortest digits of a near tie are the same on both sides"
     );
 }
 

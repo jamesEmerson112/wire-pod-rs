@@ -122,8 +122,13 @@ fn break_down(unix_secs: i64, utc_offset_secs: i32) -> Broken {
     }
 }
 
-/// Go's `appendInt` (`format.go:418-423`): a minus sign if negative, then the
+/// Go's `appendInt` (`format.go:418-446`): a minus sign if negative, then the
 /// digits zero padded to `width`.
+///
+/// The cited range is the whole function. Go splits it into a width-2 and a
+/// width-4 fast path at `:427-432` and a general arm whose padding loop is at
+/// `:443-446`, and all three write the same bytes, so one loop covers them
+/// here.
 ///
 /// Rust's own `{:04}` counts the sign inside the width, so it writes `-001`
 /// where Go writes `-0001`. Only a year before 1 AD can tell the two apart,

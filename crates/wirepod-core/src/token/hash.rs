@@ -140,11 +140,13 @@ pub enum TokenHashError {
     /// naming a position (`base64-0.22.1/src/decode.rs:19-21`), so a five
     /// symbol input reports one more than Go does. `InvalidPadding` carries no
     /// position at all and is reported here as zero, where Go names the offset
-    /// it stopped at, and that is the answer for a six symbol input and for one
-    /// missing a padding character. `InvalidLastSymbol` is the non-canonical
-    /// trailing bits above, where Go does not fault at all and so has no offset
-    /// to compare. Nothing branches on the number: every caller of
-    /// [`compare_hash_and_token`] logs the error and goes no further.
+    /// it stopped at: for a six symbol input and for one missing its padding
+    /// character Go answers 4, the start of the quantum it could not finish
+    /// (`base64.go:320-327`), and `tests/token_hash.rs` pins both.
+    /// `InvalidLastSymbol` is the non-canonical trailing bits above, where Go
+    /// does not fault at all and so has no offset to compare. Nothing branches
+    /// on the number: every caller of [`compare_hash_and_token`] logs the error
+    /// and goes no further.
     Decode {
         /// The input byte Go's error names.
         at: usize,

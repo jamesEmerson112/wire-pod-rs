@@ -105,7 +105,7 @@ except where they name Go's own source tree or a module in the module cache.
 | `rfc3339` | `pkg/servers/token/token.go:29` | `time.RFC3339Nano` at every fraction length, every offset shape, and five edge instants |
 | `addmonth` | `pkg/servers/token/token.go:196` | `AddDate(0, 1, 0)` month-end and leap-year normalisation, in fixed zones only |
 | `addmonth_local` | `pkg/servers/token/token.go:195-196` | The same call in `America/Los_Angeles`, which is the zone shape `time.Now()` really hands it: the result carries the offset in effect at the target instant, and a target wall time that does not exist normalises backwards by the gap |
-| `f32json` | `pkg/vars/config.go:38-39`, Go's `encoding/json/encode.go:538-577` | How a `float32` struct field marshals, including both format cutoffs, the two-digit negative exponent cleanup, and one exact decimal tie broken to even |
+| `f32json` | `pkg/vars/config.go:38-39`, Go's `encoding/json/encode.go:538-577` | How a `float32` struct field marshals, including both format cutoffs, the two-digit negative exponent cleanup, and the pair of near-identical inputs that separate an exact decimal tie, which strconv breaks to even, from a value that merely starts its tail with a 5 |
 | `claims` | `pkg/servers/token/token.go:254-265`, `github.com/golang-jwt/jwt` v3.2.2 | The seven-key JWT payload, its key order, the header, both base64url segments and the two hard-coded literals |
 | `legacystamp` | `pkg/logger/logger.go:20-31`, `:102-111`, `:113-122` | The `2006.01.02 15:04:05` stamp and both whole log-line layouts with the component and bot fields present and absent |
 
@@ -135,7 +135,7 @@ As of the commit that last regenerated these files:
 
 | File | Total lines | Comment lines | Cases |
 |---|---|---|---|
-| `go-probe/expected.txt` | 304 | 7 | 297 |
+| `go-probe/expected.txt` | 306 | 7 | 299 |
 | `ini-probe/expected.txt` | 38 | 7 | 31 |
 
 Do not assert a count from this table without rechecking it; adding a case is

@@ -438,6 +438,58 @@ fn a_malformed_stored_hash_is_reported_before_a_malformed_token() {
     );
 }
 
+/// A padding fault is reported at offset zero, and Go reports 4.
+///
+/// [`TokenHashError::Decode`] says the `base64` crate's `InvalidPadding`
+/// carries no position at all and is reported here as zero. That was the one
+/// claim in that doc comment with nothing under it: the recording carries only
+/// the two shapes where the crate and Go agree, because both of those fault on
+/// a symbol outside the alphabet.
+///
+/// The Go answer these two are compared against was measured on the toolchain
+/// installed here, not assumed. `base64.StdEncoding.DecodeString` returns
+/// `illegal base64 data at input byte 4` for both `AAAAAA` and `AAAAAAA`:
+/// `decodeQuantum` runs out of input in the middle of the second quantum and
+/// returns `CorruptInputError(si - j)`, which is where that quantum started
+/// (`encoding/base64/base64.go:320-327`). So the port says 0 where Go says 4,
+/// for the same inputs and the same rejection.
+///
+/// Nothing branches on the number, so this is a difference in a log line and
+/// not in an answer. It is pinned anyway, because an untested constant in a
+/// documented difference is how a difference stops being documented.
+#[test]
+fn a_padding_fault_is_reported_at_offset_zero_where_go_names_the_quantum() {
+    let good_hash = STANDARD.encode([0u8; HASHED_RAW_LEN]);
+    let good_token = STANDARD.encode([0u8; TOKEN_SIZE]);
+
+    // Six symbols is one whole quantum and a two symbol remainder with no
+    // padding at all; seven is the same with the single padding character left
+    // off. Every symbol is in the alphabet in both, so the padding is the only
+    // thing either decoder can object to.
+    for text in ["AAAAAA", "AAAAAAA"] {
+        assert_eq!(
+            compare_hash_and_token(text, &good_token),
+            Err(TokenHashError::Decode { at: 0 }),
+            "{text} as the stored hash: the crate's InvalidPadding carries no \
+             position, so the port reports 0 where Go reports 4"
+        );
+        assert_eq!(
+            compare_hash_and_token(&good_hash, text),
+            Err(TokenHashError::Decode { at: 0 }),
+            "{text} as the presented token: the offset is the decoder's and not \
+             a property of which argument faulted"
+        );
+    }
+
+    // The number reaches a log line through Display, so the zero is visible
+    // rather than merely stored.
+    assert_eq!(
+        TokenHashError::Decode { at: 0 }.to_string(),
+        "illegal base64 data at input byte 0",
+        "Go's wording, carrying the port's offset"
+    );
+}
+
 /// Two generations differ, and neither verifies against the other's hash.
 ///
 /// This is what says the salt is redrawn per pair rather than fixed, and it is

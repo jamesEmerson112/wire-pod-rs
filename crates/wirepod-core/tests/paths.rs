@@ -73,14 +73,14 @@ fn the_packaged_windows_layout_matches_go_string_for_string() {
         format!(r"{root}\jdocs/botSdkInfo.json")
     );
     assert_eq!(
-        data.session_cert_path("00303f28"),
-        format!(r"{root}\session-certs/00303f28")
+        data.session_cert_path("00000000"),
+        format!(r"{root}\session-certs/00000000")
     );
 
     for mixed in [
         data.jdocs_path(),
         data.bot_info_path(),
-        data.session_cert_path("00303f28"),
+        data.session_cert_path("00000000"),
     ] {
         assert!(
             mixed.contains('\\') && mixed.contains('/'),
@@ -134,8 +134,8 @@ fn the_packaged_unix_layout_matches_go_string_for_string() {
         format!("{root}/jdocs/botSdkInfo.json")
     );
     assert_eq!(
-        data.session_cert_path("00303f28"),
-        format!("{root}/session-certs/00303f28")
+        data.session_cert_path("00000000"),
+        format!("{root}/session-certs/00000000")
     );
 }
 
@@ -172,8 +172,8 @@ fn the_source_layout_matches_the_go_literals() {
     // The directory literal ends in a slash and the writers concatenate one of
     // their own, so Go really does open a doubled slash here.
     assert_eq!(
-        data.session_cert_path("00303f28"),
-        "./session-certs//00303f28"
+        data.session_cert_path("00000000"),
+        "./session-certs//00000000"
     );
 }
 

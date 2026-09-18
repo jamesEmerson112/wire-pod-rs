@@ -713,6 +713,18 @@ func f32JSONSection() {
 		// 2^-12 and 2^22, so a tie always reaches encoding/json through the
 		// plain form and the exponent form can never carry one.
 		{"math.Float32frombits(0x3ee90000)", math.Float32frombits(0x3ee90000)},
+		// A near tie, which is the other half of the same rule. 0x00000060
+		// is 96 * 2^-149, whose exact expansion is
+		// 1.345246525751824388086780399958e-43, so the digit after the
+		// shortest three is a 5 and the digits after that one are not all
+		// zeros. That makes the value strictly nearer 1.35e-43 than
+		// 1.34e-43 rather than halfway between them, and strconv writes
+		// 1.35e-43: the round-up flag in ryuDigits32 (ftoaryu.go:456-461)
+		// is set whenever the trimmed tail is non-zero, without consulting
+		// parity at all. A tie breaker that read the 5 and not the tail
+		// would call this a tie, break it to the even 1.34e-43, and still
+		// pass the exact-tie case above.
+		{"math.Float32frombits(0x00000060)", math.Float32frombits(0x00000060)},
 		// The small end cutoff. encode.go:557 compares float32(abs) < 1e-6, so
 		// the boundary is float32(1e-6) itself: at it the format stays 'f', and
 		// one ulp below it flips to 'e'.
