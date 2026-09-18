@@ -358,6 +358,20 @@ impl WriteGate {
         &self.path
     }
 
+    /// The mode this gate's writes ask for, which is the mode of the
+    /// `os.WriteFile` call site being reproduced.
+    ///
+    /// It is public for the reason [`WriteGate::temporary_in`] is: the mode a
+    /// writer chose is otherwise visible only on Unix, only on a file the write
+    /// has just created, and only through the umask, which masks a `0666` down
+    /// to the same `0644` a mistake would have asked for. A test that wants to
+    /// know which of Go's modes a writer carries has to read it here; what the
+    /// mode then does to a new file and to one that already exists is pinned by
+    /// `crates/wirepod-core/tests/persist.rs`.
+    pub fn mode(&self) -> u32 {
+        self.mode
+    }
+
     /// Where this gate's writes put their temporary.
     ///
     /// The placement is only otherwise observable by catching a write in

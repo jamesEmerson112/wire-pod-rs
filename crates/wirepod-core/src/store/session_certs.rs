@@ -321,7 +321,7 @@ fn read_session_certs_blocking(
     // `vars.go:369`.
     tracing::debug!(comp = "", "Reading session certs for robot IDs");
 
-    let mut names = match list_sorted(directory) {
+    let mut names = match list_entry_names(directory) {
         Ok(names) => names,
         // `vars.go:372-375`.
         Err(error) => {
@@ -332,7 +332,7 @@ fn read_session_certs_blocking(
             };
         }
     };
-    names.sort();
+    sort_entry_names(&mut names);
 
     let mut info = Vec::new();
     for name in names {
@@ -394,19 +394,40 @@ fn read_session_certs_blocking(
     }
 }
 
-/// The entry names in `directory`, as `os.ReadDir` hands them over: every
-/// entry, including directories, named rather than opened.
+/// The entry names in `directory`, in whatever order the filesystem answers:
+/// every entry, including directories, named rather than opened.
+///
+/// The ordering is [`sort_entry_names`]'s job and not this one's, so that the
+/// comparison can be tested without a directory to put names in.
 ///
 /// A name that is not valid Unicode is taken lossily, for the reason
 /// [`crate::paths`] gives: it is better to walk a robot with a replacement
 /// character in its serial than to refuse to read the directory at all. No
 /// serial on this machine is anything but ASCII hex.
-fn list_sorted(directory: &std::path::Path) -> io::Result<Vec<String>> {
+fn list_entry_names(directory: &std::path::Path) -> io::Result<Vec<String>> {
     let mut names = Vec::new();
     for entry in std::fs::read_dir(directory)? {
         names.push(entry?.file_name().to_string_lossy().into_owned());
     }
     Ok(names)
+}
+
+/// Puts the entry names in the order `os.ReadDir` hands them over, which is
+/// byte order over the name (`os/dir.go:126-128`, whose comparison is
+/// `bytealg.CompareString`).
+///
+/// [`std::fs::read_dir`] promises no order at all. NTFS happens to answer in
+/// name order, so on this machine the walk would agree with Go with or without
+/// this call and the sort would look like dead weight; on a filesystem that
+/// answers in creation order it is the whole of the agreement. What the order
+/// decides is [`RecurringInfoLoad::info`]'s own order and, when a read fails,
+/// which entries the early return at `vars.go:383-386` abandons.
+///
+/// Rust's [`Ord`] for [`String`] compares the UTF-8 bytes, which is the
+/// comparison `bytealg.CompareString` makes, so the two sorts agree
+/// everywhere: `"C"` sorts before `"a"` in both, because `0x43 < 0x61`.
+fn sort_entry_names(names: &mut [String]) {
+    names.sort();
 }
 
 // ---------------------------------------------------------------------------
@@ -498,12 +519,27 @@ impl IssuerName {
 /// followed by the type check `x509.ParseCertificate` makes
 /// (`vars.go:387-388`).
 ///
-/// `pem.Decode` takes the first block whatever its type is and hands the bytes
+/// `pem.Decode` takes the first block whatever its label is and hands the bytes
 /// to `ParseCertificate`, which then refuses anything that is not a
-/// certificate; `read_one_from_slice` skips a section type it does not know
-/// instead. So a file whose first block is a private key and whose second is a
-/// certificate answers the certificate here and kills Go, which is a candidate
-/// deviation in the direction of surviving a file Go dies on.
+/// certificate. `read_one_from_slice` splits that into two behaviours, and only
+/// one of them is a difference.
+///
+/// A block that becomes an `Item` is answered, and every `Item` but
+/// `X509Certificate` falls to the `_` arm below. So a file whose first block is
+/// a private key, a revocation list or a certificate request answers `None`
+/// here and takes the deviation-32 path, where Go parses that same block as a
+/// certificate, fails, and dies on the nil result: both stop, and only the way
+/// they stop differs.
+///
+/// A block that becomes no `Item` at all is skipped outright and the reader
+/// goes on to the next block. Two labels do that: one the reader cannot name
+/// (`rustls-pki-types-1.15.1/src/pem.rs:311-315`, the `SectionLabel::Unknown`
+/// arm) and `ECHCONFIG`, which it can name and does not map
+/// (`rustls-pemfile-2.2.0/src/pemfile.rs:95`, continued on at `:76`). That is
+/// the difference: a file whose first block is `-----BEGIN FOO-----` and whose
+/// second is a certificate answers the certificate here and kills Go. It is a
+/// candidate deviation in the direction of surviving a file Go dies on, and
+/// `crates/wirepod-core/tests/session_certs.rs` pins both halves.
 pub fn certificate_der(pem: &[u8]) -> Option<Vec<u8>> {
     let (item, _) = rustls_pemfile::read_one_from_slice(pem).ok()??;
     match item {
@@ -774,4 +810,42 @@ fn is_printable(b: u8) -> bool {
         || b == b'?'
         || b == b'*'
         || b == b'&'
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The walk's ordering is byte order, which is the ordering `os.ReadDir`
+    /// promises (`os/dir.go:126-128`).
+    ///
+    /// It is tested here rather than through a directory because every
+    /// filesystem this repository is built on happens to answer in name order
+    /// already, so a directory cannot tell a sorted walk from an unsorted one.
+    /// The rows that matter are the ones where byte order and any other
+    /// plausible order disagree: an uppercase letter sorts before every
+    /// lowercase one, and a digit before both.
+    #[test]
+    fn entry_names_are_sorted_in_byte_order() {
+        // (as the filesystem answered, as the walk reads them)
+        let table: &[(&[&str], &[&str])] = &[
+            (&["b", "a", "C"], &["C", "a", "b"]),
+            (&["a", "B"], &["B", "a"]),
+            (
+                &["placeholder", "00000002", "00000001"],
+                &["00000001", "00000002", "placeholder"],
+            ),
+            (
+                &["Vector-b", "Vector-A", "0"],
+                &["0", "Vector-A", "Vector-b"],
+            ),
+            (&[], &[]),
+        ];
+
+        for (answered, ordered) in table {
+            let mut names: Vec<String> = answered.iter().map(|name| (*name).to_owned()).collect();
+            sort_entry_names(&mut names);
+            assert_eq!(names, *ordered, "{answered:?} was not put in byte order");
+        }
+    }
 }

@@ -190,6 +190,33 @@ pub fn sdk_config_path(sdk_ini_dir: &str) -> String {
     format!("{sdk_ini_dir}{SDK_CONFIG_FILE}")
 }
 
+/// The gate [`SdkIniStore`] writes `sdk_config.ini` through: Go's spelling of
+/// the path and the mode `SaveTo` hands `os.WriteFile` (`file.go:534`).
+///
+/// It is a function of its own, rather than a `WriteGate::new` call inside the
+/// store, for the reason [`crate::store::session_certs::session_cert_gate`]
+/// is: which of Go's modes a writer carries is not observable from the file it
+/// wrote, so it is asserted here instead.
+pub fn sdk_ini_gate(sdk_ini_dir: &str) -> WriteGate {
+    WriteGate::new(sdk_config_path(sdk_ini_dir), SDK_INI_FILE_MODE)
+}
+
+/// The gate [`SdkIniStore::write_cert`] writes a session certificate beside the
+/// ini file through, which is `os.WriteFile(filepath.Join(SDKIniPath,
+/// name+"-"+esn+".cert"), ..., 0755)` (`jdocs/server.go:114`, `:121`).
+///
+/// The path is [`cert_file_path`]'s joined spelling and not [`cert_value`]'s
+/// concatenated one, because this names the file rather than the value the SDK
+/// reads.
+pub fn sdk_cert_gate(sdk_ini_dir: &str, bot_name: &str, esn: &str) -> WriteGate {
+    WriteGate::new(
+        cert_file_path(sdk_ini_dir, bot_name, esn)
+            .to_string_lossy()
+            .into_owned(),
+        SDK_CERT_FILE_MODE,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // The model
 // ---------------------------------------------------------------------------
@@ -248,6 +275,13 @@ impl IniSection {
 
     /// `Section.GetKey` without the child-section fallback
     /// (`section.go:108-137`): the key by that exact name, or `None`.
+    ///
+    /// The fallback is active on every `ini.Load`, because `newFile` fills
+    /// `ChildSectionDelimiter` with `"."` (`file.go:57-59`); what keeps it out
+    /// of reach is that the only section this is ever called on is one whose
+    /// name folds to a robot serial, and a serial carries no `.`, so
+    /// `strings.LastIndex` answers `-1` and the loop breaks at
+    /// `section.go:132` before looking anything up.
     pub fn get_key(&self, name: &str) -> Option<&IniKey> {
         self.keys.iter().find(|key| key.name == name)
     }
@@ -292,13 +326,23 @@ impl IniSection {
 /// the first of which is always [`DEFAULT_SECTION`].
 ///
 /// Everything the library carries that wire-pod never turns on is absent:
-/// shadows, nested values, boolean keys, raw sections, child-section lookup,
-/// `%(var)s` expansion and the name and value mappers. Each is a
+/// shadows, nested values, boolean keys, raw sections, `%(var)s` expansion and
+/// the name and value mappers. Each is a
 /// [`LoadOptions`](https://pkg.go.dev/gopkg.in/ini.v1#LoadOptions) field left
 /// at its zero value by `ini.Load` (`ini.go:156-158`), so no file wire-pod
 /// writes and no option wire-pod passes can reach them. A hand-written file
 /// that uses one is the candidate deviation the module doc's last paragraph
 /// names.
+///
+/// Child-section key lookup is absent too, but for a different reason, and the
+/// zero-value argument does **not** cover it: `newFile` fills
+/// `ChildSectionDelimiter` with `"."` when the option is empty
+/// (`file.go:57-59`), so the fallback in `Section.GetKey` is live on every
+/// `ini.Load`. What makes it unreachable is the caller. The one lookup this
+/// port makes is [`IniSection::get_key`] on a section the writer matched by
+/// folding its name against the robot serial, and a serial carries no `.`, so
+/// `strings.LastIndex(sname, ".")` is `-1` and the fallback breaks out
+/// immediately (`section.go:120-133`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IniFile {
     sections: Vec<IniSection>,
@@ -318,14 +362,27 @@ pub enum IniError {
     UnclosedSection(String),
     /// `empty section name` (`file.go:84`), from a `[]` header.
     EmptySectionName,
-    /// `key-value delimiter not found: <line>` (`error.go:32`).
+    /// `key-value delimiter not found: <line>` (`error.go:33`).
     DelimiterNotFound(String),
-    /// `empty key name: <line>` (`error.go:47`).
+    /// `empty key name: <line>` (`error.go:48`).
+    ///
+    /// The library reaches this text from `readKeyName` (`parser.go:169`) for
+    /// an unquoted line whose first character is a delimiter. A quoted key name
+    /// that comes out empty reaches `Section.NewKey` instead and is refused
+    /// there with `error creating new key: empty key name` (`section.go:68`,
+    /// returned at `parser.go:518-521`); both are this variant, because the
+    /// condition is what matters and every wire-pod caller of `ini.Load`
+    /// discards the text.
     EmptyKeyName(String),
     /// `missing closing key quote: <line>` (`parser.go:151`).
     MissingClosingKeyQuote(String),
-    /// `missing closing key quote from <line> to <next>` (`parser.go:202`),
-    /// which ends a `"""` or backtick value that no later line closes.
+    /// A `"""` or backtick value that no later line closes, which the library
+    /// refuses when it reaches the end of the input (`parser.go:201-202`).
+    ///
+    /// This carries the line the value opened on. The library's own message
+    /// names the last line it read as well and `%q`-quotes both, so the
+    /// [`std::fmt::Display`] below is shorter than the library's text rather
+    /// than equal to it.
     UnterminatedValue(String),
 }
 
@@ -1120,7 +1177,7 @@ impl SdkIniStore {
     pub fn new(sdk_ini_dir: impl Into<String>) -> Self {
         let dir = sdk_ini_dir.into();
         Self {
-            gate: WriteGate::new(sdk_config_path(&dir), SDK_INI_FILE_MODE),
+            gate: sdk_ini_gate(&dir),
             dir,
             turn: tokio::sync::Mutex::new(()),
         }
@@ -1308,9 +1365,9 @@ impl SdkIniStore {
     ) -> io::Result<()> {
         let _turn = self.turn.lock().await;
         self.create_dir_if_missing().await;
-        let path = cert_file_path(&self.dir, bot_name, esn);
-        let gate = WriteGate::new(path.to_string_lossy().into_owned(), SDK_CERT_FILE_MODE);
-        gate.write(move || certificate).await
+        sdk_cert_gate(&self.dir, bot_name, esn)
+            .write(move || certificate)
+            .await
     }
 
     /// `ini.Load(SDKIniPath + "sdk_config.ini")` with both writers' fallback

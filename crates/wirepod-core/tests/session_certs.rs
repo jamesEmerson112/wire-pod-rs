@@ -23,9 +23,9 @@ use wirepod_core::paths::DataDir;
 use wirepod_core::persist::TemporaryIn;
 use wirepod_core::store::bot_info::{BotInfo, BotInfoRobot};
 use wirepod_core::store::session_certs::{
-    PLACEHOLDER_NAME, ReadSessionCertsOutcome, RecurringInfo, SessionCertStore, certificate_der,
-    issuer_common_name, read_session_certs, session_cert_gate, session_cert_read_path,
-    write_session_cert,
+    PLACEHOLDER_NAME, ReadSessionCertsOutcome, RecurringInfo, SESSION_CERT_FILE_MODE,
+    SessionCertStore, certificate_der, issuer_common_name, read_session_certs, session_cert_gate,
+    session_cert_read_path, write_session_cert,
 };
 
 /// The escape-pod certificate, vendored byte-identically from the Go repository
@@ -545,7 +545,7 @@ fn the_two_spellings_of_a_certificate_name_the_same_file() {
 }
 
 /// The writer's temporary goes in the pod root, never in the directory the boot
-/// walk enumerates.
+/// walk enumerates, and the write carries Go's mode.
 ///
 /// A temporary left in `session-certs/` by a process that died mid-write is a
 /// bogus robot at the next boot here and a panic at the next Go boot
@@ -554,12 +554,61 @@ fn the_two_spellings_of_a_certificate_name_the_same_file() {
 /// timing, so the gate is asserted instead;
 /// `crates/wirepod-core/tests/persist.rs` pins what an aborted write with this
 /// placement actually leaves behind.
+///
+/// The mode is asserted here for a related reason: on Windows nothing on disk
+/// records it at all, and on Unix the umask masks `0755` down to something a
+/// wrong mode could also have produced.
 #[test]
 fn the_writer_keeps_its_temporary_out_of_the_walked_directory() {
     let pod = Pod::new("placement");
     let gate = session_cert_gate(&pod.dir(), "00000001");
     assert_eq!(gate.temporary_in(), TemporaryIn::ParentDirectory);
     assert_eq!(gate.path(), pod.dir().session_cert_path("00000001"));
+    assert_eq!(
+        gate.mode(),
+        SESSION_CERT_FILE_MODE,
+        "the writer does not carry `jdocs/server.go:123`'s mode"
+    );
+}
+
+/// `jdocs/server.go:123`'s mode reaches the file the writer creates.
+///
+/// Unix only, because the mode is: Windows has no permission bit set for the
+/// assertion to read. The shape is `tests/persist.rs`'s, which asserts that no
+/// bit beyond the requested ones is set and so does not depend on the umask,
+/// plus the bits that tell `0755` from the `0644` the jdocs and bot-info files
+/// use: a umask can only take an execute bit away and never grant one, so a
+/// file written with `0755` keeps at least one under any umask an operator
+/// would set, and a file written with `0644` has none under any umask at all.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_session_certificates_mode_is_gos() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let pod = Pod::new("certmode").with_session_certs();
+    tokio::time::timeout(
+        CEILING,
+        write_session_cert(&pod.dir(), "00000001", EP_CRT.to_vec()),
+    )
+    .await
+    .expect("the write hung")
+    .expect("the write failed");
+
+    let got = fs::metadata(pod.certs().join("00000001"))
+        .expect("the certificate is missing")
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        got & !SESSION_CERT_FILE_MODE,
+        0,
+        "mode {got:o} carries a bit {SESSION_CERT_FILE_MODE:o} did not ask for"
+    );
+    assert_ne!(
+        got & 0o111,
+        0,
+        "mode {got:o} carries no execute bit at all, so it cannot be 0755"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -618,6 +667,42 @@ fn an_issuer_common_name_is_read_back() {
         issuer_common_name(&der),
         Some("Vector-R2D2".to_owned()),
         "the issuer common name was not read"
+    );
+}
+
+/// A v1 certificate, whose TBSCertificate carries no `[0]` version element at
+/// all, still walks down to its issuer.
+///
+/// `version [0] EXPLICIT Version DEFAULT v1` is optional in RFC 5280 and Go
+/// reads it with `ReadOptionalASN1Integer(..., 0)`
+/// (`crypto/x509/parser.go:909`), so an absent element is v1 and the serial is
+/// simply the first field. Every other certificate in this file is v3, `ep.crt`
+/// included, so without this case the branch that steps over the element would
+/// be the only one exercised and taking the branch unconditionally would go
+/// unnoticed.
+///
+/// The splice was verified against Go, which parses these exact bytes with
+/// `x509.ParseCertificate` and reports `version=1`,
+/// `issuer.CommonName="Vector-R2D2"`, `issuer.String="CN=Vector-R2D2"` and the
+/// original `subject.CommonName="escapepod.local"`, at a length of 1176 bytes:
+/// five fewer than the v3 splice, which is the version element.
+#[test]
+fn a_certificate_with_no_version_element_still_walks() {
+    let der = spliced_without_version("Vector-R2D2");
+    assert_eq!(
+        der.len(),
+        1176,
+        "the v1 splice is not the length Go reported for it"
+    );
+    assert_eq!(
+        der.len() + EP_CRT_VERSION.len(),
+        spliced_issuer("Vector-R2D2").len(),
+        "the v1 splice differs from the v3 one by something other than the version element"
+    );
+    assert_eq!(
+        issuer_common_name(&der),
+        Some("Vector-R2D2".to_owned()),
+        "a v1 certificate's issuer common name was not read"
     );
 }
 
@@ -703,6 +788,67 @@ fn a_document_that_is_not_a_certificate_is_refused() {
     assert_eq!(issuer_common_name(&[]), None);
 }
 
+/// A PEM block whose label the reader cannot name. The body is `MAA=`, which is
+/// the base64 of an empty ASN.1 `SEQUENCE` and not a key of any kind; the
+/// reader never decodes it, because it drops the whole block on the label.
+const UNKNOWN_LABEL_BLOCK: &[u8] = b"-----BEGIN FOO-----\nMAA=\n-----END FOO-----\n";
+
+/// A PEM block with a label the reader does know and this port does not want.
+/// The body is the same empty `SEQUENCE`: no key, real or invented, appears in
+/// this repository.
+const PRIVATE_KEY_BLOCK: &[u8] = b"-----BEGIN PRIVATE KEY-----\nMAA=\n-----END PRIVATE KEY-----\n";
+
+/// A certificate revocation list's label, with the same empty body.
+const CRL_BLOCK: &[u8] = b"-----BEGIN X509 CRL-----\nMAA=\n-----END X509 CRL-----\n";
+
+/// A first block whose label the reader cannot name is skipped and the
+/// certificate after it is read, where `pem.Decode` would have taken the first
+/// block and killed Go.
+///
+/// This is the candidate deviation `certificate_der`'s doc names, and what
+/// decides it is the label and not the type: the reader skips a block it cannot
+/// turn into an item at all and stops on one it can, which the case below is
+/// the other half of.
+#[test]
+fn an_unnameable_pem_label_is_skipped_and_the_certificate_after_it_is_read() {
+    let mut file = UNKNOWN_LABEL_BLOCK.to_vec();
+    file.extend_from_slice(EP_CRT);
+    assert_eq!(
+        certificate_der(&file),
+        certificate_der(EP_CRT),
+        "the certificate after an unnameable block was not reached"
+    );
+}
+
+/// A first block the reader can name but this port does not want ends the walk,
+/// whatever follows it.
+///
+/// `pem.Decode` takes that same first block, hands it to `ParseCertificate`,
+/// and dies on the nil result (`vars.go:387-388`), so both stop here and only
+/// the way they stop differs. A certificate revocation list is the case worth
+/// spelling out, because its DER would walk: a CRL is a `SEQUENCE` whose first
+/// field is a `TBSCertList`, so accepting the item and then walking it would
+/// read a revocation list's issuer as a robot name.
+#[test]
+fn a_nameable_pem_section_that_is_not_a_certificate_is_refused() {
+    let mut file = PRIVATE_KEY_BLOCK.to_vec();
+    file.extend_from_slice(EP_CRT);
+    assert_eq!(
+        certificate_der(&file),
+        None,
+        "a block the reader named as a private key was not refused"
+    );
+
+    let mut file = CRL_BLOCK.to_vec();
+    file.extend_from_slice(EP_CRT);
+    assert_eq!(
+        certificate_der(&file),
+        None,
+        "a block the reader named as a revocation list was not refused"
+    );
+    assert_eq!(certificate_der(CRL_BLOCK), None);
+}
+
 // ---------------------------------------------------------------------------
 // Building a certificate whose issuer carries a common name
 // ---------------------------------------------------------------------------
@@ -721,6 +867,10 @@ fn a_document_that_is_not_a_certificate_is_refused() {
 const EP_CRT_ISSUER: std::ops::Range<usize> = 50..182;
 /// The TBSCertificate's contents, from the same walk.
 const EP_CRT_TBS: std::ops::Range<usize> = 8..757;
+/// The `[0] EXPLICIT Version` element the TBSCertificate opens with, which the
+/// same program printed as `a0 03 02 01 02`: `[0]` wrapping `INTEGER 2`, the
+/// DER spelling of v3. [`spliced_without_version`] drops exactly these bytes.
+const EP_CRT_VERSION: &[u8] = &[0xa0, 0x03, 0x02, 0x01, 0x02];
 
 /// One `AttributeTypeAndValue` holding `commonName` with the given value and
 /// string tag, wrapped in its own `RelativeDistinguishedName` SET.
@@ -754,6 +904,12 @@ fn rdn_common_name(value: &str) -> Vec<u8> {
 /// name this builds is far shorter than the 129-byte issuer it replaces and
 /// both totals stay well above 255.
 fn spliced(rdns: &[Vec<u8>]) -> Vec<u8> {
+    spliced_versioned(rdns, true)
+}
+
+/// [`spliced`] with the optional `[0] EXPLICIT Version` element kept or
+/// dropped, which is the difference between a v3 certificate and a v1 one.
+fn spliced_versioned(rdns: &[Vec<u8>], keep_version: bool) -> Vec<u8> {
     let der = certificate_der(EP_CRT).expect("ep.crt is a PEM certificate");
 
     let mut name_contents = Vec::new();
@@ -770,6 +926,15 @@ fn spliced(rdns: &[Vec<u8>]) -> Vec<u8> {
     tbs_contents.extend_from_slice(&name);
     tbs_contents.extend_from_slice(&der[EP_CRT_ISSUER.end..EP_CRT_TBS.end]);
 
+    if !keep_version {
+        assert_eq!(
+            &tbs_contents[..EP_CRT_VERSION.len()],
+            EP_CRT_VERSION,
+            "the TBSCertificate does not open with the version element"
+        );
+        tbs_contents.drain(..EP_CRT_VERSION.len());
+    }
+
     let mut certificate_contents = long_form(0x30, &tbs_contents);
     certificate_contents.extend_from_slice(&der[EP_CRT_TBS.end..]);
     long_form(0x30, &certificate_contents)
@@ -779,6 +944,12 @@ fn spliced(rdns: &[Vec<u8>]) -> Vec<u8> {
 /// Vector session certificate's issuer has.
 fn spliced_issuer(common_name: &str) -> Vec<u8> {
     spliced(&[rdn_common_name(common_name)])
+}
+
+/// [`spliced_issuer`] with the `[0]` version element dropped, which is what a
+/// v1 certificate looks like.
+fn spliced_without_version(common_name: &str) -> Vec<u8> {
+    spliced_versioned(&[rdn_common_name(common_name)], false)
 }
 
 /// One element with the two-byte long-form length both of `ep.crt`'s enclosing

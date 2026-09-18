@@ -31,10 +31,12 @@ use wirepod_core::paths::sdk_ini_dir;
 use wirepod_core::store::bot_info::{BotInfo, BotInfoRobot};
 use wirepod_core::store::sdk_ini::{
     DEFAULT_FORMAT_LEFT, DEFAULT_FORMAT_RIGHT, DEFAULT_HEADER, DEFAULT_SECTION, DELIMITER_WRITTEN,
-    INI_VERSION, IniEdit, IniFile, KEY_VALUE_DELIMITER_ON_WRITE, LINE_BREAK, PRETTY_EQUAL,
-    PRETTY_FORMAT, PRETTY_SECTION, SDK_CONFIG_FILE, SdkIniStore, SecondaryOutcome, cert_file_path,
-    cert_value,
+    INI_VERSION, IniEdit, IniError, IniFile, KEY_VALUE_DELIMITER_ON_WRITE, LINE_BREAK,
+    PRETTY_EQUAL, PRETTY_FORMAT, PRETTY_SECTION, SDK_CERT_FILE_MODE, SDK_CONFIG_FILE,
+    SDK_INI_DIR_MODE, SDK_INI_FILE_MODE, SdkIniStore, SecondaryOutcome, cert_file_path, cert_value,
+    sdk_cert_gate, sdk_ini_gate,
 };
+use wirepod_core::store::session_certs::SESSION_CERT_FILE_MODE;
 
 const EXPECTED: &str =
     include_str!("../../../docs/phases/P1-robot-connect-auth/ini-probe/expected.txt");
@@ -708,6 +710,22 @@ fn a_round_trip_of_the_shapes_the_recording_does_not_hold() {
             "[a]\r\nk = \"padded \"\r\n",
             "[a]\r\nk = \"padded \"\r\n",
         ),
+        // `hasSurroundedQuote` is false when a quote appears anywhere but the
+        // two ends (`parser.go:231-234`), so this value keeps its own quotes
+        // through the load and needs none added on the way out.
+        (
+            "quote_in_middle",
+            "[a]\r\nk = \"a\"b\"\r\n",
+            "[a]\r\nk = \"a\"b\"\r\n",
+        ),
+        // The writer's whitespace arm is `len(TrimSpace(val)) != len(val)`
+        // (`file.go:466`), which trims both ends, so a value whose only
+        // whitespace is leading is quoted exactly as a trailing one is.
+        (
+            "leading_space",
+            "[a]\r\nk = \" x\"\r\n",
+            "[a]\r\nk = \" x\"\r\n",
+        ),
         (
             "backtick_value",
             "[a]\r\nk = `has # hash`\r\n",
@@ -785,6 +803,61 @@ fn the_parser_refuses_what_the_library_refuses() {
             IniFile::load(expected(input).as_bytes()).expect_err("the library refuses this line");
         assert_eq!(error.to_string(), expected(want));
     }
+}
+
+/// The two-byte UTF-16 byte order marks are stripped, both ways round.
+///
+/// `parser.BOM` takes `fe ff` and `ff fe` as a mark and `ef bb bf` as the UTF-8
+/// one (`parser.go:83-104`), so a file saved as UTF-16 by a text editor loses
+/// its mark and the rest is read as bytes. It needs a test of its own because
+/// the recording's `bom_utf8` case is a `&str`, and neither UTF-16 mark is
+/// valid UTF-8: left in place, each becomes a replacement character and the
+/// first line stops being a section header.
+///
+/// Both outputs were read off the real library, which answers
+/// `"[a]\r\nk = v\r\n"` for each.
+#[test]
+fn a_utf16_byte_order_mark_is_stripped() {
+    let body = expected("[a]\r\nk = v\r\n");
+    for mark in [[0xfe_u8, 0xff], [0xff, 0xfe]] {
+        let mut input = mark.to_vec();
+        input.extend_from_slice(body.as_bytes());
+        let file = IniFile::load(&input)
+            .unwrap_or_else(|error| panic!("{mark:02x?}: the input did not load: {error}"));
+        assert_eq!(
+            String::from_utf8(file.to_bytes()).expect("UTF-8"),
+            body,
+            "{mark:02x?}"
+        );
+    }
+}
+
+/// A key name opens with `"""` only when the whole line is longer than six
+/// bytes (`parser.go:135`), and the line still carries its own line break when
+/// the length is taken (`parser.go:418`, `:476`).
+///
+/// The two cases below straddle that threshold, so both were read off the real
+/// library. `"""x""" = y` is long either way and its name is `x`.
+/// `"""x=y` as a last line with no break is six bytes: the library reads it
+/// with a single `"`, which makes the name empty, and refuses the file with
+/// `error creating new key: empty key name`. A threshold that let `"""` open
+/// that line would look for a closing `"""` instead and refuse it with
+/// `missing closing key quote`, which is a different variant here.
+#[test]
+fn a_triple_quoted_key_name_needs_more_than_six_bytes_of_line() {
+    let file = IniFile::load(expected("[a]\r\n\"\"\"x\"\"\" = y\r\n").as_bytes())
+        .expect("a long triple-quoted key name loads");
+    assert_eq!(
+        String::from_utf8(file.to_bytes()).expect("UTF-8"),
+        expected("[a]\r\nx = y\r\n")
+    );
+
+    let error = IniFile::load(expected("[a]\r\n\"\"\"x=y").as_bytes())
+        .expect_err("the library refuses a six-byte line opening with three quotes");
+    assert!(
+        matches!(error, IniError::EmptyKeyName(_)),
+        "the short line was refused as {error:?} rather than for an empty key name"
+    );
 }
 
 /// `ChangeGUIDInIni` folds against its `esn` argument rather than against each
@@ -999,6 +1072,162 @@ async fn the_token_path_writes_nothing_when_the_file_is_missing() {
     assert!(
         fs::metadata(store.path()).is_err(),
         "a missing ini was created"
+    );
+}
+
+/// `ChangeGUIDInIni` saves whether or not any robot matched, because the save
+/// sits past the loop (`token/token.go:177`).
+///
+/// The visible consequence is that a call which changed nothing still rewrites
+/// a hand-edited file into the library's layout: the keys gain their per section
+/// padding and the delimiter gains its spaces. The expectation was read off the
+/// real library, which answers `"[00000009]\r\nip      = old\r\nlongkey = 1\r\n"`
+/// for this input.
+#[tokio::test]
+async fn the_token_path_saves_even_when_no_robot_matched() {
+    let dir = TempDir::new("tokennomatch");
+    let store = SdkIniStore::new(dir.sdk_dir());
+    let seeded = expected("[00000009]\r\nip=old\r\nlongkey=1\r\n");
+    fs::write(store.path(), &seeded).expect("could not seed the ini");
+
+    let bot_info = BotInfo {
+        robots: vec![BotInfoRobot {
+            esn: "00000001".to_owned(),
+            ip_address: "1.2.3.4".to_owned(),
+            guid: "a-guid".to_owned(),
+            ..BotInfoRobot::default()
+        }],
+        ..BotInfo::default()
+    };
+
+    // The serial names no section in the file, so nothing is edited.
+    tokio::time::timeout(CEILING, store.update_ip_and_guid("00000001", &bot_info))
+        .await
+        .expect("the call hung")
+        .expect("the call failed");
+
+    let on_disk = fs::read_to_string(store.path()).expect("the ini is missing");
+    assert_ne!(
+        on_disk, seeded,
+        "the unmatched call left the file as it found it, where `token.go:177` saves"
+    );
+    assert_eq!(
+        on_disk,
+        expected("[00000009]\r\nip      = old\r\nlongkey = 1\r\n")
+    );
+}
+
+/// The four modes C9 reproduces, against the literals Go spells at each call
+/// site.
+///
+/// The constants are asserted against literals rather than against each other
+/// because they are the only place a mode is observable on Windows, and because
+/// the umask makes even a Unix file no witness: it masks the `0666` the library
+/// asks for down to the same `0644` a mistake would have asked for. The gates
+/// are asserted beside them so that a writer built with the wrong constant
+/// fails too.
+#[test]
+fn the_four_modes_are_gos_own_literals() {
+    // `os.WriteFile(vars.SessionCertPath+"/"+esn, ..., 0755)`
+    // (`jdocs/server.go:123`).
+    assert_eq!(SESSION_CERT_FILE_MODE, 0o755);
+    // `os.WriteFile(fullPath, ..., 0755)` beside the ini (`jdocs/server.go:121`).
+    assert_eq!(SDK_CERT_FILE_MODE, 0o755);
+    // `os.WriteFile(filename, buf.Bytes(), 0666)`, which is `SaveTo`'s
+    // (`gopkg.in/ini.v1 v1.67.3 file.go:534`).
+    assert_eq!(SDK_INI_FILE_MODE, 0o666);
+    // `os.Mkdir(vars.SDKIniPath, 0755)` (`jdocs/server.go:117`,
+    // `botInfoStorer.go:35`, `:73`).
+    assert_eq!(SDK_INI_DIR_MODE, 0o755);
+
+    let gate = sdk_ini_gate(SDK_INI_PATH);
+    assert_eq!(gate.mode(), SDK_INI_FILE_MODE);
+    assert_eq!(gate.path(), format!("{SDK_INI_PATH}{SDK_CONFIG_FILE}"));
+    assert_eq!(
+        SdkIniStore::new(SDK_INI_PATH.to_owned()).path(),
+        gate.path(),
+        "the store does not write the ini through this gate"
+    );
+
+    let gate = sdk_cert_gate(SDK_INI_PATH, "Vector-A1B2", "00000001");
+    assert_eq!(gate.mode(), SDK_CERT_FILE_MODE);
+    assert_eq!(
+        PathBuf::from(gate.path()),
+        cert_file_path(SDK_INI_PATH, "Vector-A1B2", "00000001"),
+        "the certificate gate does not name the joined spelling"
+    );
+}
+
+/// Those modes reach the two files and the directory the store creates.
+///
+/// Unix only, because the modes are. The shape is `tests/persist.rs`'s: no bit
+/// beyond the requested ones is set, which no umask can make false. The umask
+/// is also why this cannot stand on its own: it masks `0666` to `0644`, so the
+/// ini file alone cannot tell Go's mode from a wrong one, and
+/// [`the_four_modes_are_gos_own_literals`] is what does. What the bits below do
+/// add is the execute bit, which a umask can only take away and never grant: a
+/// `0755` file or directory keeps at least one of the three under any umask an
+/// operator would set, and a `0666` file has none of them under any umask at
+/// all.
+#[cfg(unix)]
+#[tokio::test]
+async fn gos_modes_reach_the_files_the_store_creates() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let outer = TempDir::new("modes");
+    // A directory that does not exist yet, so the store creates it itself.
+    let sdk = format!("{}/.anki_vector/", outer.path.to_string_lossy());
+    let store = SdkIniStore::new(sdk.clone());
+
+    tokio::time::timeout(
+        CEILING,
+        store.write_cert("Vector-A1B2", "00000001", b"body".to_vec()),
+    )
+    .await
+    .expect("the write hung")
+    .expect("the write failed");
+    tokio::time::timeout(
+        CEILING,
+        store.write_to_ini_primary("Vector-A1B2", "00000001", "a-guid", "192.0.2.11"),
+    )
+    .await
+    .expect("the write hung")
+    .expect("the write failed");
+
+    let mode_of = |path: &Path| {
+        fs::metadata(path)
+            .unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+            .permissions()
+            .mode()
+            & 0o777
+    };
+
+    let directory = mode_of(Path::new(&sdk));
+    assert_eq!(
+        directory & !SDK_INI_DIR_MODE,
+        0,
+        "the SDK directory carries a bit {SDK_INI_DIR_MODE:o} did not ask for: {directory:o}"
+    );
+    assert_ne!(
+        directory & 0o111,
+        0,
+        "the SDK directory {directory:o} carries no execute bit at all, so it cannot be 0755"
+    );
+
+    let certificate = mode_of(&cert_file_path(&sdk, "Vector-A1B2", "00000001"));
+    assert_eq!(certificate & !SDK_CERT_FILE_MODE, 0);
+    assert_ne!(
+        certificate & 0o111,
+        0,
+        "the certificate {certificate:o} carries no execute bit at all, so it cannot be 0755"
+    );
+
+    let ini = mode_of(Path::new(store.path()));
+    assert_eq!(ini & !SDK_INI_FILE_MODE, 0);
+    assert_eq!(
+        ini & 0o111,
+        0,
+        "the ini file {ini:o} is executable, which 0666 never asks for"
     );
 }
 
