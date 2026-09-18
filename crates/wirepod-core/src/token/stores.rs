@@ -28,7 +28,7 @@
 //!
 //! The two `target` slots are not the same shape. The primary store's is a bare
 //! host, because `CreateJWT` splits the peer address at the first colon and
-//! trims it before appending (`token/token.go:203`, `:236`). The session
+//! trims it before appending (`token/token.go:202`, `:236`). The session
 //! store's is the whole `net.Addr.String()`, port and all, because
 //! `AssociatePrimaryUser` appends `p.Addr.String()` verbatim
 //! (`token/token.go:278`), which is why every reader of it splits at the colon
@@ -39,10 +39,16 @@
 //! # The three quirks
 //!
 //! All three were confirmed by running the Go code itself before being encoded
-//! here, in a throwaway program that copies `token.go:37-45`, `:130-146`,
-//! `jdocs/server.go:81-149` and `token.go:207-217` verbatim with `logger.Debug`
-//! replaced by a print. The traces quoted below are that program's stdout on
-//! `go1.24.4 windows/amd64`.
+//! here, and the run is committed:
+//! `docs/phases/P1-robot-connect-auth/store-probe/` is a Go program that copies
+//! `token.go:36-45`, `:130-146`, `:207-217` and `jdocs/server.go:81-130`
+//! verbatim with `logger.Debug` captured into a slice and each panicking case
+//! wrapped in a `recover`, and its `expected.txt` is the recording
+//! `crates/wirepod-core/tests/token_stores.rs` replays every case of.
+//! `cargo xtask go-probe --check` audits it. The lines quoted below are that
+//! recording's own, produced on `go1.24.4 windows/amd64`, with the section
+//! column and the tabs dropped so they fit. A store is written there as its
+//! entries joined with `;` and each entry's slots joined with `/`.
 //!
 //! **A `range` that removes the current element skips the next one.** Go
 //! evaluates a range expression once (Go's specification, "For statements with
@@ -53,17 +59,18 @@
 //! element that moved *into* the current index and the entry that was there is
 //! never visited. `ReadDocs` walks the primary store this way
 //! (`jdocs/server.go:94-109`), and it is the only one of the three walks with
-//! no `break`. With entries 0 and 1 both matching and entry 2 not, the Go run
-//! prints
+//! no `break`. With entries 0 and 1 both matching and entry 2 not, which is
+//! the recording's `primary_skip` case, Go answers
 //!
 //! ```text
-//! visit num=0 pair0="10.0.0.1" MATCH
-//! visit num=1 pair0="10.0.0.9" miss
-//! visit num=2 pair0="10.0.0.9" miss
-//! after=[[10.0.0.1 g-b h-b] [10.0.0.9 g-c h-c]]
+//! kind=store    "10.0.0.1/g-a/h-a;10.0.0.1/g-b/h-b;10.0.0.9/g-c/h-c"
+//! kind=matches  "g-a"
+//! kind=after    "10.0.0.1/g-b/h-b;10.0.0.9/g-c/h-c"
+//! kind=bot_guid "g-a"
 //! ```
 //!
-//! so entry 1 survives *because* it matched, entry 2 is visited twice, and the
+//! so entry 1 survives even though it matched, because the removal shifted it
+//! into an index the loop had already passed; entry 2 is visited twice, and the
 //! caller's `botGUID` is entry 0's. [`TokenStores::take_primary_matches`]
 //! reproduces this by modelling the backing array and the package variable's
 //! length separately, which is the only way to get the stale tail the loop
@@ -74,13 +81,14 @@
 //! index the package variable no longer has, and the helper indexes it to build
 //! its log line (`token/token.go:136`) and panics before removing anything.
 //! Two matching entries are enough, which is one robot asking for a token twice
-//! before its `ReadDocs` arrives:
+//! before its `ReadDocs` arrives, and is the recording's
+//! `primary_two_duplicates`:
 //!
 //! ```text
-//! visit num=0 pair0="10.0.0.1" MATCH
-//! visit num=1 pair0="10.0.0.1" MATCH
-//! PANIC runtime error: index out of range [1] with length 1
-//! store after=[[10.0.0.1 g-b h-b]]
+//! kind=store   "10.0.0.1/g-a/h-a;10.0.0.1/g-b/h-b"
+//! kind=matches "g-a;g-b"
+//! kind=after   "10.0.0.1/g-b/h-b"
+//! kind=panic   "runtime error: index out of range [1] with length 1"
 //! ```
 //!
 //! The port stops the walk there instead of panicking and reports
@@ -106,9 +114,10 @@
 //! with `==` (`jdocs/server.go:82`), so a peer whose host is spelled in another
 //! case is found by one and not the other. The secondary walk compares serials
 //! with `==` (`token/token.go:208`), where every other serial lookup in the
-//! server uses `EqualFold`. The Go run pins the disagreement:
-//! `presence(localhost)=false presence(LOCALHOST)=true` against a stored
-//! `LOCALHOST:50000`.
+//! server uses `EqualFold`. The recording's two `session_presence` cases pin
+//! the disagreement: against a stored `LOCALHOST:50000`, `peer=localhost`
+//! answers `"false"` and `peer=LOCALHOST` answers `"true"`, while the
+//! `session_equalfold` case's lookup finds the same entry from `localhost`.
 //!
 //! `EqualFold` is `eq_ignore_ascii_case` here, as it is everywhere else in this
 //! crate (`store/bot_info.rs:86`, deviation 12). Go folds the full Unicode
@@ -120,13 +129,14 @@
 //!
 //! Nothing here panics. Go's three removal helpers index their slice to build a
 //! log line (`token/token.go:131`, `:136`, `:143`) and a caller that passes an
-//! index past the end takes the process down; the Go run confirms all three
-//! (`index out of range [1] with length 1`, `[5] with length 1`,
-//! `[1] with length 1`). Phase 1 already turns Go panics into log lines
-//! wherever it finds them, which is reserved deviation 31, and this follows
-//! that: the three removals log a line and answer `false`, and
-//! [`TokenStores::take_primary_matches`] stops where Go's process would have
-//! died. Neither changes what the store holds, because Go panics before it
+//! index past the end takes the process down; the recording's three
+//! `*_out_of_range` cases confirm all three (`index out of range [1] with
+//! length 1`, `[5] with length 1`, `[1] with length 1`). This follows the same
+//! policy as reserved deviation 31, which is Phase 1's standing decision to
+//! turn a Go panic into a log line but which does not itself list this panic
+//! among the four it names: the three removals log a line and answer `false`,
+//! and [`TokenStores::take_primary_matches`] stops where Go's process would
+//! have died. Neither changes what the store holds, because Go panics before it
 //! removes anything, so the surviving entries are the same either way; what
 //! differs is that the server is still running afterwards. That difference is a
 //! candidate numbered deviation for C23.
@@ -163,7 +173,7 @@ const SESSION_STORE: &str = "SessionWriteStoreNames";
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct PrimaryEntry {
     /// Slot 0. The peer's host with no port, already split at the first colon
-    /// and trimmed by the caller (`token/token.go:203`).
+    /// and trimmed by the caller (`token/token.go:202`).
     pub target: String,
     /// Slot 1. The GUID handed to the robot.
     pub guid: String,
@@ -226,11 +236,12 @@ impl fmt::Debug for SecondaryEntry {
 /// (`token/token.go:276-278`), and `RemoveFromSessionStore` shortens both by
 /// the same index (`token/token.go:144-145`). Merging them is a deliberate
 /// difference: two concurrent associations can interleave the two appends in Go
-/// and leave the lists a different length, which the Go run reproduces (a
-/// removal at index 0 with one name and two certificates leaves the orphan
-/// certificate behind), and a later reader then indexes the wrong certificate
-/// or panics. One list cannot reach that state. It is a candidate numbered
-/// deviation for C23.
+/// and leave the lists a different length (a removal at index 0 with one name
+/// and two certificates leaves the orphan certificate behind, which the
+/// throwaway Go run that preceded the store probe showed and which the probe
+/// does not record, because a merged list cannot be asked the question), and a
+/// later reader then indexes the wrong certificate or panics. One list cannot
+/// reach that state. It is a candidate numbered deviation for C23.
 ///
 /// `Debug` prints the certificate's length rather than its bytes.
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -299,9 +310,10 @@ pub struct PrimaryWalk {
     /// Every entry the loop body ran on, in visit order.
     ///
     /// This is not the same as the entries removed and it is not deduplicated:
-    /// the skip quirk can present one entry to the body twice, and the Go run
-    /// shows exactly that. Each element is what the loop read, so a caller that
-    /// mirrors Go's body runs once per element here.
+    /// the skip quirk can present one entry to the body twice, and the
+    /// recording's `primary_zero_and_two` case shows exactly that, with `g-c`
+    /// twice. Each element is what the loop read, so a caller that mirrors Go's
+    /// body runs once per element here.
     pub matches: Vec<PrimaryEntry>,
     /// True when the walk stopped because Go's next removal would have indexed
     /// past the end of the store and panicked.
@@ -325,8 +337,13 @@ impl PrimaryWalk {
     }
 }
 
-/// Go's `strings.Split(addr, ":")[0]` (`jdocs/server.go:70`, `:82`, `:112`,
-/// `token/token.go:203`).
+/// Go's `strings.Split(addr, ":")[0]` (`jdocs/server.go:70`, `:82`, `:112`).
+///
+/// `CreateJWT` performs the same split at `token/token.go:202` but wraps it in
+/// a `strings.TrimSpace`, so that one is not this function and is not in the
+/// list above. Nothing this crate hands to a store has leading or trailing
+/// space, but the two calls are not interchangeable and a caller that ports
+/// `CreateJWT` has to trim for itself.
 ///
 /// Everything before the first colon, or the whole string when there is none.
 /// Go's `Split` on a separator that is absent answers a one-element slice, so
@@ -335,11 +352,12 @@ impl PrimaryWalk {
 ///
 /// This degenerates on IPv6. A gRPC peer address is `host:port`, and for an
 /// IPv6 peer Go's own `net.Addr.String()` writes `[::1]:50000`, whose first
-/// colon is inside the address. The Go run prints `"[::1]:50000" -> "["` and
-/// `"[fe80::1]:443" -> "[fe80"`, so the result is never a host and two
-/// different peers can share one. That is a Go bug this reproduces rather than
-/// fixes, because the primary store's own targets were cut the same way on the
-/// way in and the two halves have to agree.
+/// colon is inside the address. The recording's `split` section holds
+/// `addr=[::1]:50000` answering `"["` and `addr=[fe80::1]:443` answering
+/// `"[fe80"`, so the result is never a host and two different peers can share
+/// one. That is a Go bug this reproduces rather than fixes, because the primary
+/// store's own targets were cut the same way on the way in and the two halves
+/// have to agree.
 pub fn host_of(peer_addr: &str) -> &str {
     match peer_addr.find(':') {
         Some(at) => &peer_addr[..at],
@@ -371,6 +389,14 @@ struct Stores {
 /// from different connections' goroutines with nothing between them; one mutex
 /// over all three lists is what makes the walks below atomic, which the skip
 /// quirk needs in order to be reproducible at all.
+///
+/// That atomicity is itself a difference from Go and a candidate numbered
+/// deviation for C23. Go's walk interleaves with every other connection's
+/// append, so a store that grew part way through one can present the loop with
+/// an element it had not captured; here a walk sees the store as it was when it
+/// took the guard and nothing else can touch any of the three lists until it
+/// lets go. `one_walk_is_atomic_against_concurrent_appends_and_reads` in
+/// `tests/token_stores.rs` pins the two outcomes that leaves.
 ///
 /// Every method is synchronous and no guard outlives one, so nothing here can
 /// trip the crate's `deny(clippy::await_holding_lock)` and a caller can drive
@@ -611,7 +637,8 @@ impl TokenStores {
     /// This is the comparison that is **not** `EqualFold`: Go writes
     /// `ipAddr == strings.Split(pair[0], ":")[0]` (`jdocs/server.go:82`), so a
     /// stored address whose host differs only in case is found by
-    /// [`Self::find_session_match`] and not by this. The Go run pins it.
+    /// [`Self::find_session_match`] and not by this. The recording's two
+    /// `session_presence` cases pin it.
     pub fn session_holds(&self, peer_ip: &str) -> bool {
         self.lock()
             .session

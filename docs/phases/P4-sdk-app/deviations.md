@@ -941,6 +941,31 @@ one is C23's decision rather than this file's.
   marshals to and what every state Go can reach produces; unknown keys survive at both levels
   where Go's decoder drops them, re-serialised in sorted order; and every write hands back its
   error where Go discards it (`aa524a7`, `b93db05`).
+- The three removals and the primary walk over the transient token stores log a line and carry on
+  where Go indexes past the end of its slice and takes the process down. Nothing is removed either
+  way, so the surviving entries match Go's exactly; only the server still running differs. This
+  follows the same policy as reserved deviation 31, which does not itself list this panic
+  (`84bed48`).
+- Go's two session slices are merged into one list. Go appends the certificate and the name
+  separately with no lock between them (`token.go:276-278`) and every reader indexes the
+  certificate slice with the name slice's index, so two concurrent associations can leave the
+  lists a different length and a later reader then takes the wrong certificate or panics. One list
+  cannot reach that state (`84bed48`).
+- `take_primary_matches` runs every removal, and its log lines, before the caller runs the
+  per-match file writes Go interleaves between them (`jdocs/server.go:96-105`), so the removal
+  lines come before those lines rather than after. The control flow cannot be split, because which
+  element the loop reads next depends on the removal having happened (`84bed48`).
+- The whole primary walk runs under one guard, where Go's slices have no lock at all, so a walk
+  sees the store as it was when it took the guard and no append can interleave with it. That is
+  what makes the skip quirk reproducible, and it narrows the outcomes of a concurrent append from
+  Go's open set to two (`84bed48`).
+- `EqualFold` over the token stores is `eq_ignore_ascii_case`, as elsewhere in this crate, so Go's
+  full Unicode simple case folding is not reproduced. No peer address or serial can reach this
+  code carrying a character the two disagree on (`84bed48`).
+- `Debug` on the three token-store entry types and on `TokenStores` prints lengths rather than
+  GUIDs, hashes and certificate bytes, so a `{:?}` in a handler cannot put a secret into the log
+  ring the web UI serves. Go has no equivalent and writes a plaintext GUID line at startup, which
+  reserved deviation 39 already covers from the other direction (`84bed48`).
 
 ---
 

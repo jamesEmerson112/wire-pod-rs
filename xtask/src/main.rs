@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 const PROBE_DIRS: &[&str] = &[
     "docs/phases/P1-robot-connect-auth/go-probe",
     "docs/phases/P1-robot-connect-auth/ini-probe",
+    "docs/phases/P1-robot-connect-auth/store-probe",
 ];
 
 /// (source path relative to --from, destination relative to assets/)

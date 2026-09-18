@@ -1,6 +1,6 @@
 # P1: robot connects and authenticates
 
-This folder is the Phase 1 spec folder. Today it holds the two Go probe
+This folder is the Phase 1 spec folder. Today it holds the three Go probe
 programs whose recorded stdout the Rust tests read through `include_str!`, and
 `fixtures/`, which holds two state files the same tests read the same way.
 Commit C23 adds the rest of the phase spec beside them (`routes.md`,
@@ -49,7 +49,9 @@ recorded from the Go toolchain and the exact library versions the Go server
 pins rather than guessed at inside a Rust test. Each probe directory holds
 `main.go`, its own `go.mod` and `go.sum` so it joins neither this Rust
 workspace nor the Go server's module, and `expected.txt`, which is that
-program's stdout.
+program's stdout. A probe that needs only the standard library, which
+`store-probe` is, resolves offline and carries an empty `go.sum`; the file is
+still there because every probe directory has the same four.
 
 ```
 cargo run -p xtask -- go-probe           # rewrite every expected.txt
@@ -129,6 +131,35 @@ The two writers are not interchangeable. `WriteToIniPrimary` is reached from
 sets only guid and then ip. A writer that reuses the primary's order for the
 secondary path appends two keys in the wrong order.
 
+## `store-probe`
+
+This one records behaviour rather than formatting: what Go's four transient
+token stores hold after each walk the token server and the jdocs server run
+over them. Its `main.go` copies the four package-level slices, the three
+removal helpers and the three walks verbatim, with `logger.Debug` captured into
+a slice and each panicking case wrapped in a `recover`, so a case can be read
+back at the instant Go's process would have died.
+
+| Section | Go source | What it pins |
+|---|---|---|
+| `split` | `jdocs/server.go:70`, `:82`, `:112` | `strings.Split(addr, ":")[0]` on a host and port, a bare host, the empty string, a leading colon, and the three IPv6 addresses whose first colon is inside the address |
+| `remove` | `token.go:130-146` | The three removal helpers by index: the survivors and their order, both columns of the log line, and the three out-of-range calls that take Go's process down |
+| `primary_walk` | `jdocs/server.go:92-109` | `ReadDocs`'s walk over the primary store: the entries the loop body ran on, the survivors, `matched`, `botGUID`, the removal lines and the panic, over the skip, the three shapes that overrun, and the five that do neither |
+| `session` | `jdocs/server.go:111-130`, `:81-86` | The session lookup's `EqualFold` over the split stored address, its break at the first match, the certificate it takes, and the presence check twelve lines earlier that compares the same two values with `==` |
+| `secondary` | `token.go:207-217` | `CreateJWT`'s scan: `==` on the serial, the break, and the entry removed out of a four-entry store whose match is at index 1 |
+
+The store encoding is the probe's own: entries joined with `;`, slots joined
+with `/`, in the slot order the Go declaration gives. An empty store is the
+empty string. That encoding is what makes the survivors' *order* an assertion
+rather than a set comparison, which is the whole point of the `remove` section:
+Go's `append(s[:i], s[i+1:]...)` keeps the order of every later element, and a
+removal that swapped the last element into the hole would leave the same
+entries and fail here.
+
+`crates/wirepod-core/tests/token_stores.rs` replays every case through five
+drivers and pins the count of each section, so a case the probe gains and
+nothing replays fails a test.
+
 ## Counts
 
 As of the commit that last regenerated these files:
@@ -137,6 +168,11 @@ As of the commit that last regenerated these files:
 |---|---|---|---|
 | `go-probe/expected.txt` | 306 | 7 | 299 |
 | `ini-probe/expected.txt` | 38 | 7 | 31 |
+| `store-probe/expected.txt` | 159 | 7 | 152 |
+
+`store-probe` writes several lines per case, one per observable, so its 152
+lines are 32 cases: 7 in `split`, 8 in `remove`, 9 in `primary_walk`, 6 in
+`session` and 2 in `secondary`.
 
 Do not assert a count from this table without rechecking it; adding a case is
 the normal way these files change. Recompute with:

@@ -19,10 +19,10 @@
 //!
 //! [`state::AppState`] is the one shared value the handlers read, replacing
 //! Go's roughly thirty unsynchronized globals. The config layer, the logger
-//! ring, the jdocs store, the session-certificate store and the SDK ini file
-//! have landed since; the rest of the crate's eventual responsibility (the
-//! server-config and transient token stores, the JWT, and the `AppState`
-//! growth that carries them) arrives in later commits.
+//! ring, the jdocs store, the session-certificate store, the SDK ini file and
+//! the transient token stores have landed since; the rest of the crate's
+//! eventual responsibility (the server-config store, the JWT, and the
+//! `AppState` growth that carries them) arrives in later commits.
 #![deny(clippy::await_holding_lock)]
 
 pub mod clock;
