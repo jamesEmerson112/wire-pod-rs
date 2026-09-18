@@ -37,8 +37,13 @@
 //!    Go decodes into a `subv` that points into the struct rather than into a
 //!    fresh value (`decode.go:762`). The last occurrence of a scalar wins, and
 //!    a second nested object is merged into the first rather than replacing it.
-//! 3. A JSON `null` leaves a non-pointer field exactly as it was
-//!    (`decode.go:899-903`), so it can neither clear a field nor raise a fault.
+//! 3. A JSON `null` never raises a fault, and what it does to a field depends
+//!    on that field's kind: a slice, map, pointer or interface is set to its
+//!    zero value and everything else is left exactly as it was
+//!    (`decode.go:899-903`, whose own comment for the fall-through is
+//!    "otherwise, ignore null for primitives/string"). So a `null` empties a
+//!    [`store_list`] field and leaves a [`store_string`] or [`store_object`]
+//!    one alone.
 //! 4. A value whose type does not fit the field its key matched records the
 //!    first such fault and decoding carries on through every other field
 //!    (`decode.go:243-247`). The caller therefore gets a half-filled value
@@ -636,6 +641,134 @@ pub fn store_object<T: GoObject>(
         Kind::Object => merge_into(target, raw, faults),
         found => {
             faults.save(prefix, tag, found, T::GO_TYPE);
+            Ok(())
+        }
+    }
+}
+
+/// Go's `array` for one element of a list field (`decode.go:536-577`).
+///
+/// The index is the `i` that loop carries: an element at or below the current
+/// length is decoded *into* the element already there, and one past it grows
+/// the list first. The count it ends on is what the list is truncated to.
+struct ListVisitor<'a, T> {
+    slot: &'a mut Vec<T>,
+    prefix: &'a str,
+    tag: &'static str,
+    faults: &'a mut Faults,
+}
+
+impl<'de, T: GoObject> Visitor<'de> for ListVisitor<'_, T> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a JSON array of objects")
+    }
+
+    fn visit_seq<A: SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+        let mut index = 0;
+        while let Some(raw) = seq.next_element::<Box<RawValue>>()? {
+            // `decode.go:544-552`, the grow, and `:554-558`, the decode into
+            // `v.Index(i)`. The index only ever reaches the length, so the one
+            // push below is Go's `SetLen(i + 1)`.
+            if index == self.slot.len() {
+                self.slot.push(T::default());
+            }
+            // The element's own fault carries the list field's path and the
+            // *element* type, because `array` pushes nothing onto Go's field
+            // stack (`decode.go:500-592` never touches `d.errorContext`, which
+            // only `object` appends to at `decode.go:725-733`): a bad element
+            // of `client_tokens` is reported against `client_tokens` of type
+            // `ClientToken`, and a bad field inside a good element against
+            // `client_tokens.hash`, which is what [`GoObject::PREFIX`] spells.
+            store_object(
+                &mut self.slot[index],
+                &raw,
+                self.prefix,
+                self.tag,
+                self.faults,
+            )
+            .map_err(A::Error::custom)?;
+            index += 1;
+        }
+        // `decode.go:579-587`: `SetLen(i)`, so a second occurrence of the key
+        // shorter than the first shortens the list.
+        self.slot.truncate(index);
+        Ok(())
+    }
+}
+
+/// One list of objects, decoded the way Go's `array` decodes into a slice
+/// field (`decode.go:500-592`).
+///
+/// `want` is the Go type a fault against the field itself names, `[]botjdoc`
+/// or `[]ClientToken`: it is the caller's rather than `"[]"` prepended to
+/// [`GoObject::GO_TYPE`] because two `&'static str`s cannot be concatenated in
+/// a const context, and a [`DecodeFault`] carries a `&'static str`.
+///
+/// Three things separate this from [`store_object`], and all three are Go's:
+///
+/// - A `null` **empties** the list rather than leaving it alone. A slice is one
+///   of the four kinds `literalStore`'s null arm calls `SetZero` on
+///   (`decode.go:899-903`), where a struct field falls through to the "ignore
+///   null for primitives/string" comment at `:902`. So `{"client_tokens":[…],
+///   "client_tokens":null}` ends with an empty list, which a Go run confirms.
+/// - An array is decoded element by element into the elements already there,
+///   and only grows past the current length, so a duplicate key merges
+///   element-wise (`decode.go:544-558`).
+/// - The list is then truncated to the number of elements just read
+///   (`decode.go:579-587`), so the last occurrence of the key decides the
+///   length.
+///
+/// An element whose type does not fit still occupies its slot as the zero
+/// value and records one fault, because Go grows the slice before it decodes
+/// into the element it just made; that is [`store_object`]'s existing
+/// behaviour and needs nothing here.
+///
+/// One difference from Go is left in place. Go's truncation is `SetLen`, which
+/// keeps the elements it dropped in the backing array, so a third occurrence
+/// of the key that grows past a shorter second one decodes into what the first
+/// one left rather than into a zero value; a [`Vec`] has no such shadow and
+/// pushes a fresh [`Default`]. It takes three occurrences of one key in one
+/// hand-edited document to see, and Go itself resets the backing array
+/// whenever an occurrence is empty (`decode.go:588-590`).
+///
+/// # Errors
+///
+/// Only what an element's own parse reports.
+pub fn store_list<T: GoObject>(
+    slot: &mut Vec<T>,
+    raw: &RawValue,
+    prefix: &str,
+    tag: &'static str,
+    want: &'static str,
+    faults: &mut Faults,
+) -> serde_json::Result<()> {
+    match kind(raw) {
+        // `decode.go:899-903`, the `reflect.Slice` arm of the null switch.
+        Kind::Null => {
+            slot.clear();
+            Ok(())
+        }
+        Kind::Array => {
+            let mut deserializer = serde_json::Deserializer::from_str(text(raw));
+            serde::Deserializer::deserialize_seq(
+                &mut deserializer,
+                ListVisitor {
+                    slot,
+                    prefix,
+                    tag,
+                    faults,
+                },
+            )
+        }
+        // The field keeps what it had and the fault names the slice type,
+        // whichever arm the value's own kind reaches: `decode.go:917` for a
+        // bool, `:940-943` for a string, because the element type is not
+        // `uint8` and so this is not base64, `:984` for a number and
+        // `:650-652` for an object.
+        found => {
+            faults.save(prefix, tag, found, want);
             Ok(())
         }
     }

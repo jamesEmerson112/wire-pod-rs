@@ -39,17 +39,24 @@
 //! stdout of a Go program built against `github.com/golang-jwt/jwt` v3.2.2,
 //! the version the Go server pins. `crates/wirepod-core/tests/jwt.rs` drives
 //! this module from those lines rather than from anything written by hand.
+//! The same recording's `claims_matrix`, `jws`, `robot_parse` and `uuid`
+//! sections pin the rest of it: the matrix of claim values, the assembly of
+//! the three segments into one token, the parser the robot reads it with, and
+//! the uuid formatting.
 //! The `vic.AppTokens` document's bytes come from a throwaway Go program built
-//! from the two structs at `hashing.go:36-45`, transcribed into that test.
+//! from the two structs at `hashing.go:36-45`, transcribed into that test, and
+//! `crates/wirepod-core/tests/jwt_document.rs` drives the decoder from a
+//! second such program the same way.
 
 use std::fmt;
 use std::io;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::value::RawValue;
 
-use crate::gojson::{Extra, go_marshal};
+use crate::gojson::{Decoded, Extra, Faults, GoObject, go_marshal, store_list, store_string};
 use crate::store::jdocs::{Jdoc, JdocsStore};
 use crate::timefmt::{add_months, rfc3339_nano};
 use crate::wallclock::WallClock;
@@ -420,7 +427,7 @@ pub struct TokenBundle {
 /// marshals in and therefore the order of the bytes inside `json_doc`. None of
 /// the four tags carries `omitempty`, so all four are always written, an empty
 /// one as `""`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct ClientToken {
     /// `hashing.go:37`: the stored hash of the GUID, which is
     /// [`TokenPair::guid_hash`](crate::token::hash::TokenPair::guid_hash).
@@ -444,7 +451,7 @@ pub struct ClientToken {
 
 /// Go's `ClientTokenManager` (`hashing.go:43-45`), the whole `vic.AppTokens`
 /// document.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct ClientTokenManager {
     /// `hashing.go:44`: every client token the robot has been issued, oldest
     /// first. In the running Go server this list is always exactly one long,
@@ -458,6 +465,100 @@ pub struct ClientTokenManager {
     /// round trip. Go drops them.
     #[serde(flatten, default)]
     pub extra: Extra,
+}
+
+// ---------------------------------------------------------------------------
+// Go's object loop over the two structs
+// ---------------------------------------------------------------------------
+
+// The `vic.AppTokens` document is read back by the Go server and hand-edited by
+// operators, so it is read the way `encoding/json` reads it rather than the way
+// `serde`'s derive would: the folded key match, the duplicate rule, the null
+// rule and the first-fault-then-carry-on rule are all visible in it.
+// `crate::gojson` brings the loop; these two impls bring only the tags and what
+// one value does to one field.
+
+/// What a fault raised against [`ClientTokenManager::client_tokens`] itself
+/// calls the field, which Go prints as `[]token.ClientToken`.
+///
+/// Spelled here rather than built from [`ClientToken::GO_TYPE`] because a
+/// [`crate::gojson::DecodeFault`] carries a `&'static str` and two of those
+/// cannot be concatenated in a const context.
+const CLIENT_TOKENS_GO_TYPE: &str = "[]ClientToken";
+
+impl GoObject for ClientToken {
+    const TAGS: &'static [&'static str] = &["hash", "client_name", "app_id", "issued_at"];
+    /// A client token is only ever an element of
+    /// [`ClientTokenManager::client_tokens`], and Go's `array` pushes nothing
+    /// onto the field stack (`decode.go:500-592`), so a fault against one of
+    /// these four fields is reported against `client_tokens.hash` and not
+    /// against `hash`.
+    const PREFIX: &'static str = "client_tokens.";
+    const GO_TYPE: &'static str = "ClientToken";
+
+    fn store(
+        &mut self,
+        tag: &'static str,
+        raw: &RawValue,
+        faults: &mut Faults,
+    ) -> serde_json::Result<()> {
+        match tag {
+            "hash" => store_string(&mut self.hash, raw, Self::PREFIX, tag, faults),
+            "client_name" => store_string(&mut self.client_name, raw, Self::PREFIX, tag, faults),
+            "app_id" => store_string(&mut self.app_id, raw, Self::PREFIX, tag, faults),
+            "issued_at" => store_string(&mut self.issued_at, raw, Self::PREFIX, tag, faults),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn unknown(&mut self) -> &mut Extra {
+        &mut self.extra
+    }
+}
+
+impl<'de> Deserialize<'de> for ClientToken {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Decoded::<Self>::deserialize(deserializer)?.value)
+    }
+}
+
+impl GoObject for ClientTokenManager {
+    const TAGS: &'static [&'static str] = &["client_tokens"];
+    const PREFIX: &'static str = "";
+    const GO_TYPE: &'static str = "ClientTokenManager";
+
+    fn store(
+        &mut self,
+        tag: &'static str,
+        raw: &RawValue,
+        faults: &mut Faults,
+    ) -> serde_json::Result<()> {
+        match tag {
+            // Merged element-wise into whatever the field already holds and
+            // then truncated to the length just read, which is what
+            // `decode.go:536-587` does to a slice.
+            "client_tokens" => store_list(
+                &mut self.client_tokens,
+                raw,
+                Self::PREFIX,
+                tag,
+                CLIENT_TOKENS_GO_TYPE,
+                faults,
+            ),
+            _ => Ok(()),
+        }
+    }
+
+    fn unknown(&mut self) -> &mut Extra {
+        &mut self.extra
+    }
+}
+
+impl<'de> Deserialize<'de> for ClientTokenManager {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Decoded::<Self>::deserialize(deserializer)?.value)
+    }
 }
 
 /// Writes an empty [`ClientTokenManager::client_tokens`] as `null`, which is
@@ -540,12 +641,20 @@ pub fn marshal_client_tokens(manager: &ClientTokenManager) -> String {
 /// running server. Nothing anywhere writes a jdoc under a bare serial, so
 /// there is no document for the lookup to find: `jdocExists` is always false
 /// at `token.go:101`, `token.go:103-107` always runs, and every reachable call
-/// here takes the `None` arm and decodes the empty string, which fails in both
-/// languages and leaves the manager empty. Both arms are written out anyway so
-/// that the port says what Go says rather than asserting a fact about the
-/// caller, but nothing observable depends on what the dead one does. This is
-/// the same kind of dead code `CompareHashAndToken` is, and C23 should describe
-/// it that way.
+/// here takes the `None` arm and decodes the empty string, which is not one
+/// JSON value in either language and so leaves the manager empty.
+///
+/// The arm stays unreachable for that reason and for no other. What it does
+/// when it is reached is now Go's: a `json_doc` that already holds client
+/// tokens decodes through [`ClientTokenManager`]'s [`GoObject`] impl, so a
+/// folded key finds its field, a duplicate `client_tokens` merges element-wise
+/// and takes the second occurrence's length, a `null` empties the list, and a
+/// value whose type does not fit records one fault and leaves the rest of the
+/// document decoding. The appended token then lands after whatever was already
+/// there, which is what Go's `append` at `token.go:114` does. Both arms are
+/// written out so that the port says what Go says rather than asserting a fact
+/// about the caller. This is the same kind of dead code `CompareHashAndToken`
+/// is, and C23 should describe it that way.
 ///
 /// # The clock
 ///
@@ -585,10 +694,17 @@ pub async fn write_token_hash(
         ),
     };
 
-    // `token.go:108`, whose error Go discards. An empty `json_doc`, which is
-    // what every reachable call has, fails to decode in both languages and
-    // leaves the manager empty; this is the only value the line ever sees.
-    let mut manager: ClientTokenManager = serde_json::from_str(&json_doc).unwrap_or_default();
+    // `token.go:108`, whose error Go discards, through Go's decoder. The two
+    // arms are Go's two outcomes. A document that parses hands back whatever
+    // decoded, fault and all, because `json.Unmarshal` fills the value as it
+    // goes and only returns the first type error at the end
+    // (`decode.go:243-247`, `:182`). A document that is not one JSON value
+    // leaves the manager exactly as it was, because `checkValid` runs before
+    // anything is stored (`decode.go:98-105`) and the manager here has only
+    // ever been the zero value: the empty `json_doc` every reachable call has
+    // is that case.
+    let mut manager = serde_json::from_str::<Decoded<ClientTokenManager>>(&json_doc)
+        .map_or_else(|_| ClientTokenManager::default(), |decoded| decoded.value);
 
     // `token.go:109-114`. The clock is read here, where Go reads it.
     let issued = clock.now();
