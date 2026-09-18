@@ -31,12 +31,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tracing_subscriber::layer::SubscriberExt;
 use wirepod_core::config::{
-    ApiConfig, BatteryConfig, BootOutcome, CONFIG_FILE_MODE, DEFAULT_GOHOME_PERCENT, DecodeFault,
-    Env, LLAMA2_MODEL, LLAMA3_MODEL, create_config_from_env, go_marshal, read_config,
-    write_config_to_disk,
+    ApiConfig, BatteryConfig, BootOutcome, CONFIG_FILE_MODE, DEFAULT_GOHOME_PERCENT, DecodeError,
+    DecodeFault, Env, LLAMA2_MODEL, LLAMA3_MODEL, config_gate, create_config_from_env, go_marshal,
+    read_config, write_config_to_disk,
 };
 use wirepod_core::logger::{LogLayer, LogRing, ManualLogClock};
 use wirepod_core::paths::DataDir;
+use wirepod_core::persist::WriteGate;
+use wirepod_core::test_support::install_tracing_backstop;
 
 /// The committed copy of this machine's `apiConfig.json`, redacted.
 const FIXTURE: &str =
@@ -98,6 +100,7 @@ fn recorded_f32(bits: u32) -> String {
 /// ends.
 struct TempDir {
     path: PathBuf,
+    gate: WriteGate,
 }
 
 impl TempDir {
@@ -115,16 +118,22 @@ impl TempDir {
             COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir_all(&path).expect("could not create the temporary directory");
-        Self { path }
+        let gate = config_gate(&DataDir::rooted(&path));
+        Self { path, gate }
     }
 
     fn path(&self) -> &Path {
         &self.path
     }
 
-    /// The data directory a boot would be pointed at.
-    fn data_dir(&self) -> DataDir {
-        DataDir::rooted(&self.path)
+    /// The one gate every writer of this directory's `apiConfig.json` takes.
+    ///
+    /// One per directory, not one per call: a second gate over the same path
+    /// would order nothing, which is the whole property
+    /// [`an_overlapping_save_does_not_leave_the_file_behind_the_server`]
+    /// depends on.
+    fn gate(&self) -> &WriteGate {
+        &self.gate
     }
 
     /// The bytes currently in `apiConfig.json`.
@@ -245,6 +254,27 @@ fn ring() -> Arc<LogRing> {
         STAMPED_AT,
         "2026.01.02 03:04:05",
     ))))
+}
+
+/// Installs `ring` as this thread's subscriber until the guard is dropped, over
+/// the process-wide backstop.
+///
+/// Both halves are load-bearing. `tracing` decides once per callsite whether
+/// anybody is interested and caches the answer for every thread, and while at
+/// most one dispatcher is registered it asks only the calling thread, so a
+/// callsite first reached by a test that installed nothing is cached as *never*
+/// and every later test that asserts on that line sees nothing. The harness
+/// runs these in parallel, so which test gets there first is the scheduler's
+/// choice: this file failed 102 runs out of 200 at two threads over
+/// [`the_llama_2_model_name_is_rewritten_to_llama_3`] and
+/// [`the_stt_provider_is_overridden_from_the_environment_at_every_boot`] before
+/// the backstop existed. [`install_tracing_backstop`] is the fix and its doc
+/// says why a global default is the only shape that works; the `set_default`
+/// here is still what lets this test read its own ring back.
+fn watching(ring: &Arc<LogRing>) -> tracing::subscriber::DefaultGuard {
+    install_tracing_backstop();
+    let subscriber = tracing_subscriber::registry().with(LogLayer::new(Arc::clone(ring)));
+    tracing::subscriber::set_default(subscriber)
 }
 
 // ---------------------------------------------------------------------------
@@ -474,7 +504,7 @@ async fn a_zero_gohome_percent_survives_the_boot() {
     };
     directory.seed(&seeded);
 
-    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), &directory.data_dir()))
+    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), directory.gate()))
         .await
         .expect("read_config hung");
 
@@ -494,7 +524,7 @@ async fn a_null_gohome_percent_is_forced_to_the_default_by_the_boot() {
         br#"{"battery":{"gohome_percent":null},"hasreadfromenv":true,"pastinitialsetup":true}"#,
     );
 
-    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), &directory.data_dir()))
+    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), directory.gate()))
         .await
         .expect("read_config hung");
 
@@ -521,13 +551,10 @@ async fn the_save_path_writes_an_absent_percent_through_unchanged() {
     let mut config = ApiConfig::default();
     config.battery.gohome_percent = None;
 
-    tokio::time::timeout(
-        CEILING,
-        write_config_to_disk(&config, &directory.data_dir()),
-    )
-    .await
-    .expect("write_config_to_disk hung")
-    .expect("the write failed");
+    tokio::time::timeout(CEILING, write_config_to_disk(&config, directory.gate()))
+        .await
+        .expect("write_config_to_disk hung")
+        .expect("the write failed");
 
     assert!(
         String::from_utf8(directory.file())
@@ -980,7 +1007,7 @@ async fn a_fresh_config_is_seeded_from_every_variable() {
     };
 
     let (config, written) =
-        tokio::time::timeout(CEILING, create_config_from_env(&env, &directory.data_dir()))
+        tokio::time::timeout(CEILING, create_config_from_env(&env, directory.gate()))
             .await
             .expect("create_config_from_env hung");
     written.expect("the write failed");
@@ -1132,9 +1159,8 @@ async fn a_missing_file_is_created_from_the_environment() {
     let ring = ring();
 
     let boot = {
-        let subscriber = tracing_subscriber::registry().with(LogLayer::new(Arc::clone(&ring)));
-        let _guard = tracing::subscriber::set_default(subscriber);
-        tokio::time::timeout(CEILING, read_config(&env, &directory.data_dir()))
+        let _guard = watching(&ring);
+        tokio::time::timeout(CEILING, read_config(&env, directory.gate()))
             .await
             .expect("read_config hung")
     };
@@ -1177,7 +1203,7 @@ async fn the_stt_provider_is_overridden_from_the_environment_at_every_boot() {
         ..Env::default()
     };
 
-    let boot = tokio::time::timeout(CEILING, read_config(&env, &directory.data_dir()))
+    let boot = tokio::time::timeout(CEILING, read_config(&env, directory.gate()))
         .await
         .expect("read_config hung");
 
@@ -1191,7 +1217,7 @@ async fn the_stt_provider_is_overridden_from_the_environment_at_every_boot() {
 
     // And a second boot with the same environment changes nothing, because the
     // comparison at config.go:134 no longer differs.
-    let again = tokio::time::timeout(CEILING, read_config(&env, &directory.data_dir()))
+    let again = tokio::time::timeout(CEILING, read_config(&env, directory.gate()))
         .await
         .expect("read_config hung");
     assert_eq!(directory.file(), again.config.to_json_bytes());
@@ -1214,9 +1240,8 @@ async fn the_llama_2_model_name_is_rewritten_to_llama_3() {
     let ring = ring();
 
     let boot = {
-        let subscriber = tracing_subscriber::registry().with(LogLayer::new(Arc::clone(&ring)));
-        let _guard = tracing::subscriber::set_default(subscriber);
-        tokio::time::timeout(CEILING, read_config(&empty_env(), &directory.data_dir()))
+        let _guard = watching(&ring);
+        tokio::time::timeout(CEILING, read_config(&empty_env(), directory.gate()))
             .await
             .expect("read_config hung")
     };
@@ -1251,7 +1276,7 @@ async fn the_llama_2_model_name_is_rewritten_to_llama_3() {
     other.knowledge.model = "meta-llama/Llama-3-70b-chat-hf".to_owned();
     other.battery.gohome_percent = Some(DEFAULT_GOHOME_PERCENT);
     directory.seed(&other.to_json_bytes());
-    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), &directory.data_dir()))
+    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), directory.gate()))
         .await
         .expect("read_config hung");
     assert_eq!(boot.config.knowledge.model, LLAMA3_MODEL);
@@ -1281,7 +1306,7 @@ async fn every_boot_rewrites_the_file_even_when_nothing_changed() {
     assert_ne!(pretty, canonical, "the two spellings are the same document");
     directory.seed(&pretty);
 
-    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), &directory.data_dir()))
+    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), directory.gate()))
         .await
         .expect("read_config hung");
 
@@ -1328,7 +1353,7 @@ async fn a_file_already_holding_the_rewrite_is_rewritten_anyway() {
     directory.seed(&canonical);
     let guard = refuse_writes(&directory);
 
-    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), &directory.data_dir()))
+    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), directory.gate()))
         .await
         .expect("read_config hung");
 
@@ -1373,7 +1398,7 @@ async fn the_two_setup_flags_move_together_on_a_port_change() {
                     ddl_rpc_port: env_port.to_owned(),
                     ..Env::default()
                 },
-                &directory.data_dir(),
+                directory.gate(),
             ),
         )
         .await
@@ -1407,7 +1432,7 @@ async fn the_two_setup_flags_move_together_on_a_port_change() {
                 ddl_rpc_port: "8080".to_owned(),
                 ..Env::default()
             },
-            &directory.data_dir(),
+            directory.gate(),
         ),
     )
     .await
@@ -1431,9 +1456,8 @@ async fn a_file_that_cannot_be_read_is_left_exactly_as_it_is() {
     let ring = ring();
 
     let boot = {
-        let subscriber = tracing_subscriber::registry().with(LogLayer::new(Arc::clone(&ring)));
-        let _guard = tracing::subscriber::set_default(subscriber);
-        tokio::time::timeout(CEILING, read_config(&empty_env(), &directory.data_dir()))
+        let _guard = watching(&ring);
+        tokio::time::timeout(CEILING, read_config(&empty_env(), directory.gate()))
             .await
             .expect("read_config hung")
     };
@@ -1499,7 +1523,7 @@ async fn an_unreadable_file_is_not_overwritten() {
         .open(directory.path().join("apiConfig.json"))
         .expect("could not hold the file open");
 
-    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), &directory.data_dir()))
+    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), directory.gate()))
         .await
         .expect("read_config hung");
 
@@ -1541,7 +1565,7 @@ async fn an_unreadable_file_is_not_overwritten() {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o000))
         .expect("could not take every permission bit off the file");
 
-    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), &directory.data_dir()))
+    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), directory.gate()))
         .await
         .expect("read_config hung");
 
@@ -1577,7 +1601,7 @@ async fn the_parse_failure_arm_keeps_what_decoded() {
     let garbage = br#"{"weather":{"enable":"not a bool","provider":"openweathermap"},"knowledge":{"enable":true},"STT":{"provider":"vosk","language":"en-US"},"server":{"port":"443"}}"#;
     directory.seed(garbage);
 
-    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), &directory.data_dir()))
+    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), directory.gate()))
         .await
         .expect("read_config hung");
 
@@ -1617,9 +1641,8 @@ async fn a_file_that_does_not_parse_is_left_exactly_as_it_is() {
     let ring = ring();
 
     let boot = {
-        let subscriber = tracing_subscriber::registry().with(LogLayer::new(Arc::clone(&ring)));
-        let _guard = tracing::subscriber::set_default(subscriber);
-        tokio::time::timeout(CEILING, read_config(&empty_env(), &directory.data_dir()))
+        let _guard = watching(&ring);
+        tokio::time::timeout(CEILING, read_config(&empty_env(), directory.gate()))
             .await
             .expect("read_config hung")
     };
@@ -1666,11 +1689,10 @@ async fn the_save_path_logs_the_line_go_logs() {
     let ring = ring();
 
     {
-        let subscriber = tracing_subscriber::registry().with(LogLayer::new(Arc::clone(&ring)));
-        let _guard = tracing::subscriber::set_default(subscriber);
+        let _guard = watching(&ring);
         tokio::time::timeout(
             CEILING,
-            write_config_to_disk(&ApiConfig::default(), &directory.data_dir()),
+            write_config_to_disk(&ApiConfig::default(), directory.gate()),
         )
         .await
         .expect("write_config_to_disk hung")
@@ -1685,6 +1707,213 @@ async fn the_save_path_logs_the_line_go_logs() {
             "Configuration changed, writing to disk".to_owned()
         )],
         "config.go:62"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Two writers of one file
+// ---------------------------------------------------------------------------
+
+/// Go's three config writers all reach one file, and two of them can overlap
+/// here: the web UI's save runs on an axum handler
+/// (`config-ws/webserver.go:202`) while the boot rewrite runs as a task
+/// (`config.go:155`). Two unordered writes land their renames in the order the
+/// writes *finish*, which is the order of their sizes, while their bytes were
+/// decided in the order they were issued, so the file can be left holding a
+/// configuration the server has already replaced, and stay that way until
+/// something writes again.
+///
+/// The shape is `tests/jdocs.rs`'s
+/// `an_overlapping_mutation_does_not_leave_the_file_behind_the_list`, adapted
+/// to a file whose writers each bring their own value: a six-megabyte prompt
+/// against a default configuration, issued in that order onto one gate.
+/// `biased;` makes `join!` poll in source order, so the large save is polled
+/// first and the small one is issued while the large one is in flight; without
+/// a gate both reach `spawn_blocking` on that first poll and the small one's
+/// rename lands first, leaving the large one's bytes on disk. Every awaited
+/// duration is a real-clock ceiling; the runtime's clock is never paused.
+#[tokio::test]
+async fn an_overlapping_save_does_not_leave_the_file_behind_the_server() {
+    /// Big enough that writing and syncing it takes far longer than writing the
+    /// seven hundred bytes a default configuration marshals to, so the two
+    /// renames are ordered by the size of the writes and not by how the runtime
+    /// happened to schedule them.
+    const BIG: usize = 6 * 1024 * 1024;
+
+    let directory = TempDir::new("overlap");
+
+    let mut large = ApiConfig::default();
+    large.knowledge.openai_prompt = "a".repeat(BIG);
+    let small = ApiConfig::default();
+
+    let (first, second) = tokio::time::timeout(CEILING, async {
+        tokio::join!(
+            biased;
+            write_config_to_disk(&large, directory.gate()),
+            write_config_to_disk(&small, directory.gate()),
+        )
+    })
+    .await
+    .expect("the two saves hung");
+    first.expect("the large save failed");
+    second.expect("the small save failed");
+
+    let want = small.to_json_bytes();
+    assert_eq!(
+        directory.file().len(),
+        want.len(),
+        "the file holds a configuration the server has moved past"
+    );
+    assert_eq!(
+        directory.file(),
+        want,
+        "the file is not the configuration the last save carried"
+    );
+    assert_eq!(
+        directory.entries(),
+        ["apiConfig.json"],
+        "a save left a temporary behind"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The two failure arms, and the range of the go-home percent
+// ---------------------------------------------------------------------------
+
+/// `config.go:127-128`: *both* assignments run, over whatever decoded.
+///
+/// Every other parse-failure case in this file happens to arrive with weather
+/// already off, so the `Weather.Enable = false` line could be deleted and
+/// nothing would notice. This document turns both on and then puts the type
+/// error somewhere else entirely, in `server.port`, which Go declares a string
+/// (`config.go:50`), so the decode fills both `enable` fields and the fault is
+/// recorded after them.
+#[tokio::test]
+async fn the_parse_failure_arm_turns_off_a_knowledge_and_a_weather_it_found_on() {
+    let directory = TempDir::new("both-off");
+    let garbage = br#"{"weather":{"enable":true,"provider":"openweathermap"},"knowledge":{"enable":true,"provider":"openai"},"server":{"port":8080}}"#;
+    directory.seed(garbage);
+
+    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), directory.gate()))
+        .await
+        .expect("read_config hung");
+
+    match boot.outcome {
+        BootOutcome::ParseFailed(DecodeFault::Type { path, found, want }) => {
+            assert_eq!(path, "server.port");
+            assert_eq!(found, "number");
+            assert_eq!(want, "string");
+        }
+        other => panic!("the document took the wrong arm: {other:?}"),
+    }
+    // The decode filled both of these before it reached the fault, so the two
+    // assignments at config.go:127-128 are the only reason they are off.
+    assert!(!boot.config.knowledge.enable, "config.go:127");
+    assert!(!boot.config.weather.enable, "config.go:128");
+    assert_eq!(
+        boot.config.weather.provider, "openweathermap",
+        "the document really did decode before the fault"
+    );
+    assert_eq!(boot.config.knowledge.provider, "openai");
+    assert_eq!(
+        directory.file(),
+        garbage,
+        "the boot rewrote a file it could not read"
+    );
+}
+
+/// The go-home percent is range checked, not truncated.
+///
+/// Go's `int` is 64 bits, so `encoding/json` decodes `5000000000` into
+/// `*int` without complaint and stores it; that difference is candidate
+/// deviation 5 and is deliberate. What must not happen is the other thing: a
+/// cast would store `705032704` and report nothing, which would put a number
+/// the operator never typed into `apiConfig.json` at the next rewrite. The
+/// fault's shape is the one Go gives a literal that really is out of its own
+/// range, which was run through `encoding/json` against a copy of
+/// `config.go:52-56`'s struct: `cannot unmarshal number <literal> into ... of
+/// type int`, with the pointer left allocated at zero (`decode.go:476-478`).
+#[test]
+fn a_go_home_percent_outside_the_field_is_a_type_error_and_not_a_truncation() {
+    let error = ApiConfig::from_json_bytes(br#"{"battery":{"gohome_percent":5000000000}}"#)
+        .expect_err("a value outside the field has to be reported");
+
+    let DecodeError { config, fault } = error;
+    assert_eq!(
+        fault,
+        DecodeFault::Type {
+            path: "battery.gohome_percent".to_owned(),
+            found: "number 5000000000".to_owned(),
+            want: "int",
+        }
+    );
+    assert_eq!(
+        config.battery.gohome_percent,
+        Some(0),
+        "decode.go:476-478 allocates the pointer before it stores through it"
+    );
+
+    // The same literal one below the boundary is not out of range and is kept,
+    // so the test above is about the range and not about the number of digits.
+    let ok = ApiConfig::from_json_bytes(br#"{"battery":{"gohome_percent":2147483647}}"#)
+        .expect("the largest value the field holds decodes");
+    assert_eq!(ok.battery.gohome_percent, Some(i32::MAX));
+    let error = ApiConfig::from_json_bytes(br#"{"battery":{"gohome_percent":2147483648}}"#)
+        .expect_err("one past the largest value the field holds is a fault");
+    assert_eq!(
+        error.fault,
+        DecodeFault::Type {
+            path: "battery.gohome_percent".to_owned(),
+            found: "number 2147483648".to_owned(),
+            want: "int",
+        }
+    );
+}
+
+/// `config.go:105` and `:134`: an unset `STT_SERVICE` is a value like any
+/// other.
+///
+/// Go compares the stored provider against `os.Getenv("STT_SERVICE")`, which is
+/// the empty string when the shell exports nothing, so a stored `vosk` differs
+/// from it and `WriteSTT` runs and empties the provider. The language is left
+/// alone, because the empty string is neither of the two services
+/// `config.go:106` names. Both then reach the file through the rewrite at
+/// `config.go:155`.
+///
+/// This is the boot an operator gets by starting the server without the shell
+/// wrapper, and it is worth pinning because a port that treated the empty
+/// string as "no opinion" would quietly keep the old engine.
+#[tokio::test]
+async fn an_unset_stt_service_empties_the_provider_and_is_written_back() {
+    let directory = TempDir::new("stt-empty");
+    let seeded = {
+        let mut config = ApiConfig::default();
+        config.stt.provider = "vosk".to_owned();
+        config.stt.language = "en-US".to_owned();
+        config.has_read_from_env = true;
+        config.past_initial_setup = true;
+        config.battery.gohome_percent = Some(DEFAULT_GOHOME_PERCENT);
+        config.to_json_bytes()
+    };
+    directory.seed(&seeded);
+
+    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), directory.gate()))
+        .await
+        .expect("read_config hung");
+
+    assert!(
+        boot.config.stt.provider.is_empty(),
+        "config.go:105 assigns the variable whether or not it is set"
+    );
+    assert_eq!(
+        boot.config.stt.language, "en-US",
+        "config.go:106 leaves the language alone for anything but vosk and whisper.cpp"
+    );
+    assert_ne!(directory.file(), seeded, "config.go:155 did not rewrite");
+    assert_eq!(
+        directory.file(),
+        boot.config.to_json_bytes(),
+        "the file is not what the boot ended up holding"
     );
 }
 
@@ -1738,7 +1967,7 @@ async fn every_config_write_site_passes_gos_mode() {
 
     // `config.go:99`, through the arm that seeds a fresh file.
     let seeding = TempDir::new("mode-seed");
-    let (_config, written) = create_config_from_env(&empty_env(), &seeding.data_dir()).await;
+    let (_config, written) = create_config_from_env(&empty_env(), seeding.gate()).await;
     written.expect("the seeding write failed");
     assert_eq!(
         mode_of(&seeding.path().join("apiConfig.json")),
@@ -1748,7 +1977,7 @@ async fn every_config_write_site_passes_gos_mode() {
 
     // `config.go:64`, the save path.
     let saving = TempDir::new("mode-save");
-    write_config_to_disk(&ApiConfig::default(), &saving.data_dir())
+    write_config_to_disk(&ApiConfig::default(), saving.gate())
         .await
         .expect("the save failed");
     assert_eq!(
@@ -1764,7 +1993,7 @@ async fn every_config_write_site_passes_gos_mode() {
     booting.seed(&ApiConfig::default().to_json_bytes());
     fs::set_permissions(&path, fs::Permissions::from_mode(0o640))
         .expect("could not set the mode the file is to keep");
-    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), &booting.data_dir()))
+    let boot = tokio::time::timeout(CEILING, read_config(&empty_env(), booting.gate()))
         .await
         .expect("read_config hung");
     assert!(matches!(boot.outcome, BootOutcome::Read(Ok(()))));

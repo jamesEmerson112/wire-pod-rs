@@ -40,6 +40,7 @@ use wirepod_core::store::jdocs::{
     AddOutcome, BotJdoc, JDOCS_FILE_MODE, Jdoc, JdocsDecodeError, JdocsLoadOutcome, JdocsStore,
     marshal_jdocs, parse_jdocs,
 };
+use wirepod_core::test_support::install_tracing_backstop;
 
 /// The committed copy of this machine's `jdocs.json`, redacted.
 const FIXTURE: &str =
@@ -196,23 +197,29 @@ fn recorded_lines(ring: &LogRing) -> Vec<(String, String, String)> {
         .collect()
 }
 
-/// Installs `ring` as this thread's subscriber until the guard is dropped.
+/// Installs `ring` as this thread's subscriber until the guard is dropped, over
+/// the process-wide backstop.
 ///
 /// Every test below that reaches `vars.go:242`'s log line holds one of these,
 /// including the ones that assert nothing about the log. That is not tidiness:
 /// `tracing` caches per callsite whether anyone is interested in it, globally
-/// and across threads, and a callsite evaluated while no subscriber is
-/// installed caches "never". The harness runs these tests in parallel, so a
-/// loader test without a ring would decide, for whichever log test ran next,
-/// that the line is uninteresting. The rebuild below closes the same hole from
-/// the other side, for a callsite that was already cached before this guard
-/// existed; `tracing-core` provides it for exactly this, and it only ever moves
-/// a callsite from "never" towards "always".
+/// and across threads, and while at most one dispatcher is registered it
+/// decides that by asking only the calling thread, so a callsite first reached
+/// while nothing is installed caches "never" for the rest of the process. The
+/// harness runs these tests in parallel, so a loader test without a ring would
+/// decide, for whichever log test ran next, that the line is uninteresting.
+///
+/// [`install_tracing_backstop`] is what closes that, and its doc says why a
+/// global default is the only shape that does: it is the one subscriber that is
+/// live on every thread, so no thread can ever be the one that caches "never".
+/// It replaces the `rebuild_interest_cache` this helper used to call, which
+/// only repaired callsites that already existed when it ran. The `set_default`
+/// stays, because a scoped default wins over the global on its own thread and
+/// is what lets each test read its own ring back.
 fn watching(ring: &Arc<LogRing>) -> tracing::subscriber::DefaultGuard {
+    install_tracing_backstop();
     let subscriber = tracing_subscriber::registry().with(LogLayer::new(Arc::clone(ring)));
-    let guard = tracing::subscriber::set_default(subscriber);
-    tracing::callsite::rebuild_interest_cache();
-    guard
+    tracing::subscriber::set_default(subscriber)
 }
 
 /// A ring wired to a subscriber, for a body that logs.

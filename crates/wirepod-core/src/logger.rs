@@ -9,6 +9,18 @@
 //! JSON tags and their order, both line layouts, and the ring's walk order are
 //! a contract rather than an implementation detail.
 //!
+//! So is the encoder. `handleGetLogsJSON` serialises the entries with
+//! `json.NewEncoder(w).Encode` (`config-ws/webserver.go:303`), which is
+//! `json.Marshal`'s escaping plus one trailing newline: HTML escaping is on by
+//! default, so a message carrying `&`, `<` or `>` reaches the browser as
+//! `\u0026`, `\u003c` and `\u003e`. A log line is the freest text in the
+//! server, since it carries whatever a robot, an operator or an LLM put in it,
+//! so those three characters are ordinary rather than exotic. The handler C20
+//! brings therefore writes [`crate::config::go_marshal`]'s bytes followed by a
+//! `\n`, and never `serde_json::to_vec`, which escapes none of the three. The
+//! two plain-text handlers beside it write their buffers verbatim
+//! (`webserver.go:281`, `:286`) and have no encoder to match.
+//!
 //! Nothing in the port calls [`LogRing::record`] directly. Code emits `tracing`
 //! events and [`LogLayer`] fills the ring from them, which is what lets one
 //! call site feed both the ring and whatever formatting layer the binary
@@ -193,6 +205,11 @@ impl LogLevel {
 /// its marshal order, and the names are Go's tags. Both are part of the
 /// contract: the web UI reads `t`, `level`, `comp`, `bot` and `msg` off these
 /// objects.
+///
+/// The encoder is part of it too, for the reason the module docs give: these go
+/// out through Go's `json.NewEncoder` (`config-ws/webserver.go:303`), so
+/// `msg` carries `&`, `<` and `>` as `\u0026`, `\u003c` and `\u003e`.
+/// [`crate::config::go_marshal`] is the only marshaller here that does that.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Entry {
     /// Go's `TimeMS`, tagged `t`: `time.Now().UnixMilli()` (`logger.go:141`).
@@ -380,6 +397,13 @@ impl LogRing {
     /// Not ported: Go's non-blocking send to `LogTrayChan` (`logger.go:182-185`),
     /// which only the tray app reads and which arrives with the tray shell, and
     /// the `DEBUG_LOGGING` stdout mirror (`logger.go:186-188`).
+    ///
+    /// The ring's mutex is a [`std::sync::Mutex`] and is therefore not
+    /// reentrant, so nothing reached from inside that critical section may emit
+    /// a `tracing` event: [`LogLayer`] would call straight back into here and
+    /// deadlock the thread. That is why the file write inside the lock discards
+    /// its error rather than logging it, and it is a rule for anything added to
+    /// this critical section later.
     pub fn record(&self, level: LogLevel, comp: &str, bot: &str, msg: &str) {
         let now = self.clock.now();
         let clean = strip_ansi(msg);

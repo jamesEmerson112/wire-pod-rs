@@ -20,11 +20,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::layer::SubscriberExt;
+use wirepod_core::config::go_marshal;
 use wirepod_core::logger::{
     COMPONENTS, INFO_TRIM_AT, LogLayer, LogLevel, LogRing, ManualLogClock, RING_LEN, TRAY_TRIM_AT,
     component_for_target, is_wire_pod_target, strip_ansi,
 };
-use wirepod_core::test_support::FakeReceiver;
+use wirepod_core::test_support::{FakeReceiver, install_tracing_backstop};
 use wirepod_core::{ConnError, EventLoopExit, EventOwner, StatusCode, run_event_stream};
 
 const EXPECTED: &str =
@@ -206,7 +207,19 @@ fn every_recorded_kind_is_accounted_for() {
 
 /// Runs `body` with a real subscriber whose only layer is the one under test,
 /// installed unfiltered exactly as the binary installs it.
+///
+/// The backstop goes in first, and it is not optional here either. `tracing`
+/// caches per callsite whether anybody is interested, globally and for every
+/// thread, and while at most one dispatcher is registered it asks only the
+/// calling thread; a callsite first reached by a test that installed nothing is
+/// then cached as "never" and no later ring sees it. Every event this file
+/// emits comes from [`emit`], whose four callsites are shared by every test in
+/// the binary, so without a subscriber that is live on every thread the ring
+/// assertions below would be decided by the harness's scheduling.
+/// [`install_tracing_backstop`] is that subscriber and its doc says why a
+/// global default is the only shape that works.
 fn drive(ring: &Arc<LogRing>, body: impl FnOnce()) {
+    install_tracing_backstop();
     let subscriber = tracing_subscriber::registry().with(LogLayer::new(Arc::clone(ring)));
     tracing::subscriber::with_default(subscriber, body);
 }
@@ -282,6 +295,64 @@ fn an_entry_carries_gos_five_tags_in_gos_order() {
         object["t"].is_i64(),
         "t is an integer, not a float or a string"
     );
+}
+
+/// What Go printed for this one entry: `json.Marshal`'s bytes, from a throwaway
+/// program whose struct is `logger.go:48-55` field for field minus the
+/// unexported sixth. `json.NewEncoder(...).Encode` printed the same bytes plus
+/// one newline and nothing else.
+const GO_MARSHALLED: &str = concat!(
+    r#"[{"t":1757000000123,"level":"INFO","comp":"web","bot":"","#,
+    r#""msg":"a \u0026 b \u003c c \u003e d"}]"#
+);
+
+/// The encoder is part of the contract, not just the field list.
+///
+/// `handleGetLogsJSON` writes the entries with `json.NewEncoder(w).Encode`
+/// (`config-ws/webserver.go:303`), and `encoding/json` escapes HTML by default,
+/// so an ampersand and the two angle brackets reach the browser as `\u0026`,
+/// `\u003c` and `\u003e`, and the body ends with one newline. A log message is the
+/// freest text in the server, since it carries whatever a robot, an operator or
+/// an LLM put in it, so those three characters are ordinary rather than exotic.
+/// `serde_json` escapes none of them, which is asserted below so that this test
+/// pins a difference rather than a coincidence; [`go_marshal`] is the
+/// marshaller that matches, and the handler C20 brings has to be it plus the
+/// newline.
+#[test]
+fn an_entry_goes_out_through_gos_encoder_and_not_serde_jsons() {
+    let (ring, _clock) = fixed_ring(1_757_000_000_123);
+    drive(&ring, || {
+        tracing::info!(target: "web", "a & b < c > d");
+    });
+    let entries = ring.get_entries(LogLevel::Debug, 0);
+
+    let marshalled = go_marshal(&entries).expect("the entries marshal");
+    let marshalled = String::from_utf8(marshalled).expect("the marshalled bytes are UTF-8");
+    assert_eq!(
+        marshalled, GO_MARSHALLED,
+        "go_marshal did not reproduce encoding/json's HTML escaping"
+    );
+
+    // `Encode` is `Marshal` plus one newline, and that newline is the handler's
+    // to add because `go_marshal` is `Marshal`.
+    assert!(
+        !marshalled.ends_with('\n'),
+        "go_marshal is json.Marshal, so the newline belongs to the handler"
+    );
+    assert_eq!(
+        format!("{marshalled}\n"),
+        format!("{GO_MARSHALLED}\n"),
+        "webserver.go:303 writes those bytes and then that newline"
+    );
+
+    // The marshaller the handler must not reach for, so that the three escapes
+    // above are a difference and not something every encoder makes.
+    let serde = serde_json::to_string(&entries).expect("the entries serialise");
+    assert!(
+        serde.contains("a & b < c > d"),
+        "serde_json escaped the three characters after all, so this test pins nothing"
+    );
+    assert_ne!(serde, marshalled);
 }
 
 /// Go builds its result with `make([]Entry, 0, ringCount)`, so an empty result

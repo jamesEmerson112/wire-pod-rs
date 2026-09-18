@@ -9,12 +9,17 @@
 //! `eventReceiver` interface (`server.go:637`) and the `enableImageStreaming`
 //! function variable (`server.go:670`).
 //!
-//! The one item here that is not a fake is `write_atomic_with_retry_budget`,
-//! which opens the persistence path's Windows rename retry to a test that needs
-//! a budget it can rely on. It exists only on Windows, because the retry does.
+//! Three items here are not fakes. `write_atomic_with_retry_budget` opens the
+//! persistence path's Windows rename retry to a test that needs a budget it can
+//! rely on, and exists only on Windows because the retry does.
+//! `abort_write_after_filling_the_temporary` opens the window between the
+//! temporary's creation and the rename, which is the window a crash leaves a
+//! temporary in and which nothing that finishes a write can show. And
+//! [`install_tracing_backstop`] makes the `tracing` callsite cache safe to
+//! assert against from a parallel test harness.
 
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Once};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -922,7 +927,7 @@ impl SinkLog {
 }
 
 /// [`crate::persist::write_atomic`] with the Windows rename retry's budget
-/// chosen by the caller.
+/// chosen by the caller, answering how many rename attempts it took.
 ///
 /// The production budget is four attempts over fourteen milliseconds of
 /// waiting, which is shorter than the few milliseconds it takes to create, fill
@@ -931,6 +936,11 @@ impl SinkLog {
 /// hold is still there when the first rename is attempted decides what the test
 /// measures. A test that passes a wide budget drives the same loop with the
 /// race gone.
+///
+/// The attempt count is what lets such a test say it exercised the retry. A
+/// hold that has already cleared by the time the first rename runs produces a
+/// perfectly good write in one attempt, and without the count that outcome is
+/// indistinguishable from the one the test is there to check.
 ///
 /// Windows only, because the retry is. `attempts` counts the first try, and
 /// each wait after `first_backoff` is double the last.
@@ -941,17 +951,97 @@ pub async fn write_atomic_with_retry_budget(
     mode: u32,
     attempts: u32,
     first_backoff: Duration,
-) -> std::io::Result<()> {
+) -> std::io::Result<u32> {
     crate::persist::write_atomic_with_budget(
         path,
         contents,
         mode,
+        crate::persist::TemporaryIn::TargetDirectory,
         crate::persist::RetryBudget {
             attempts,
             first_backoff,
         },
     )
     .await
+}
+
+/// Creates and fills the temporary for `path` and stops, leaving it exactly
+/// where a process that died before the rename would leave it, and answering
+/// where that is.
+///
+/// This is the only way to observe what a crashed write leaves in a directory,
+/// and the directory it leaves it in is a parity question rather than a tidiness
+/// one: Go's `ReadSessionCerts` reads every name in `session-certs/` as a robot
+/// ESN and dereferences `pem.Decode`'s nil result (`vars.go:377-388`), so a
+/// temporary in there panics a rolled-back Go server at boot.
+///
+/// Unlike every failure path inside `write_atomic`, this deliberately does not
+/// remove the temporary: the point is what stays behind.
+pub async fn abort_write_after_filling_the_temporary(
+    path: impl Into<std::path::PathBuf>,
+    contents: impl Into<Vec<u8>>,
+    mode: u32,
+    temporary_in: crate::persist::TemporaryIn,
+) -> std::io::Result<std::path::PathBuf> {
+    crate::persist::fill_temporary_and_stop(path, contents, mode, temporary_in).await
+}
+
+/// Installs, once for the whole process, a global default `tracing` subscriber
+/// that is live on every thread, so that no callsite can ever be cached as
+/// uninteresting.
+///
+/// The problem this solves is a property of `tracing-core`, not of any one
+/// test. Interest in a callsite is decided once, the first time that callsite
+/// is reached, and cached globally for every thread
+/// (`tracing-core-0.1.36/src/callsite.rs:236`, `:490-515`). While at most one
+/// dispatcher has ever been registered, the rebuild takes a fast path that asks
+/// only the calling thread's default dispatch (`callsite.rs:544-547`,
+/// `:562-568`), and a thread with no default gets `NoSubscriber`, whose
+/// `register_callsite` answers `Interest::never`. So a callsite first reached by
+/// a test that installed no subscriber is cached as *never* for the rest of the
+/// process, and every later test that asserts on that log line sees nothing.
+/// The harness runs tests in parallel, so which test reaches a callsite first is
+/// decided by the scheduler: `tests/config.rs` failed 102 runs out of 200 at two
+/// threads over two of its boot tests before this existed.
+///
+/// A global default is the systematic fix because it is the one thing that is
+/// live on *every* thread. `dispatcher::get_default` falls back to the global
+/// when the calling thread has no scoped default, so with one installed the
+/// fast path can no longer reach `NoSubscriber`, whichever thread gets there
+/// first; and registering it rebuilds the interest of every callsite already
+/// known, so a callsite poisoned before it existed is repaired.
+///
+/// Two earlier attempts were not that. A per-test ring installed with
+/// `set_default` fixes only the thread it is installed on, so it cannot stop a
+/// *different* test's thread from reaching the callsite first with nothing
+/// installed. `rebuild_interest_cache` repairs callsites that already exist at
+/// the moment it is called, which is a race against every callsite reached
+/// afterwards rather than a rule about them. The global default is a rule.
+///
+/// The per-test `set_default` still belongs on top of this: a scoped default
+/// wins over the global on its own thread, which is what lets each test read
+/// its own ring back. The ring this installs is a throwaway that nothing reads,
+/// bounded like every other [`crate::logger::LogRing`], and it exists only so
+/// that the global default admits every callsite rather than rejecting it.
+pub fn install_tracing_backstop() {
+    static INSTALLED: Once = Once::new();
+
+    INSTALLED.call_once(|| {
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let ring = Arc::new(crate::logger::LogRing::new(Arc::new(
+            crate::logger::ManualLogClock::new(0, "1970.01.01 00:00:00"),
+        )));
+        let backstop =
+            tracing_subscriber::registry().with(crate::logger::LogLayer::new(Arc::clone(&ring)));
+        // A failure means somebody else holds the global default, which is the
+        // same guarantee by another route, so it is not worth reporting.
+        let _ = tracing::subscriber::set_global_default(backstop);
+        // Repairs every callsite that was reached, and possibly cached as
+        // never, before the global existed. Callsites reached afterwards find
+        // it through `get_default` and need no repair.
+        tracing::callsite::rebuild_interest_cache();
+    });
 }
 
 #[cfg(test)]

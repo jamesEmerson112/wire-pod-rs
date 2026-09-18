@@ -60,8 +60,17 @@
 //!
 //! Nothing here reads the process environment or decides a path on its own.
 //! [`Env`] is the twelve variables `config.go` calls `os.Getenv` for, and
-//! [`DataDir`] is the file's location, both injected. Wiring this into the
+//! [`WriteGate`] is the file's location, both injected. Wiring this into the
 //! binary is the boot commit's job, not this module's.
+//!
+//! **One gate.** The three writers below take a [`WriteGate`] rather than a
+//! [`DataDir`] because they are three writers of one file. Go's three overlap
+//! only in that they all reach the same global; here the web UI's save runs on
+//! an axum handler while the boot rewrite runs as a task, and two unordered
+//! writes can land their renames in the opposite order from their marshals.
+//! The gate serialises them and moves each marshal inside its own turn, which
+//! it can only do while all three hold the same gate, so [`config_gate`] builds
+//! it once and C13 keeps it in `AppState`.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -76,7 +85,7 @@ use serde_json::value::RawValue;
 
 use crate::gofmt::{GoJsonError, go_json_f32_raw};
 use crate::paths::DataDir;
-use crate::persist::write_atomic;
+use crate::persist::WriteGate;
 
 /// The permission bit set Go hands `os.WriteFile` at all three config write
 /// sites (`config.go:64`, `:99`, `:155`).
@@ -1554,6 +1563,26 @@ impl ApiConfig {
 // The three Go functions that touch the disk
 // ---------------------------------------------------------------------------
 
+/// The gate `apiConfig.json`'s three writers share.
+///
+/// Go has three of them, all reaching one file: `WriteConfigToDisk` from the
+/// web UI and the LLM paths (`config.go:64`), `CreateConfigFromEnv` from the
+/// first boot (`config.go:99`) and `ReadConfig`'s rewrite from every boot after
+/// it (`config.go:155`). Two of them can overlap in this port, because the web
+/// UI's save is an axum handler and the boot rewrite is a task, and two
+/// unordered writes of one file can land their renames in the opposite order
+/// from their marshals and leave the file holding a configuration the server
+/// has already moved past. [`WriteGate`] is what stops that, and it only stops
+/// it while all three writers hold *one* gate: two gates over the same path
+/// order nothing. This builds the one, C13 keeps it in `AppState`, and C22
+/// boots through it.
+pub fn config_gate(dir: &DataDir) -> WriteGate {
+    WriteGate::new(
+        dir.api_config_path().to_string_lossy().into_owned(),
+        CONFIG_FILE_MODE,
+    )
+}
+
 /// Go's `WriteConfigToDisk` (`config.go:61-65`).
 ///
 /// The save path the web UI and two of the LLM paths reach
@@ -1562,20 +1591,20 @@ impl ApiConfig {
 /// `ttr/kgsim_cmds.go:498`). It writes whatever it is given: unlike the two
 /// boot writers it does not force the go-home percent first.
 ///
+/// The file is named by the gate rather than by a directory, so that this
+/// writer and the two below cannot be handed two different gates over one file.
+/// The marshal runs inside the gate's turn, which is what makes the bytes
+/// reaching the disk no older than the moment this write took its turn.
+///
 /// # Errors
 ///
 /// Whatever the replacement reports. Go discards this error
 /// (`config.go:64`); the port returns it so a full disk is visible.
-pub async fn write_config_to_disk(config: &ApiConfig, dir: &DataDir) -> io::Result<()> {
+pub async fn write_config_to_disk(config: &ApiConfig, gate: &WriteGate) -> io::Result<()> {
     // `config.go:62`, through `logger.Println`, which is DEBUG with no
     // component (`logger.go:234-238`).
     tracing::debug!(comp = "", "Configuration changed, writing to disk");
-    write_atomic(
-        dir.api_config_path(),
-        config.to_json_bytes(),
-        CONFIG_FILE_MODE,
-    )
-    .await
+    gate.write(|| config.to_json_bytes()).await
 }
 
 /// Go's `CreateConfigFromEnv` (`config.go:67-100`).
@@ -1583,15 +1612,10 @@ pub async fn write_config_to_disk(config: &ApiConfig, dir: &DataDir) -> io::Resu
 /// The seeding and the write, in Go's order. The config is returned whether or
 /// not the write succeeded, because Go's global is filled before the write and
 /// stays filled when it fails.
-pub async fn create_config_from_env(env: &Env, dir: &DataDir) -> (ApiConfig, io::Result<()>) {
+pub async fn create_config_from_env(env: &Env, gate: &WriteGate) -> (ApiConfig, io::Result<()>) {
     let config = ApiConfig::from_env(env);
     // `config.go:98-99`.
-    let written = write_atomic(
-        dir.api_config_path(),
-        config.to_json_bytes(),
-        CONFIG_FILE_MODE,
-    )
-    .await;
+    let written = gate.write(|| config.to_json_bytes()).await;
     (config, written)
 }
 
@@ -1653,13 +1677,19 @@ pub struct BootConfig {
 /// `initwirepod/startserver.go:87` calls once. The package global is therefore
 /// still the zero value when it runs, which is why every arm here starts from
 /// [`ApiConfig::default`] rather than from a configuration passed in.
-pub async fn read_config(env: &Env, dir: &DataDir) -> BootConfig {
-    let path = dir.api_config_path();
+///
+/// The file is named by the gate rather than by a directory, for the reason
+/// [`config_gate`] gives: the boot rewrite and the web UI's save are two
+/// writers of one file, and they are only ordered while they share one gate.
+/// Both the read and the rewrite go through it, so `gate.path()` is the only
+/// spelling of the file this function knows.
+pub async fn read_config(env: &Env, gate: &WriteGate) -> BootConfig {
+    let path = PathBuf::from(gate.path());
 
-    match load(path.clone()).await {
+    match load(path).await {
         // `config.go:112-114`.
         OnDisk::Missing => {
-            let (config, written) = create_config_from_env(env, dir).await;
+            let (config, written) = create_config_from_env(env, gate).await;
             tracing::debug!(comp = "", "API config JSON created");
             BootConfig {
                 config,
@@ -1721,7 +1751,7 @@ pub async fn read_config(env: &Env, dir: &DataDir) -> BootConfig {
                 config.force_gohome_percent();
 
                 // `config.go:154-155`.
-                let written = write_atomic(path, config.to_json_bytes(), CONFIG_FILE_MODE).await;
+                let written = gate.write(|| config.to_json_bytes()).await;
 
                 // `config.go:156`.
                 tracing::debug!(comp = "", "API config successfully read");
@@ -1769,8 +1799,8 @@ enum OnDisk {
 }
 
 /// Runs Go's stat-then-read inside `spawn_blocking`, for the same reason
-/// [`write_atomic`] does: these are blocking file operations on a runtime whose
-/// worker threads are also carrying gRPC streams.
+/// [`crate::persist::write_atomic`] does: these are blocking file operations on
+/// a runtime whose worker threads are also carrying gRPC streams.
 async fn load(path: PathBuf) -> OnDisk {
     tokio::task::spawn_blocking(move || {
         if std::fs::metadata(&path).is_err() {

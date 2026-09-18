@@ -1,16 +1,24 @@
 //! Atomic persistence: the file is replaced, never rewritten, and a failure
 //! leaves neither a damaged target nor a temporary behind.
 //!
+//! The one thing that does leave a temporary behind is a process that dies
+//! between creating it and renaming it, and where that temporary lands is a
+//! parity question rather than a tidiness one, because Go reads every name in
+//! `session-certs/` as a robot ESN (`vars.go:376-388`). The session-certificate
+//! cases below are that, and the boot sweep is what clears up after it.
+//!
 //! Everything here runs in a directory under the system temporary directory,
 //! named for the process, so nothing touches the repository or the live
-//! `%APPDATA%\wire-pod` the Go server is serving from.
+//! `%APPDATA%\wire-pod` the Go server is serving from. No certificate or key
+//! is written anywhere: a PEM header is all these cases need.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use wirepod_core::persist::write_atomic;
+use wirepod_core::persist::{TemporaryIn, sweep_temporaries, write_atomic};
+use wirepod_core::test_support::abort_write_after_filling_the_temporary;
 
 /// Go's mode for the bot-info and jdocs files (`jdocs/server.go:52`,
 /// `vars.go:317`), used here as a representative one.
@@ -302,6 +310,16 @@ async fn a_write_into_a_read_only_directory_leaves_the_original_and_no_temporary
 /// `write_atomic_with_retry_budget` says why: the production budget is shorter
 /// than the time this machine takes to create, fill and sync the temporary, so
 /// a test using it would be racing its own setup.
+///
+/// The attempt count is asserted, because without it the test passes vacuously
+/// whenever the writer reaches its first rename after the hold has already
+/// cleared: the write then lands at once and the retry loop never runs. The
+/// hold and the budget are both sized for that assertion rather than for the
+/// write alone. Creating, filling and syncing an eleven-byte temporary measures
+/// between two and twenty-five milliseconds here, and reaching it also costs a
+/// `spawn_blocking` hand-off on a machine running the rest of this suite in
+/// parallel; a forty-millisecond hold lost that race about half the time, which
+/// is what the vacuous pass looked like.
 #[cfg(windows)]
 #[tokio::test]
 async fn a_hold_that_clears_does_not_lose_the_write() {
@@ -311,14 +329,16 @@ async fn a_hold_that_clears_does_not_lose_the_write() {
 
     use wirepod_core::test_support::write_atomic_with_retry_budget;
 
-    /// Long enough to outlast creating, filling and syncing the temporary,
-    /// which this machine does in about three milliseconds, so the first rename
-    /// is attempted while the hold is still on.
-    const HOLD: Duration = Duration::from_millis(40);
-    /// Ten attempts backing off from two milliseconds, just over a second of
-    /// waiting in total, so the hold is gone many attempts before the budget
-    /// is.
-    const ATTEMPTS: u32 = 10;
+    /// Long enough to outlast creating, filling and syncing the temporary and
+    /// the `spawn_blocking` hand-off that precedes it, by more than an order of
+    /// magnitude, so the first rename is attempted while the hold is still on.
+    const HOLD: Duration = Duration::from_millis(500);
+    /// Thirteen attempts backing off from two milliseconds, eight seconds of
+    /// waiting in total, so the hold is gone with most of the budget unspent:
+    /// the rename lands on the attempt after the cumulative wait passes
+    /// [`HOLD`], which is 510 milliseconds in, and four attempts remain behind
+    /// it.
+    const ATTEMPTS: u32 = 13;
     const FIRST_BACKOFF: Duration = Duration::from_millis(2);
 
     let directory = TempDir::new("transient");
@@ -353,7 +373,16 @@ async fn a_hold_that_clears_does_not_lose_the_write() {
     )
     .await
     .expect("the write did not finish within the ceiling");
-    write.expect("a hold that clears must not cost the write");
+    let attempts = write.expect("a hold that clears must not cost the write");
+
+    // Without this the test passes vacuously whenever the writer reaches its
+    // first rename after the hold has cleared: the rename then succeeds at once
+    // and the retry this test exists for never runs.
+    assert!(
+        attempts > 1,
+        "the write landed on its first rename, so the hold was already gone and the retry was \
+         never exercised; reaching the first rename took longer than the {HOLD:?} hold"
+    );
 
     holder.join().expect("the holder panicked");
 
@@ -429,6 +458,184 @@ async fn a_permanently_held_target_reports_an_error_rather_than_spinning() {
         ["jdocs.json"],
         "the temporary was left behind after a failed rename"
     );
+}
+
+// ---------------------------------------------------------------------------
+// What a crash leaves in session-certs/
+// ---------------------------------------------------------------------------
+
+/// A PEM header is enough for this test: nothing here parses a certificate, and
+/// no real key or certificate may be written anywhere.
+const PEM_HEAD: &[u8] = b"-----BEGIN CERTIFICATE-----\n";
+
+/// Go's own loop over `session-certs/`, in Go's shape: every entry whose name
+/// is not the literal `placeholder` is taken to be a robot's ESN
+/// (`vars.go:376-380`), read, and handed to `pem.Decode` whose nil result is
+/// dereferenced unchecked (`vars.go:387-388`).
+///
+/// So an entry that is not a certificate named after a robot is not untidiness
+/// there, it is a panic at boot after a rollback, or a bogus ESN in
+/// `RecurringInfo`. This is the assertion the placement rule exists for.
+fn every_entry_is_a_bare_target_name(directory: &Path) {
+    for name in entry_names(directory) {
+        assert!(
+            !name.contains(".tmp"),
+            "vars.go:380 would read the temporary {name} as a robot ESN"
+        );
+        assert!(
+            name == "placeholder" || name.chars().all(|character| character.is_ascii_hexdigit()),
+            "vars.go:380 would read {name} as a robot ESN"
+        );
+    }
+}
+
+/// A write of a session certificate that dies between creating its temporary
+/// and renaming it leaves nothing at all in `session-certs/`.
+///
+/// This is the one directory Go enumerates and reads names out of
+/// (`vars.go:371`, reached from `vars.go:256` at every boot), so the temporary
+/// has to go somewhere else, and the somewhere else has to be on the same
+/// volume for the rename to stay a rename. The pod root is both.
+#[tokio::test]
+async fn an_aborted_session_certificate_write_leaves_nothing_in_session_certs() {
+    let pod = TempDir::new("session-certs");
+    let certs = pod.path().join("session-certs");
+    fs::create_dir(&certs).expect("could not create session-certs/");
+    // The two things Go's loop expects to find there: its own placeholder and a
+    // certificate named after a robot.
+    fs::write(certs.join("placeholder"), b"").expect("could not seed the placeholder");
+    fs::write(certs.join("00303f28"), PEM_HEAD).expect("could not seed a certificate");
+
+    let target = certs.join("00e20100");
+    let temporary = tokio::time::timeout(
+        CEILING,
+        abort_write_after_filling_the_temporary(
+            &target,
+            PEM_HEAD.to_vec(),
+            0o777,
+            TemporaryIn::ParentDirectory,
+        ),
+    )
+    .await
+    .expect("the aborted write hung")
+    .expect("the aborted write failed before it could leave anything");
+
+    assert!(
+        temporary.is_file(),
+        "the abort left no temporary, so this test proves nothing"
+    );
+    assert_eq!(
+        temporary.parent(),
+        Some(pod.path()),
+        "the temporary did not land in the pod root"
+    );
+    every_entry_is_a_bare_target_name(&certs);
+    assert_eq!(
+        entry_names(&certs),
+        ["00303f28", "placeholder"],
+        "the aborted write added an entry to session-certs/"
+    );
+
+    // And C22's boot sweep takes the leftover away, so the pod root does not
+    // collect one per crash.
+    let removed = tokio::time::timeout(CEILING, sweep_temporaries(pod.path().to_path_buf()))
+        .await
+        .expect("the sweep hung")
+        .expect("the sweep failed");
+    assert_eq!(
+        removed, 1,
+        "the sweep did not remove the leftover temporary"
+    );
+    assert_eq!(entry_names(pod.path()), ["session-certs"]);
+}
+
+/// A finished session-certificate write leaves the certificate and nothing
+/// else, in either directory.
+#[tokio::test]
+async fn a_session_certificate_write_lands_under_its_own_name() {
+    let pod = TempDir::new("session-certs-ok");
+    let certs = pod.path().join("session-certs");
+    fs::create_dir(&certs).expect("could not create session-certs/");
+    fs::write(certs.join("placeholder"), b"").expect("could not seed the placeholder");
+
+    let target = certs.join("00303f28");
+    tokio::time::timeout(
+        CEILING,
+        wirepod_core::persist::write_atomic_with_temporary_in(
+            &target,
+            PEM_HEAD.to_vec(),
+            0o777,
+            TemporaryIn::ParentDirectory,
+        ),
+    )
+    .await
+    .expect("the write hung")
+    .expect("the write failed");
+
+    assert_eq!(
+        fs::read(&target).expect("the certificate is missing"),
+        PEM_HEAD
+    );
+    every_entry_is_a_bare_target_name(&certs);
+    assert_eq!(entry_names(&certs), ["00303f28", "placeholder"]);
+    assert_eq!(
+        entry_names(pod.path()),
+        ["session-certs"],
+        "a temporary survived in the pod root"
+    );
+}
+
+/// The boot sweep removes what this module names and leaves everything else,
+/// because it runs over a directory an operator also keeps files in.
+#[tokio::test]
+async fn the_boot_sweep_removes_temporaries_and_nothing_else() {
+    let directory = TempDir::new("sweep");
+    let root = directory.path();
+
+    fs::write(root.join("jdocs.json"), b"state").expect("could not seed the state file");
+    fs::write(root.join("jdocs.json.0123456789abcdef.tmp"), b"leftover")
+        .expect("could not seed a leftover");
+    fs::write(
+        root.join("botSdkInfo.json.fedcba9876543210.tmp"),
+        b"leftover",
+    )
+    .expect("could not seed a second leftover");
+    // Not this module's: the suffix is not sixteen hex digits.
+    fs::write(root.join("notes.tmp"), b"an operator's own")
+        .expect("could not seed the operator's file");
+    fs::write(root.join("jdocs.json.0123456789abcde.tmp"), b"nearly")
+        .expect("could not seed the near miss");
+    // A directory whose name would match, which the sweep must not descend into
+    // or remove.
+    fs::create_dir(root.join("certs.0123456789abcdef.tmp")).expect("could not seed the directory");
+
+    let removed = tokio::time::timeout(CEILING, sweep_temporaries(root.to_path_buf()))
+        .await
+        .expect("the sweep hung")
+        .expect("the sweep failed");
+
+    assert_eq!(removed, 2, "the sweep removed the wrong number of files");
+    assert_eq!(
+        entry_names(root),
+        [
+            "certs.0123456789abcdef.tmp",
+            "jdocs.json",
+            "jdocs.json.0123456789abcde.tmp",
+            "notes.tmp",
+        ],
+        "the sweep took something that was not its own"
+    );
+    assert_eq!(
+        fs::read(root.join("jdocs.json")).expect("the state file is missing"),
+        b"state"
+    );
+
+    // A second sweep of a directory with nothing left to do is not an error.
+    let removed = tokio::time::timeout(CEILING, sweep_temporaries(root.to_path_buf()))
+        .await
+        .expect("the second sweep hung")
+        .expect("the second sweep failed");
+    assert_eq!(removed, 0);
 }
 
 /// Concurrent writers of one file, which is the shape Go's five bot-info
