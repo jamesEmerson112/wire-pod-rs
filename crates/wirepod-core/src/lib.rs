@@ -1,8 +1,8 @@
 //! Core domain state for the wire-pod SDK app: robot identity, the injectable
 //! timing constants, Go-compatible number formatting, the robot seam, the
 //! per-robot stream ownership state machines, the stim receive loop, the camera
-//! guard and frame pump, the never-pruned camera meters, the bot-info and
-//! jdocs-pinger stores, the resolution of Go's two on-disk layouts, and the
+//! guard and frame pump, the never-pruned camera meters, the bot-info, jdocs
+//! and jdocs-pinger stores, the resolution of Go's two on-disk layouts, and the
 //! atomic replacement every state file is written through.
 //!
 //! The seam in [`robot::conn`] is expressed in domain types, so this crate
@@ -58,7 +58,9 @@ pub use crate::robot::{
 };
 pub use crate::state::{AppState, AppStateBuilder};
 pub use crate::store::{
-    BotInfo, BotInfoRobot, BotInfoWire, BotStatus, BotStatusKind, PingerState, RobotWire,
+    AddOutcome, BotInfo, BotInfoRobot, BotInfoWire, BotJdoc, BotStatus, BotStatusKind,
+    JDOCS_FILE_MODE, Jdoc, JdocsDecodeError, JdocsLoadOutcome, JdocsStore, LoadedJdocs,
+    PingerState, RobotWire, marshal_jdocs, parse_jdocs,
 };
 pub use crate::timings::Timings;
 pub use crate::token::{

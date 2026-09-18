@@ -35,6 +35,14 @@
 //! of the process, and `vars.go:234` reads `APIConfig.STT.Service` out of it
 //! immediately afterwards.
 //!
+//! That loop is not this file's alone. `apiConfig.json` was only the first
+//! state file to need it, so the decoder lives here and the pieces every Go
+//! struct shares, `GoObject`, `Faults` and the field writers, are visible to
+//! the crate. [`crate::store::jdocs`] is the second caller, and the two files
+//! differ only in their root: this one's is an object, so `RootVisitor` serves
+//! it, and the jdocs file's is an array, so that module brings a root of its
+//! own.
+//!
 //! **Forward compatibility.** Go's decoder drops any key its struct does not
 //! name, so a fork-only or newer-version key is lost the moment the Go server
 //! rewrites the file. Every object here carries a `#[serde(flatten)]` map
@@ -222,7 +230,7 @@ fn zero_f32() -> Box<RawValue> {
 /// the parser sends objects and arrays to `object` and `array` instead, so
 /// these six are the whole vocabulary a type error is reported in.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Kind {
+pub(crate) enum Kind {
     /// `decode.go:892`.
     Null,
     /// `decode.go:904`.
@@ -402,8 +410,8 @@ impl std::error::Error for DecodeError {
 /// The first fault one decode recorded, and nothing after it
 /// (`decode.go:241-247`).
 #[derive(Debug, Default)]
-struct Faults {
-    first: Option<DecodeFault>,
+pub(crate) struct Faults {
+    pub(crate) first: Option<DecodeFault>,
 }
 
 impl Faults {
@@ -419,7 +427,7 @@ impl Faults {
     }
 
     /// The same against the document as a whole (`decode.go:650`).
-    fn save_root(&mut self, found: Kind, want: &'static str) {
+    pub(crate) fn save_root(&mut self, found: Kind, want: &'static str) {
         self.save_text(String::new(), found.as_str().to_owned(), want);
     }
 
@@ -432,12 +440,15 @@ impl Faults {
     }
 }
 
-/// One of Go's six configuration structs, seen the way `encoding/json` sees it.
+/// One Go struct, seen the way `encoding/json` sees it.
 ///
-/// The trait is what lets one object loop serve all six, which is the point:
+/// The trait is what lets one object loop serve them all, which is the point:
 /// the loop is Go's and the structs only say which tags they have and what to
-/// do with a value once a key has been matched to one.
-trait GoObject: Default {
+/// do with a value once a key has been matched to one. The six below are this
+/// file's; [`crate::store::jdocs`] implements it for the two the jdocs file is
+/// made of, which is why this and the field writers are visible to the crate
+/// rather than to this module.
+pub(crate) trait GoObject: Default {
     /// The tags a key is matched against, in Go's declaration order
     /// (`decode.go:694-697`).
     const TAGS: &'static [&'static str];
@@ -626,7 +637,7 @@ fn store_bool(
 }
 
 /// `decode.go:929-964`.
-fn store_string(
+pub(crate) fn store_string(
     slot: &mut String,
     raw: &RawValue,
     prefix: &str,
@@ -644,6 +655,39 @@ fn store_string(
             Err(_) => faults.save(prefix, tag, Kind::String, "string"),
         },
         found => faults.save(prefix, tag, found, "string"),
+    }
+}
+
+/// `decode.go:1005-1011`.
+///
+/// Go's `strconv.ParseUint(item, 10, 64)` refuses a sign, a fraction, an
+/// exponent and anything past `u64::MAX`, and `u64`'s own `FromStr` refuses the
+/// same set: the one spelling they disagree about, a leading `+`, is not a JSON
+/// number, so a [`RawValue`] can never carry it here. Go appends the literal to
+/// the message in this branch, as it does for the integer and float ones and
+/// unlike every other arm (`decode.go:1008`).
+///
+/// No call site in this module has a `uint64` field. It is here because the
+/// field writers are one block, each one arm of the same `literalStore`, and
+/// [`crate::store::jdocs`] needs this arm for `doc_version` and `fmt_version`
+/// (`vars.go:131-132`).
+pub(crate) fn store_u64(
+    slot: &mut u64,
+    raw: &RawValue,
+    prefix: &str,
+    tag: &'static str,
+    faults: &mut Faults,
+) {
+    match kind(raw) {
+        Kind::Null => {}
+        Kind::Number => {
+            let literal = text(raw);
+            match literal.parse::<u64>() {
+                Ok(value) => *slot = value,
+                Err(_) => faults.save_number(prefix, tag, literal, "uint64"),
+            }
+        }
+        found => faults.save(prefix, tag, found, "uint64"),
     }
 }
 
@@ -732,7 +776,7 @@ fn allocate(slot: &mut Option<i32>) {
 /// One nested object, which Go merges into whatever the field already holds
 /// rather than replacing (`decode.go:599-827` writes through a `subv` that
 /// points into the struct).
-fn store_object<T: GoObject>(
+pub(crate) fn store_object<T: GoObject>(
     target: &mut T,
     raw: &RawValue,
     prefix: &str,
