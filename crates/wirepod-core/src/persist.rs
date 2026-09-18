@@ -358,6 +358,16 @@ impl WriteGate {
         &self.path
     }
 
+    /// Where this gate's writes put their temporary.
+    ///
+    /// The placement is only otherwise observable by catching a write in
+    /// flight, which no test can do without racing it, so the writer of a file
+    /// under `session-certs/` is checked against this instead
+    /// (`crates/wirepod-core/src/store/session_certs.rs`).
+    pub fn temporary_in(&self) -> TemporaryIn {
+        self.temporary_in
+    }
+
     /// Takes the gate, calls `marshal`, and replaces the file with what it
     /// produced.
     ///

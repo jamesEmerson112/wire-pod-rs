@@ -4044,6 +4044,7 @@ dependencies = [
  "base64 0.22.1",
  "getrandom 0.2.17",
  "libc",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "sha2",

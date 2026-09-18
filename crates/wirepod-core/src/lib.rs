@@ -1,8 +1,9 @@
 //! Core domain state for the wire-pod SDK app: robot identity, the injectable
 //! timing constants, Go-compatible number formatting, the robot seam, the
 //! per-robot stream ownership state machines, the stim receive loop, the camera
-//! guard and frame pump, the never-pruned camera meters, the bot-info, jdocs
-//! and jdocs-pinger stores, the resolution of Go's two on-disk layouts, the
+//! guard and frame pump, the never-pruned camera meters, the bot-info, jdocs,
+//! jdocs-pinger, session-certificate and SDK-ini stores, the resolution of Go's
+//! two on-disk layouts, the
 //! `encoding/json` encoder and decoder every state file goes through, and the
 //! atomic replacement every state file is written through.
 //!
@@ -18,10 +19,10 @@
 //!
 //! [`state::AppState`] is the one shared value the handlers read, replacing
 //! Go's roughly thirty unsynchronized globals. The config layer, the logger
-//! ring and the jdocs store have landed since; the rest of the crate's eventual
-//! responsibility (the session-cert, sdk-ini, server-config and transient token
-//! stores, the JWT, and the `AppState` growth that carries them) arrives in
-//! later commits.
+//! ring, the jdocs store, the session-certificate store and the SDK ini file
+//! have landed since; the rest of the crate's eventual responsibility (the
+//! server-config and transient token stores, the JWT, and the `AppState`
+//! growth that carries them) arrives in later commits.
 #![deny(clippy::await_holding_lock)]
 
 pub mod clock;
@@ -64,8 +65,14 @@ pub use crate::robot::{
 pub use crate::state::{AppState, AppStateBuilder};
 pub use crate::store::{
     AddOutcome, BotInfo, BotInfoRobot, BotInfoWire, BotJdoc, BotStatus, BotStatusKind,
-    JDOCS_FILE_MODE, Jdoc, JdocsDecodeError, JdocsLoadOutcome, JdocsStore, LoadedJdocs,
-    PingerState, RobotWire, marshal_jdocs, parse_jdocs,
+    DEFAULT_SECTION, IniEdit, IniError, IniFile, IniKey, IniSection, JDOCS_FILE_MODE, Jdoc,
+    JdocsDecodeError, JdocsLoadOutcome, JdocsStore, LINE_BREAK, LoadedJdocs, LoadedSessionCerts,
+    PLACEHOLDER_NAME, PingerState, ReadSessionCertsOutcome, RecurringInfo, RecurringInfoLoad,
+    RobotWire, SDK_CERT_FILE_MODE, SDK_CONFIG_FILE, SDK_INI_DIR_MODE, SDK_INI_FILE_MODE,
+    SESSION_CERT_FILE_MODE, SdkIniStore, SecondaryOutcome, SessionCertStore, cert_file_path,
+    cert_value, certificate_der, issuer_common_name, marshal_jdocs, parse_jdocs,
+    read_session_certs, sdk_config_path, session_cert_gate, session_cert_read_path,
+    write_session_cert,
 };
 pub use crate::timings::Timings;
 pub use crate::token::{
