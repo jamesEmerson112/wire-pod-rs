@@ -110,6 +110,10 @@ except where they name Go's own source tree or a module in the module cache.
 | `f32json` | `pkg/vars/config.go:38-39`, Go's `encoding/json/encode.go:538-577` | How a `float32` struct field marshals, including both format cutoffs, the two-digit negative exponent cleanup, and the pair of near-identical inputs that separate an exact decimal tie, which strconv breaks to even, from a value that merely starts its tail with a 5 |
 | `claims` | `pkg/servers/token/token.go:254-265`, `github.com/golang-jwt/jwt` v3.2.2 | The seven-key JWT payload, its key order, the header, both base64url segments and the two hard-coded literals |
 | `legacystamp` | `pkg/logger/logger.go:20-31`, `:102-111`, `:113-122` | The `2006.01.02 15:04:05` stamp and both whole log-line layouts with the component and bot fields present and absent |
+| `claims_matrix` | `pkg/servers/token/token.go:254-265`, `github.com/golang-jwt/jwt` v3.2.2 | The same claim build over fourteen instants, five requestor ids and three token ids, in `America/Los_Angeles` and in UTC: the whole payload, the `expires` string with its instant and offset, and the signing input |
+| `jws` | `pkg/servers/token/token.go:266-267` | The shape around a signature and no byte of one: the segment count, the signature's byte and character lengths, that `SignedString` leaves the signing string untouched, that no standard-alphabet byte reaches a token, both header values, and that only a fresh key makes two signings differ |
+| `robot_parse` | `vector-cloud/internal/token/identity/identity.go:158`, `.../token.go:96-161`, `github.com/golang-jwt/jwt` `parser.go:96-149` | The robot's own reader over thirty-one crafted tokens: the six required claims and the optional one, the `time.RFC3339` shapes it takes and refuses, the segment count, the alg lookup, and that the signature segment is never decoded |
+| `uuid` | `github.com/google/uuid` v1.6.0 `version4.go:13`, `:47`, used at `pkg/servers/token/token.go:180-183` | `NewRandomFromReader` over five fixed draws: the version nibble, the two variant bits, the lowercase hex and the 8-4-4-4-12 layout |
 
 `addmonth` and `addmonth_local` are a pair and neither is sufficient alone. Every
 `addmonth` case runs in a `time.FixedZone`, which has one offset for all time,
@@ -166,7 +170,7 @@ As of the commit that last regenerated these files:
 
 | File | Total lines | Comment lines | Cases |
 |---|---|---|---|
-| `go-probe/expected.txt` | 306 | 7 | 299 |
+| `go-probe/expected.txt` | 445 | 7 | 438 |
 | `ini-probe/expected.txt` | 38 | 7 | 31 |
 | `store-probe/expected.txt` | 159 | 7 | 152 |
 

@@ -981,7 +981,11 @@ fn the_probe_file_holds_no_unrecognized_case() {
                 .chain(LOGGER_STAMP_KINDS.iter())
                 .any(|(kind, _)| *kind == case.kind()),
             // Tested by the token hashing, float formatting and JWT commits.
-            "hash" | "f32json" | "claims" => true,
+            // `claims_matrix` and `jws` belong to `tests/jwt_matrix.rs`,
+            // `robot_parse` to `tests/jwt_robot.rs`, and `uuid` to both.
+            "hash" | "f32json" | "claims" | "claims_matrix" | "jws" | "robot_parse" | "uuid" => {
+                true
+            }
             _ => false,
         };
         assert!(

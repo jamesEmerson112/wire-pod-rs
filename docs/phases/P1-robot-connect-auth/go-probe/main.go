@@ -59,6 +59,32 @@
 //	             (fileFormatLine), both of which stamp with the layout
 //	             "2006.01.02 15:04:05", plus pkg/logger/logger.go:20-31 for
 //	             Level.String.
+//	claims_matrix
+//	             pkg/servers/token/token.go:254-265 again, driven end to end
+//	             over fourteen instants, five requestor ids and three token
+//	             ids, in America/Los_Angeles and in UTC. The claims section
+//	             above records one claim set and exists to pin the header, the
+//	             key order and the two segments; this one exists to pin what
+//	             moves. See "How the claims_matrix section is built" below.
+//	jws          pkg/servers/token/token.go:266-267, rsa.GenerateKey at 1024
+//	             bits and SignedString, recorded as invariants only: the
+//	             segment count, the signature's byte and character lengths,
+//	             that the first two segments are the signing string untouched,
+//	             that no standard-alphabet byte reaches a token, the two header
+//	             values, and which of two signings differ. No key and no
+//	             signature byte is written. See "Why the jws section records no
+//	             signature" below.
+//	robot_parse  The robot's own reader, not the server's writer:
+//	             vector-cloud/internal/token/identity/identity.go:158
+//	             (ParseUnverified) followed by
+//	             vector-cloud/internal/token/identity/token.go:96-161
+//	             (FromJwtToken), over thirty-one crafted tokens. See "The
+//	             module the robot_parse section substitutes" below.
+//	uuid         github.com/google/uuid v1.6.0's version4.go:47
+//	             (NewRandomFromReader), which is the transform uuid.New
+//	             (version4.go:13) runs over the sixteen bytes it draws, and
+//	             which pkg/servers/token/token.go:180-183 turns into the
+//	             token_id claim.
 //
 // # The zone the addmonth_local section uses
 //
@@ -114,6 +140,78 @@
 // timestamps are fixed placeholders chosen here; the only strings taken from
 // the Go server are the two literals it hard codes, recorded as consts.
 //
+// # How the claims_matrix section is built
+//
+// The same library and the same seven claims, driven over what the claims
+// section holds fixed. Fourteen cases move three things at once: the instant,
+// which sits on both sides of two daylight saving transitions and inside both
+// the hour a spring forward removes and the hour a fall back repeats; the
+// requestor id, which covers the default serial, a lowercase serial, an
+// uppercase one, one carrying all five characters encoding/json escapes, and
+// one whose bytes force base64url groups 62 and 63 so EncodeSegment itself has
+// to produce '-' and '_'; and the token id, which takes the three UUIDs the
+// Rust tests already pin uuid_v4 against.
+//
+// Five lines per case, because a test needs more than the payload: the expires
+// string, its Unix second and its offset are what let a driver check the
+// instant rather than only the formatting, and the signing input is the two
+// encoded segments. The payload line's input column carries the instant in
+// every form the driver needs, so it never has to own a tz database. The six
+// kind=offset lines are the same transition edges addmonth_local records,
+// repeated because a driver rebuilt from them has to answer for the two extra
+// instants a whole claim build asks about.
+//
+// The requestor ids travel as lowercase hex of their UTF-8 bytes rather than
+// as themselves, because two of the five carry bytes no recording should hold
+// literally: U+2028 and U+2029 are line separators, and a run of '?' and '~'
+// is unreadable. Every byte this program prints stays printable ASCII.
+//
+// # Why the jws section records no signature
+//
+// token.go:266-267 generates a throwaway 1024-bit RSA key per request and
+// signs with it. The key is a local variable and nothing stores or publishes
+// it, so no two runs of this program could agree on a signature even if one
+// were worth recording. What is worth recording is the shape around it, and
+// every line in that section is an invariant: a count, a length, a header
+// value, or a yes-or-no over two signings. Two throwaway keys are generated on
+// every run and the section's output is identical regardless.
+//
+// The one answer that is not obvious is same_key_twice_differs. PKCS#1 v1.5 is
+// deterministic, so the same key over the same signing input produces the same
+// signature: it is the per-request key, not the signing, that makes two tokens
+// issued in the same second differ.
+//
+// A toolchain that refuses a 1024-bit key panics rather than falling back to a
+// larger one, because the signature's length is the contract being recorded
+// and a larger key would record a different one under the same name. Go 1.24
+// is the first release to impose a floor and it sits at exactly 1024.
+//
+// # The module the robot_parse section substitutes
+//
+// That section is the robot's reader, and the robot builds against
+// github.com/dgrijalva/jwt-go v3.2.1-0.20180719211823-0b96aaa70776+incompatible
+// (vector-cloud/go.mod:8), which is not in this machine's module cache. This
+// program runs github.com/golang-jwt/jwt v3.2.2+incompatible instead, the
+// maintained fork of the same code at the same major version and the version
+// the Go server itself pins (chipper/go.mod:16). Both module paths are
+// recorded as consts so the substitution is on the record rather than in a
+// comment.
+//
+// One case is known to be able to differ between them. padded_payload_segment
+// is golang-jwt's verdict: its DecodeSegment is base64.RawURLEncoding, which
+// refuses a '=' outright, while the older dgrijalva build re-pads the segment
+// before decoding and may accept it. Nothing this port writes is padded, so
+// the difference is unreachable from a token wire-pod issues.
+//
+// No error text from encoding/json, time or encoding/base64 is recorded, only
+// a closed verdict vocabulary, because those strings move with the Go
+// toolchain and nothing on the wire carries them: the robot only branches on
+// whether the parse failed. The three verdicts that are literals are literals,
+// verbatim: "signing method (alg) is unavailable." and "signing method (alg)
+// is unspecified." are parser.go:141 and :144 in the jwt module,
+// "tokenstring should not contain 'bearer '" is parser.go:108, and
+// "missing claim " is identity/token.go:167-169.
+//
 // # Output format
 //
 // One case per line, three tab separated fields:
@@ -153,8 +251,12 @@
 package main
 
 import (
+	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -163,6 +265,7 @@ import (
 	_ "time/tzdata"
 
 	"github.com/golang-jwt/jwt"
+	"github.com/google/uuid"
 )
 
 // Copied from pkg/servers/token/hashing.go:16-26 so this program depends on no
@@ -269,6 +372,10 @@ func main() {
 	f32JSONSection()
 	claimsSection()
 	legacyStampSection()
+	claimsMatrixSection()
+	jwsSection()
+	robotParseSection()
+	uuidSection()
 }
 
 // ------------------------------------------------------------------- hash
@@ -929,4 +1036,640 @@ func legacyStampSection() {
 	emit(sec, "kind=level_string level=3", "ERROR")
 	emit(sec, "kind=level_string level=4", "DEBUG")
 	emit(sec, "kind=const name=stamp_layout", "2006.01.02 15:04:05")
+}
+
+// ----------------------------------------------------------- claims_matrix
+
+// The zones the matrix runs in. The first is the zone addmonth_local already
+// uses and this section reuses its six transition edges, so a test can rebuild
+// one step function and drive both. The second is the degenerate case: an
+// offset of zero, which time.RFC3339Nano writes as "Z" rather than "+00:00".
+const (
+	matrixZone    = "America/Los_Angeles"
+	matrixZoneUTC = "UTC"
+)
+
+// matrixRequestor is one value of the requestor_id claim, under the label the
+// cases name it by. The id is the whole claim value, "vic:" included, because
+// token.go:187 and token.go:223 are the only two things that build it and both
+// produce the complete string.
+type matrixRequestor struct {
+	label string
+	id    string
+}
+
+// matrixTokenID is one value of the token_id claim. All three are the UUIDs
+// crates/wirepod-core/tests/jwt.rs already pins uuid_v4 against, so the matrix
+// adds no new placeholder.
+type matrixTokenID struct {
+	label string
+	id    string
+}
+
+// matrixCase is one whole CreateJWT claim build: a civil instant read in a
+// named zone, a requestor and a token id.
+type matrixCase struct {
+	name            string
+	zone            string
+	y               int
+	mo              time.Month
+	d, h, mi, s, ns int
+	requestor       string
+	tokenID         string
+}
+
+// claimsMatrixSection drives token.go:254-265 end to end over a matrix of
+// instants, requestors and token ids, which the claims section above does not:
+// that one records a single claim set and exists to pin the header, the key
+// order and the two base64url segments.
+//
+// Five lines per case. The payload line carries the instant in every form a
+// test needs (the civil fields, the Unix second, the offset and the formatted
+// iat) so the driver never has to own a tz database; the other four carry the
+// expires string, its Unix second, its offset and the signing input.
+func claimsMatrixSection() {
+	const sec = "claims_matrix"
+
+	la, err := time.LoadLocation(matrixZone)
+	if err != nil {
+		panic(err)
+	}
+	utc, err := time.LoadLocation(matrixZoneUTC)
+	if err != nil {
+		panic(err)
+	}
+
+	emit(sec, "kind=const name=zone", matrixZone)
+	emit(sec, "kind=const name=zone_utc", matrixZoneUTC)
+
+	// The same six transition edges addmonth_local records, repeated here so
+	// this section stands on its own: Claims::new asks the zone for an offset
+	// at two more instants than AddDate does, so a driver built from these six
+	// samples has to cover both.
+	for _, u := range []time.Time{
+		time.Date(2026, time.March, 8, 9, 59, 59, 0, time.UTC),
+		time.Date(2026, time.March, 8, 10, 0, 0, 0, time.UTC),
+		time.Date(2026, time.November, 1, 8, 59, 59, 0, time.UTC),
+		time.Date(2026, time.November, 1, 9, 0, 0, 0, time.UTC),
+		time.Date(2027, time.March, 14, 9, 59, 59, 0, time.UTC),
+		time.Date(2027, time.March, 14, 10, 0, 0, 0, time.UTC),
+	} {
+		t := u.In(la)
+		_, off := t.Zone()
+		emit(sec, fmt.Sprintf("kind=offset zone=%s unix=%d", matrixZone, t.Unix()),
+			fmt.Sprint(off))
+	}
+
+	requestors := []matrixRequestor{
+		// token.go:187, the serial a first authentication claims.
+		{"unknown", "vic:00601b50"},
+		// token.go:223 with a lowercase placeholder serial.
+		{"robot_lower", "vic:00000000"},
+		// token.go:223 concatenates the serial untouched, so a robot whose
+		// bot-info "thing" carried uppercase hex claims uppercase hex.
+		{"robot_upper", "vic:0000ABCD"},
+		// The five characters encoding/json escapes and encoding/json alone.
+		// '<', '&' and '>' come out as \u003c, \u0026 and \u003e, and
+		// U+2028 and U+2029 as \u2028 and \u2029; a serde_json payload would
+		// carry all five raw. The serial is written with \u escapes below so that
+		// no byte of this source file is outside printable ASCII.
+		{"robot_escapes", "vic:<&>\u2028\u2029"},
+		// '?' is 0x3f and '~' is 0x7e, the two ASCII bytes whose runs force
+		// six-bit groups 63 and 62, so jwt.EncodeSegment itself has to produce
+		// '_' and '-' rather than the standard alphabet's '/' and '+'. Eight of
+		// each covers every byte alignment the surrounding payload can impose.
+		{"robot_alphabet", "vic:????????~~~~~~~~"},
+	}
+	byRequestor := map[string]string{}
+	for _, r := range requestors {
+		byRequestor[r.label] = r.id
+		emit(sec, "kind=requestor_hex name="+r.label, hex.EncodeToString([]byte(r.id)))
+	}
+
+	tokenIDs := []matrixTokenID{
+		{"zero", "00000000-0000-4000-8000-000000000000"},
+		{"max", "ffffffff-ffff-4fff-bfff-ffffffffffff"},
+		{"mixed", "00112233-4455-4677-8899-aabbccddeeff"},
+	}
+	byTokenID := map[string]string{}
+	for _, t := range tokenIDs {
+		byTokenID[t.label] = t.id
+		emit(sec, "kind=token_id name="+t.label, t.id)
+	}
+
+	cases := []matrixCase{
+		// Five controls at one instant that crosses no transition, one per
+		// requestor, so the requestor is the only thing that moves.
+		{name: "control_unknown", zone: matrixZone, y: 2026, mo: time.September, d: 9, h: 12, requestor: "unknown", tokenID: "zero"},
+		{name: "control_lower", zone: matrixZone, y: 2026, mo: time.September, d: 9, h: 12, requestor: "robot_lower", tokenID: "mixed"},
+		{name: "control_upper", zone: matrixZone, y: 2026, mo: time.September, d: 9, h: 12, requestor: "robot_upper", tokenID: "max"},
+		{name: "control_escapes", zone: matrixZone, y: 2026, mo: time.September, d: 9, h: 12, requestor: "robot_escapes", tokenID: "zero"},
+		{name: "control_alphabet", zone: matrixZone, y: 2026, mo: time.September, d: 9, h: 12, requestor: "robot_alphabet", tokenID: "zero"},
+		// iat is -08:00 and expires, one month later, is -07:00.
+		{name: "spring_forward", zone: matrixZone, y: 2026, mo: time.February, d: 9, h: 12, ns: 123456789, requestor: "unknown", tokenID: "mixed"},
+		// The other direction, with a fraction that loses eight trailing zeros.
+		{name: "fall_back", zone: matrixZone, y: 2026, mo: time.October, d: 9, h: 12, ns: 500000000, requestor: "unknown", tokenID: "max"},
+		// expires lands in the hour the spring forward removed.
+		{name: "missing_hour", zone: matrixZone, y: 2026, mo: time.February, d: 8, h: 2, mi: 30, requestor: "robot_lower", tokenID: "zero"},
+		// expires lands in the hour the fall back repeated.
+		{name: "repeated_hour", zone: matrixZone, y: 2026, mo: time.October, d: 1, h: 1, mi: 30, requestor: "robot_lower", tokenID: "zero"},
+		// 31 January, which normalises forward into March.
+		{name: "month_end_overflow", zone: matrixZone, y: 2026, mo: time.January, d: 31, h: 12, requestor: "robot_upper", tokenID: "mixed"},
+		// The year roll, at the longest fraction RFC3339Nano writes.
+		{name: "year_roll", zone: matrixZone, y: 2026, mo: time.December, d: 31, h: 12, ns: 999999999, requestor: "unknown", tokenID: "zero"},
+		// A fraction of exactly zero, which drops the decimal point entirely.
+		{name: "zero_fraction", zone: matrixZone, y: 2026, mo: time.September, d: 9, h: 12, requestor: "unknown", tokenID: "zero"},
+		// Offset zero, which RFC3339Nano writes as "Z" and not "+00:00".
+		{name: "utc_control", zone: matrixZoneUTC, y: 2026, mo: time.September, d: 9, h: 12, requestor: "unknown", tokenID: "zero"},
+		{name: "utc_fraction", zone: matrixZoneUTC, y: 2026, mo: time.September, d: 9, h: 12, ns: 123456789, requestor: "robot_lower", tokenID: "mixed"},
+	}
+
+	for _, c := range cases {
+		loc := la
+		if c.zone == matrixZoneUTC {
+			loc = utc
+		}
+		// token.go:195-196: both instants come from time.Now() in time.Local,
+		// and the second is the first plus one calendar month.
+		in := time.Date(c.y, c.mo, c.d, c.h, c.mi, c.s, c.ns, loc)
+		out := in.AddDate(0, 1, 0)
+		_, inOff := in.Zone()
+		_, outOff := out.Zone()
+		iat := in.Format(time.RFC3339Nano)
+		expires := out.Format(time.RFC3339Nano)
+
+		requestorID, ok := byRequestor[c.requestor]
+		if !ok {
+			panic("no requestor labelled " + c.requestor)
+		}
+		tokenID, ok := byTokenID[c.tokenID]
+		if !ok {
+			panic("no token id labelled " + c.tokenID)
+		}
+
+		// token.go:254-265 verbatim, with the two hard-coded literals from
+		// token.go:31 and token.go:263.
+		token := jwt.NewWithClaims(jwt.SigningMethodRS512, jwt.MapClaims{
+			"expires":      expires,
+			"iat":          iat,
+			"permissions":  nil,
+			"requestor_id": requestorID,
+			"token_id":     tokenID,
+			"token_type":   "user+robot",
+			"user_id":      "wirepod",
+		})
+		payload, err := json.Marshal(token.Claims)
+		if err != nil {
+			panic(err)
+		}
+		signing, err := token.SigningString()
+		if err != nil {
+			panic(err)
+		}
+		if c.requestor == "robot_alphabet" {
+			segment := signing[strings.Index(signing, ".")+1:]
+			if !strings.Contains(segment, "-") || !strings.Contains(segment, "_") {
+				panic("the alphabet requestor no longer forces base64url groups 62 and 63")
+			}
+		}
+
+		emit(sec, fmt.Sprintf(
+			"kind=payload case=%s requestor=%s token_id=%s zone=%s y=%d mo=%d d=%d h=%d mi=%d s=%d ns=%d iat_unix=%d iat_off=%d iat=%s",
+			c.name, c.requestor, c.tokenID, c.zone, c.y, int(c.mo), c.d, c.h, c.mi, c.s,
+			c.ns, in.Unix(), inOff, iat),
+			string(payload))
+		emit(sec, "kind=expires case="+c.name, expires)
+		emit(sec, "kind=exp_unix case="+c.name, fmt.Sprint(out.Unix()))
+		emit(sec, "kind=exp_off case="+c.name, fmt.Sprint(outOff))
+		emit(sec, "kind=signing_input case="+c.name, signing)
+	}
+}
+
+// -------------------------------------------------------------------- jws
+
+// jwsKeyBits is the RSA key size token.go:266 asks rsa.GenerateKey for.
+const jwsKeyBits = 1024
+
+// jwsSection records what SignedString's assembly looks like from the outside,
+// and nothing else: no key, no signature and no byte of either is written.
+//
+// Two throwaway keys are generated on every run and thrown away when it ends,
+// which is what the Go server does per request. Everything emitted below is an
+// invariant over their output: a count, a length, or a yes-or-no, so the
+// recording is stable across runs even though the keys are not.
+func jwsSection() {
+	const sec = "jws"
+
+	// The same fixed placeholder claim set the claims section uses. Nothing
+	// here is a live value.
+	claims := jwt.MapClaims{
+		"expires":      "2026-10-09T12:34:56.789012345-07:00",
+		"iat":          "2026-09-09T12:34:56.789012345-07:00",
+		"permissions":  nil,
+		"requestor_id": "vic:00000000",
+		"token_id":     "00000000-0000-4000-8000-000000000000",
+		"token_type":   "user+robot",
+		"user_id":      "wirepod",
+	}
+
+	// A refusal is fatal rather than a smaller key: the length of the
+	// signature slot is the thing being recorded, so a different size would
+	// record a different contract under the same name. Go 1.24 is the first
+	// release to impose a floor at all and it sits at exactly 1024.
+	generate := func() *rsa.PrivateKey {
+		key, err := rsa.GenerateKey(rand.Reader, jwsKeyBits)
+		if err != nil {
+			panic(fmt.Sprintf(
+				"this toolchain refuses the %d-bit key token.go:266 generates: %v",
+				jwsKeyBits, err))
+		}
+		return key
+	}
+
+	sign := func(key *rsa.PrivateKey) (string, string) {
+		token := jwt.NewWithClaims(jwt.SigningMethodRS512, claims)
+		input, err := token.SigningString()
+		if err != nil {
+			panic(err)
+		}
+		signed, err := token.SignedString(key)
+		if err != nil {
+			panic(err)
+		}
+		return input, signed
+	}
+
+	first := generate()
+	second := generate()
+	signingInput, firstToken := sign(first)
+	_, firstAgain := sign(first)
+	_, secondToken := sign(second)
+
+	parts := strings.Split(firstToken, ".")
+	if len(parts) != 3 {
+		panic("SignedString did not produce three segments")
+	}
+	signature, err := jwt.DecodeSegment(parts[2])
+	if err != nil {
+		panic(err)
+	}
+
+	header := jwt.NewWithClaims(jwt.SigningMethodRS512, claims).Header
+	alg, ok := header["alg"].(string)
+	if !ok {
+		panic("the library's header carries no string alg")
+	}
+	typ, ok := header["typ"].(string)
+	if !ok {
+		panic("the library's header carries no string typ")
+	}
+
+	emit(sec, "kind=const name=key_bits", fmt.Sprint(jwsKeyBits))
+	emit(sec, "kind=segments", fmt.Sprint(len(parts)))
+	emit(sec, "kind=sig_chars", fmt.Sprint(len(parts[2])))
+	emit(sec, "kind=sig_bytes", fmt.Sprint(len(signature)))
+	// token.go:65-83 in the library: SignedString is SigningString plus a dot
+	// plus the encoded signature, so the first two segments are untouched.
+	emit(sec, "kind=head_is_signing_input",
+		fmt.Sprint(parts[0]+"."+parts[1] == signingInput))
+	// EncodeSegment is RawURLEncoding, so no '+', '/' or '=' can reach a token
+	// however the signature bytes fall.
+	emit(sec, "kind=sig_has_no_standard_alphabet",
+		fmt.Sprint(!strings.ContainsAny(parts[2], "+/=")))
+	emit(sec, "kind=alg_header", alg)
+	emit(sec, "kind=typ_header", typ)
+	// PKCS#1 v1.5 is deterministic: the same key over the same signing input
+	// produces the same signature, so a per-request key is the only thing that
+	// makes two tokens issued in the same second differ.
+	emit(sec, "kind=same_key_twice_differs", fmt.Sprint(firstToken != firstAgain))
+	emit(sec, "kind=fresh_key_each_call_differs", fmt.Sprint(firstToken != secondToken))
+}
+
+// ------------------------------------------------------------- robot_parse
+
+// The closed verdict vocabulary. No error text from encoding/json, time or
+// encoding/base64 is recorded, because those move with the Go toolchain and
+// nothing on the wire carries them; the robot only ever branches on whether the
+// parse failed. The three that are library or vector-cloud literals are exactly
+// that, verbatim: the two alg strings are parser.go:141 and :144 in
+// github.com/golang-jwt/jwt v3.2.2, the bearer string is parser.go:108, and
+// "missing claim " is vector-cloud/internal/token/identity/token.go:167-169.
+const (
+	verdictOK           = "ok"
+	verdictSegments     = "segments"
+	verdictBase64       = "base64 error"
+	verdictHeaderJSON   = "header not json"
+	verdictClaimsObject = "claims not object"
+	verdictTimeParse    = "time parse error"
+	verdictBearer       = "tokenstring should not contain 'bearer '"
+	verdictAlgUnavail   = "signing method (alg) is unavailable."
+	verdictAlgUnspec    = "signing method (alg) is unspecified."
+)
+
+// robotMissingClaim is identity/token.go:167-169.
+func robotMissingClaim(claim string) string {
+	return fmt.Sprintf("missing claim %s", claim)
+}
+
+// robotParseUnverified is
+// github.com/golang-jwt/jwt@v3.2.2/parser.go:96-149, the call
+// vector-cloud/internal/token/identity/identity.go:158 makes, with each error
+// replaced by its verdict and the parsed claims handed back on success.
+//
+// The signature segment is never decoded, which is the whole reason the Rust
+// port can put random bytes there.
+func robotParseUnverified(tokenString string) (jwt.MapClaims, string) {
+	parts := strings.Split(tokenString, ".")
+	if len(parts) != 3 {
+		return nil, verdictSegments
+	}
+	headerBytes, err := jwt.DecodeSegment(parts[0])
+	if err != nil {
+		if strings.HasPrefix(strings.ToLower(tokenString), "bearer ") {
+			return nil, verdictBearer
+		}
+		return nil, verdictBase64
+	}
+	header := map[string]interface{}{}
+	if err := json.Unmarshal(headerBytes, &header); err != nil {
+		return nil, verdictHeaderJSON
+	}
+	claimBytes, err := jwt.DecodeSegment(parts[1])
+	if err != nil {
+		return nil, verdictBase64
+	}
+	claims := jwt.MapClaims{}
+	if err := json.NewDecoder(bytes.NewBuffer(claimBytes)).Decode(&claims); err != nil {
+		return nil, verdictClaimsObject
+	}
+	if method, ok := header["alg"].(string); ok {
+		if jwt.GetSigningMethod(method) == nil {
+			return nil, verdictAlgUnavail
+		}
+	} else {
+		return nil, verdictAlgUnspec
+	}
+	return claims, verdictOK
+}
+
+// robotFromJwtToken is
+// vector-cloud/internal/token/identity/token.go:96-161, in the order that file
+// reads the claims, reduced to a verdict. The nil-token and non-MapClaims arms
+// (:98 and :160) cannot be reached from identity.go:158, which always passes a
+// parsed token holding a jwt.MapClaims, so they have no case here.
+func robotFromJwtToken(claims jwt.MapClaims) string {
+	// :103, :108, :113 and :118, in that order. Every one is a type assertion
+	// to string, so a claim that is present but is a JSON number, object or
+	// null fails the same way a missing one does.
+	for _, name := range []string{"token_id", "token_type", "user_id", "requestor_id"} {
+		if _, ok := claims[name].(string); !ok {
+			return robotMissingClaim(name)
+		}
+	}
+	// :123-129.
+	issuedAt, ok := claims["iat"].(string)
+	if !ok {
+		return robotMissingClaim("iat")
+	}
+	if _, err := time.ParseInLocation(time.RFC3339, issuedAt, time.UTC); err != nil {
+		return verdictTimeParse
+	}
+	// :131-138.
+	expiresAt, ok := claims["expires"].(string)
+	if !ok {
+		return robotMissingClaim("expires")
+	}
+	if _, err := time.ParseInLocation(time.RFC3339, expiresAt, time.UTC); err != nil {
+		return verdictTimeParse
+	}
+	// :153-156: permissions is optional and only a JSON object populates it.
+	// Null, an array and a string all leave the field nil and none is an error.
+	_, _ = claims["permissions"].(map[string]interface{})
+	return verdictOK
+}
+
+// robotParse is identity.go:157-167 (parseToken): ParseUnverified, then
+// FromJwtToken.
+func robotParse(tokenString string) string {
+	claims, verdict := robotParseUnverified(tokenString)
+	if verdict != verdictOK {
+		return verdict
+	}
+	return robotFromJwtToken(claims)
+}
+
+// robotCase is one crafted token and the name it is recorded under.
+type robotCase struct {
+	name  string
+	token string
+}
+
+// robotParseSection runs the robot's own token reader over a matrix of crafted
+// tokens and records what it answers.
+//
+// Every token here is built in this program out of the fixed placeholder claim
+// set with jwt.EncodeSegment. None is signed, and the signature segment is a
+// fixed placeholder string, because nothing in the robot's path looks at it.
+//
+// The module substitution is on record as a const. The robot builds against
+// github.com/dgrijalva/jwt-go v3.2.1-0.20180719211823-0b96aaa70776+incompatible
+// (vector-cloud/go.mod:8), which is not in this machine's module cache; the Go
+// server and this program use github.com/golang-jwt/jwt v3.2.2+incompatible
+// (chipper/go.mod:16), the maintained fork of the same code at the same major
+// version.
+func robotParseSection() {
+	const sec = "robot_parse"
+
+	emit(sec, "kind=const name=required_claims",
+		"token_id,token_type,user_id,requestor_id,iat,expires")
+	emit(sec, "kind=const name=optional_claims", "permissions")
+	emit(sec, "kind=const name=parse_layout", time.RFC3339)
+	emit(sec, "kind=const name=jwt_module", "github.com/golang-jwt/jwt v3.2.2+incompatible")
+	emit(sec, "kind=const name=robot_module",
+		"github.com/dgrijalva/jwt-go v3.2.1-0.20180719211823-0b96aaa70776+incompatible")
+
+	base := func() map[string]interface{} {
+		return map[string]interface{}{
+			"expires":      "2026-10-09T12:34:56.789012345-07:00",
+			"iat":          "2026-09-09T12:34:56.789012345-07:00",
+			"permissions":  nil,
+			"requestor_id": "vic:00000000",
+			"token_id":     "00000000-0000-4000-8000-000000000000",
+			"token_type":   "user+robot",
+			"user_id":      "wirepod",
+		}
+	}
+	payloadOf := func(mutate func(map[string]interface{})) []byte {
+		claims := base()
+		if mutate != nil {
+			mutate(claims)
+		}
+		out, err := json.Marshal(claims)
+		if err != nil {
+			panic(err)
+		}
+		return out
+	}
+	headerOf := func(text string) []byte { return []byte(text) }
+
+	defaultHeader, err := json.Marshal(
+		jwt.NewWithClaims(jwt.SigningMethodRS512, jwt.MapClaims{}).Header)
+	if err != nil {
+		panic(err)
+	}
+	headerSeg := jwt.EncodeSegment(defaultHeader)
+	validPayload := payloadOf(nil)
+	payloadSeg := jwt.EncodeSegment(validPayload)
+	// Never a real signature: the robot's path never decodes this segment.
+	signatureSeg := jwt.EncodeSegment([]byte("probe-placeholder"))
+
+	assemble := func(header, payload []byte) string {
+		return jwt.EncodeSegment(header) + "." + jwt.EncodeSegment(payload) + "." + signatureSeg
+	}
+	withClaims := func(mutate func(map[string]interface{})) string {
+		return assemble(defaultHeader, payloadOf(mutate))
+	}
+	withIAT := func(value string) string {
+		return withClaims(func(c map[string]interface{}) { c["iat"] = value })
+	}
+	drop := func(name string) string {
+		return withClaims(func(c map[string]interface{}) { delete(c, name) })
+	}
+
+	// The payload encoded by the padding encoder rather than the raw one.
+	// base64.RawURLEncoding rejects '=' outright, which is the difference the
+	// case is here for; if the fixed payload's length happened to be a multiple
+	// of three the padded encoder would emit no '=' at all, so a single
+	// insignificant trailing space is added in that case. It is the same JSON
+	// value either way, and the decode never gets far enough to see it.
+	padded := validPayload
+	if len(padded)%3 == 0 {
+		padded = append(append([]byte{}, padded...), ' ')
+	}
+	paddedSeg := base64.URLEncoding.EncodeToString(padded)
+	if !strings.Contains(paddedSeg, "=") {
+		panic("the padded payload segment carries no padding, so the case proves nothing")
+	}
+
+	valid := assemble(defaultHeader, validPayload)
+
+	cases := []robotCase{
+		{"valid", valid},
+
+		// token.go:103, :108, :113, :118, :123 and :131: a claim that is not a
+		// string, missing being one way to not be one.
+		{"missing_token_id", drop("token_id")},
+		{"missing_token_type", drop("token_type")},
+		{"missing_user_id", drop("user_id")},
+		{"missing_requestor_id", drop("requestor_id")},
+		{"missing_iat", drop("iat")},
+		{"missing_expires", drop("expires")},
+		// A JSON number decodes to a float64, which fails the same assertion,
+		// so the robot cannot read a numeric-timestamp token however standard
+		// that spelling is elsewhere.
+		{"numeric_iat", withClaims(func(c map[string]interface{}) { c["iat"] = 1789000496 })},
+		{"numeric_expires", withClaims(func(c map[string]interface{}) { c["expires"] = 1791592496 })},
+
+		// token.go:153-156: only an object populates permissions, and nothing
+		// else there is an error.
+		{"null_permissions", withClaims(func(c map[string]interface{}) { c["permissions"] = nil })},
+		{"object_permissions", withClaims(func(c map[string]interface{}) {
+			c["permissions"] = map[string]interface{}{"robot": true}
+		})},
+		{"array_permissions", withClaims(func(c map[string]interface{}) {
+			c["permissions"] = []interface{}{"robot"}
+		})},
+
+		// An empty user_id parses. What it costs is one level up: identity.go
+		// :141-145 deletes the token file at boot when it sees one.
+		{"empty_user_id", withClaims(func(c map[string]interface{}) { c["user_id"] = "" })},
+
+		// time.RFC3339 as ParseInLocation reads it (token.go:126, :135): a
+		// fraction of any length is accepted even though the layout has none,
+		// and both zero-offset spellings are accepted.
+		{"iat_fraction_0", withIAT("2026-09-09T12:34:56-07:00")},
+		{"iat_fraction_3", withIAT("2026-09-09T12:34:56.789-07:00")},
+		{"iat_fraction_9", withIAT("2026-09-09T12:34:56.789012345-07:00")},
+		{"iat_zulu", withIAT("2026-09-09T12:34:56Z")},
+		{"iat_plus_zero_offset", withIAT("2026-09-09T12:34:56+00:00")},
+		// The two shapes it refuses: no zone at all, and a space where the
+		// layout's literal 'T' is.
+		{"iat_no_zone", withIAT("2026-09-09T12:34:56")},
+		{"iat_space_separator", withIAT("2026-09-09 12:34:56Z")},
+
+		// parser.go:97-100, strings.Split on '.' and then an exact count.
+		{"two_segments", headerSeg + "." + payloadSeg},
+		{"four_segments", valid + ".extra"},
+
+		// The signature segment is never decoded, which is what makes this
+		// port's random-bytes slot safe.
+		{"empty_signature_segment", headerSeg + "." + payloadSeg + "."},
+		{"garbage_signature_segment", headerSeg + "." + payloadSeg + "." + "this-is-not-a-signature"},
+
+		// parser.go:120-122 through DecodeSegment, which is RawURLEncoding and
+		// refuses padding outright.
+		{"padded_payload_segment", headerSeg + "." + paddedSeg + "." + signatureSeg},
+
+		// parser.go:139-145, the alg lookup.
+		{"unknown_alg", assemble(headerOf(`{"alg":"RS999","typ":"JWT"}`), validPayload)},
+		{"missing_alg", assemble(headerOf(`{"typ":"JWT"}`), validPayload)},
+		{"alg_none", assemble(headerOf(`{"alg":"none","typ":"JWT"}`), validPayload)},
+
+		// parser.go:112-114 and :123-136: the header has to unmarshal into a
+		// map and the payload has to decode into one.
+		{"header_not_json", assemble(headerOf(`[1,2]`), validPayload)},
+		{"payload_not_object", headerSeg + "." + jwt.EncodeSegment([]byte(`[1,2]`)) + "." + signatureSeg},
+
+		// parser.go:107-108, the one error message that names the caller's
+		// mistake rather than the library's.
+		{"bearer_prefix", "bearer " + valid},
+	}
+
+	for _, c := range cases {
+		emit(sec, "kind=verdict name="+c.name, robotParse(c.token))
+	}
+}
+
+// ------------------------------------------------------------------- uuid
+
+// uuidSection records github.com/google/uuid's transform from sixteen drawn
+// bytes to the string token.go:180-183 puts in the token_id claim.
+//
+// uuid.New (version4.go:13) is Must(NewRandom()), NewRandom reads sixteen bytes
+// from crypto/rand and hands them to NewRandomFromReader (version4.go:47),
+// which is what runs below over a fixed draw instead. The draw decides
+// everything except the version nibble and the two variant bits, which that
+// function overwrites.
+func uuidSection() {
+	const sec = "uuid"
+
+	emit(sec, "kind=const name=module", "github.com/google/uuid v1.6.0")
+	emit(sec, "kind=const name=layout", "8-4-4-4-12")
+
+	for _, draw := range []string{
+		// Every bit clear and every bit set, so both overwrites are visible.
+		"00000000000000000000000000000000",
+		"ffffffffffffffffffffffffffffffff",
+		// An ascending pattern, which shows that nothing outside bytes 6 and 8
+		// is touched and that the hex is lowercase.
+		"00112233445566778899aabbccddeeff",
+		// A descending nibble pattern. Byte 8 is 0x87, whose top two bits are
+		// already 10, so the variant overwrite is a no-op here while the
+		// version overwrite still turns byte 6 from 0x69 into 0x49: the two
+		// are separate rules and this draw exercises one of them alone.
+		"0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+		// Alternating words, so a transform that read the bytes in the wrong
+		// order would show up.
+		"ffffffff00000000ffffffff00000000",
+	} {
+		raw, err := hex.DecodeString(draw)
+		if err != nil {
+			panic(err)
+		}
+		id, err := uuid.NewRandomFromReader(bytes.NewReader(raw))
+		if err != nil {
+			panic(err)
+		}
+		emit(sec, "kind=uuid draw="+draw, id.String())
+	}
 }
