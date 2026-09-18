@@ -1,12 +1,14 @@
 //! `PullJdocs` across the seam, against a real gRPC server on loopback.
 //!
-//! This is the call the jdocs pinger makes to pull `vic.RobotSettings` off a
-//! robot that has just reconnected (`sdkapp/jdocspinger.go:112-126`), and the
-//! one `/api-sdk/get_sdk_settings` makes to read the same document
-//! (`sdkapp/server.go:200-223`). Both Go sites index `NamedJdocs[0]` with no
-//! length check and dereference the `Doc` pointer inside it without a nil
-//! check, so the two answers a robot is free to send that Go cannot survive are
-//! tested here as errors rather than as panics.
+//! Go makes this call at three sites: the jdocs pinger pulling
+//! `vic.RobotSettings` off a robot that has just reconnected
+//! (`sdkapp/jdocspinger.go:112-126`), `/api-sdk/get_sdk_settings` reading the
+//! same document (`sdkapp/server.go:200-223`), and `/api-sdk/get_robot_stats`
+//! reading `vic.RobotLifetimeStats` (`sdkapp/server.go:591-600`). All three
+//! index `NamedJdocs[0]` with no length check and dereference the `Doc`
+//! pointer inside it without a nil check, so the answers a robot is free to
+//! send that Go cannot survive are tested here as errors rather than as
+//! panics.
 //!
 //! Everything runs through `test_support::spawn_fake_robot` and its TLS twin,
 //! both of which bind `127.0.0.1:0`, so no firewall prompt appears and nothing
@@ -36,6 +38,10 @@ const GUID: &str = "<guid>";
 /// small enough to read, with a `<` in it so that nothing here can quietly
 /// start depending on the escaping the store does on the way to disk.
 const JSON_DOC: &str = "{\"locale\":\"en-US\",\"master_volume\":\"<unset>\"}";
+
+/// The body the lifetime-stats document carries, so the third Go caller's
+/// answer is distinguishable from the settings one. Invented, not a robot's.
+const STATS_DOC: &str = "{\"Alive.seconds\":1000,\"BStat.ReactedToTriggerWord\":2}";
 
 /// The target every test dials, with the fake's address in it.
 fn target(authority: &str) -> ConnTarget {
@@ -110,8 +116,8 @@ async fn the_request_carries_exactly_the_kinds_asked_for() {
         let (conn, handle) = connect().await;
         handle.set_jdocs(vec![scripted(JdocKind::RobotSettings)]);
 
-        // What both Go call sites send (`sdkapp/jdocspinger.go:112-114`,
-        // `sdkapp/server.go:200-202`).
+        // What the pinger and `/api-sdk/get_sdk_settings` send
+        // (`sdkapp/jdocspinger.go:112-114`, `sdkapp/server.go:200-202`).
         conn.pull_jdocs(&[JdocKind::RobotSettings])
             .await
             .expect("the scripted answer");
@@ -141,6 +147,94 @@ async fn the_request_carries_exactly_the_kinds_asked_for() {
             Some(RecordedJdocsRequest {
                 jdoc_types: vec![3, 1, 2]
             })
+        );
+
+        handle.shutdown().await;
+    })
+    .await
+    .expect("within the ceiling");
+}
+
+/// The third Go caller is `/api-sdk/get_robot_stats`, which asks for
+/// `[ROBOT_LIFETIME_STATS]` and writes `GetNamedJdocs()[0].Doc.JsonDoc`
+/// straight to the body with no checks at all (`sdkapp/server.go:591-600`).
+/// That kind travels as wire number 1, and its answer converts like any other.
+#[tokio::test]
+async fn a_lifetime_stats_request_carries_wire_number_one_and_converts() {
+    tokio::time::timeout(CEILING, async {
+        let (conn, handle) = connect().await;
+        handle.set_jdocs(vec![ScriptedJdoc {
+            jdoc_type: JdocKind::RobotLifetimeStats.as_wire(),
+            doc: Some(ScriptedDoc {
+                doc_version: 7,
+                fmt_version: 1,
+                client_metadata: String::new(),
+                json_doc: STATS_DOC.to_owned(),
+            }),
+        }]);
+
+        let jdocs = conn
+            .pull_jdocs(&[JdocKind::RobotLifetimeStats])
+            .await
+            .expect("the scripted answer");
+
+        assert_eq!(
+            handle.last_jdocs_request(),
+            Some(RecordedJdocsRequest {
+                jdoc_types: vec![1]
+            })
+        );
+        assert_eq!(jdocs.len(), 1);
+        assert_eq!(jdocs[0].kind, JdocKind::RobotLifetimeStats);
+        // The one field `get_robot_stats` reads, and the rest of the document
+        // beside it, since the conversion is the same one either caller gets.
+        assert_eq!(jdocs[0].doc.json_doc, STATS_DOC);
+        assert_eq!(
+            jdocs[0].doc,
+            Jdoc {
+                doc_version: 7,
+                fmt_version: 1,
+                client_metadata: String::new(),
+                json_doc: STATS_DOC.to_owned(),
+                ..Jdoc::default()
+            }
+        );
+
+        handle.shutdown().await;
+    })
+    .await
+    .expect("within the ceiling");
+}
+
+/// The absent-document refusal covers every entry, not only the one Go reads.
+/// All three Go sites stop at `NamedJdocs[0]` (`sdkapp/jdocspinger.go:122-125`,
+/// `sdkapp/server.go:207-222`, `sdkapp/server.go:600`), so a good first entry
+/// followed by one with no document is usable there and is refused whole here.
+/// No Go request asks for more than one kind, so nothing in the port can reach
+/// the difference; it is pinned so that changing it later is a decision.
+#[tokio::test]
+async fn an_absent_document_in_a_later_entry_refuses_the_whole_pull() {
+    tokio::time::timeout(CEILING, async {
+        let (conn, handle) = connect().await;
+        handle.set_jdocs(vec![
+            scripted(JdocKind::RobotSettings),
+            ScriptedJdoc {
+                jdoc_type: JdocKind::AccountSettings.as_wire(),
+                doc: None,
+            },
+        ]);
+
+        let err = conn
+            .pull_jdocs(&[JdocKind::RobotSettings, JdocKind::AccountSettings])
+            .await
+            .expect_err("a later entry with no document is not usable");
+
+        // The kind named is the faulty entry's, not the good first one's.
+        assert_eq!(err.code, StatusCode::Internal);
+        assert_eq!(
+            err.to_string(),
+            "rpc error: code = Internal desc = robot answered PullJdocs with an absent \
+             AccountSettings document"
         );
 
         handle.shutdown().await;
@@ -275,15 +369,16 @@ async fn a_pull_round_trips_through_the_tls_channel() {
         assert_eq!(jdocs.len(), 1);
         assert_eq!(jdocs[0].doc, expected_doc());
         // The credential rides on this call as it does on every other, over the
-        // transport the robot actually uses.
-        assert_eq!(
-            handle
-                .calls()
-                .first()
-                .and_then(|call| call.authorization.clone())
-                .as_deref(),
-            Some("Bearer <guid>")
-        );
+        // transport the robot actually uses. Filtered by method rather than
+        // read off the first call, so the assertion stays about `PullJdocs`
+        // however many other RPCs the dial comes to make.
+        let credentials: Vec<Option<String>> = handle
+            .calls()
+            .into_iter()
+            .filter(|call| call.method == "PullJdocs")
+            .map(|call| call.authorization)
+            .collect();
+        assert_eq!(credentials, vec![Some("Bearer <guid>".to_owned())]);
 
         handle.shutdown().await;
     })

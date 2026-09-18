@@ -201,8 +201,11 @@ impl RobotConn for TonicRobotConn {
 
     async fn pull_jdocs(&self, kinds: &[JdocKind]) -> Result<Vec<NamedJdoc>, ConnError> {
         // The one field the request has, in the order the caller asked for. Go
-        // builds the same slice with the one element every call site uses
-        // (`sdkapp/jdocspinger.go:112-114`, `sdkapp/server.go:200-202`).
+        // builds the same slice with one element at each of its three call
+        // sites: `ROBOT_SETTINGS` for the pinger and
+        // `/api-sdk/get_sdk_settings` (`sdkapp/jdocspinger.go:112-114`,
+        // `sdkapp/server.go:200-202`), and `ROBOT_LIFETIME_STATS` for
+        // `/api-sdk/get_robot_stats` (`sdkapp/server.go:592-595`).
         let response = self
             .client()
             .pull_jdocs(pb::PullJdocsRequest {
@@ -220,10 +223,11 @@ impl RobotConn for TonicRobotConn {
 
 /// The failure an answer carrying no documents produces.
 ///
-/// Go indexes `NamedJdocs[0]` with no length check at both call sites
-/// (`sdkapp/jdocspinger.go:122`, `sdkapp/server.go:207`), so this answer takes
-/// the Go process down with an index-out-of-range panic. It becomes an error
-/// the caller logs instead, which is the reserved deviation 31 family.
+/// Go indexes `NamedJdocs[0]` with no length check at all three call sites
+/// (`sdkapp/jdocspinger.go:122`, `sdkapp/server.go:207`,
+/// `sdkapp/server.go:600`), so this answer takes the Go process down with an
+/// index-out-of-range panic. It becomes an error the caller logs instead, and
+/// it is the empty `NamedJdocs` panic reserved deviation 31 already names.
 ///
 /// The code is `Internal`, which is grpc-go's code for a peer that broke the
 /// contract, and the whole rendering therefore reads
@@ -240,11 +244,20 @@ fn empty_answer() -> ConnError {
 ///
 /// prost renders `NamedJdoc.doc` as an `Option`, because proto3 cannot tell an
 /// absent message from a default one. Go's field access on the nil pointer
-/// (`sdkapp/jdocspinger.go:122`) is a nil dereference, so this is the second
-/// panic the same deviation turns into a log line. The alternative, treating an
-/// absent document as the default one, is worse than either: `AddJdoc` would
-/// replace a good `vic.RobotSettings` with an empty one and the file would lose
-/// the robot's settings without anything being logged at all.
+/// (`sdkapp/jdocspinger.go:122`) is a nil dereference, and refusing it here
+/// follows the same policy as reserved deviation 31, which does not itself
+/// list this panic. The alternative, treating an absent document as the
+/// default one, is worse than either: `AddJdoc` would replace a good
+/// `vic.RobotSettings` with an empty one and the file would lose the robot's
+/// settings without anything being logged at all.
+///
+/// The check runs on every entry, and collecting into a `Result` means one bad
+/// entry refuses the whole answer. That covers entries Go never reads: all
+/// three Go sites stop at index zero (`sdkapp/jdocspinger.go:122-125`,
+/// `sdkapp/server.go:207-222`, `sdkapp/server.go:600`), so an absent document
+/// in a second or later entry leaves the good first one in use there and is a
+/// [`ConnError`] here. No Go request asks for more than one kind, so nothing
+/// in the port can reach the difference. Recorded as a candidate deviation.
 fn named_jdoc(named: pb::NamedJdoc) -> Result<NamedJdoc, ConnError> {
     let kind = JdocKind::from_wire(named.jdoc_type);
     let doc = named.doc.ok_or_else(|| {

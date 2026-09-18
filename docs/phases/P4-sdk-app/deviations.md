@@ -1004,6 +1004,22 @@ one is C23's decision rather than this file's.
   make the document accumulate and change a file the Go server reads back. One consequence is
   itself unreachable for the same reason: a type error part way through an existing `json_doc`
   leaves the manager empty here where Go keeps whatever decoded before the fault (`6d72056`).
+- `pull_jdocs` refuses an answer whose `NamedJdocs` list is empty with an `Internal` error reading
+  `robot answered PullJdocs with no documents`, where all three Go call sites index `NamedJdocs[0]`
+  unchecked and panic. This is the empty `NamedJdocs` panic reserved 31 already names, recorded
+  here because it now has code and a test behind it (`6a05378`).
+- `pull_jdocs` refuses an entry whose `doc` field is absent with an `Internal` error naming the
+  kind, where Go dereferences the nil pointer. Reserved 31 does not name this panic, so it is a
+  candidate of its own rather than part of that entry. Treating the absent document as the default
+  one instead would let `AddJdoc` replace a good `vic.RobotSettings` on disk with an empty one and
+  log nothing (`6a05378`).
+- That absent-document refusal covers every entry, including the ones Go never reads. All three Go
+  sites stop at index zero, so a good first document followed by an entry carrying none is usable
+  there and refuses the whole pull here. No Go request asks for more than one kind, so nothing in
+  the port can reach the difference (`6a05378`).
+- A `JdocType` number outside the four reads as `ROBOT_SETTINGS`, which is proto3's zero value and
+  what an absent field decodes to. None of the three Go call sites reads `jdoc_type` at all, so no
+  caller can observe the choice (`6a05378`).
 
 ---
 

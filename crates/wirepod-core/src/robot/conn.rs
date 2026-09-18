@@ -353,11 +353,13 @@ pub enum FrameOutcome {
 /// (`servers/token/token.go:125`) and it never crosses this seam.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum JdocKind {
-    /// `ROBOT_SETTINGS = 0`, the only one wire-pod ever asks for
-    /// (`sdkapp/jdocspinger.go:113`, `sdkapp/server.go:201`).
+    /// `ROBOT_SETTINGS = 0`, which is what the jdocs pinger and
+    /// `/api-sdk/get_sdk_settings` ask for (`sdkapp/jdocspinger.go:113`,
+    /// `sdkapp/server.go:201`).
     #[default]
     RobotSettings,
-    /// `ROBOT_LIFETIME_STATS = 1`.
+    /// `ROBOT_LIFETIME_STATS = 1`, which is what `/api-sdk/get_robot_stats`
+    /// asks for (`sdkapp/server.go:594`).
     RobotLifetimeStats,
     /// `ACCOUNT_SETTINGS = 2`.
     AccountSettings,
@@ -380,11 +382,12 @@ impl JdocKind {
     ///
     /// Anything outside the four becomes [`JdocKind::RobotSettings`], which is
     /// proto3's zero value and therefore what an absent field decodes to. The
-    /// choice is unobservable rather than merely unlikely: both Go call sites
-    /// read `NamedJdocs[0].Doc` and never look at the type beside it
-    /// (`sdkapp/jdocspinger.go:122-125`, `sdkapp/server.go:218-222`), and the
-    /// robot is a grpc-go server generated from this same enum, so it only ever
-    /// sends the four. Recorded as a candidate deviation.
+    /// choice is unobservable rather than merely unlikely: all three Go call
+    /// sites read `NamedJdocs[0].Doc` and never look at the type beside it
+    /// (`sdkapp/jdocspinger.go:122-125`, `sdkapp/server.go:218-222`,
+    /// `sdkapp/server.go:600`), and the robot is a grpc-go server generated
+    /// from this same enum, so it only ever sends the four. Recorded as a
+    /// candidate deviation.
     pub const fn from_wire(kind: i32) -> Self {
         match kind {
             1 => Self::RobotLifetimeStats,
@@ -480,19 +483,39 @@ pub trait RobotConn: CameraControl + Send + Sync {
 
     /// Pulls the named documents off the robot.
     ///
-    /// Both Go callers ask for exactly `[ROBOT_SETTINGS]` and then index
-    /// `NamedJdocs[0]` with no length check and no nil check on the `Doc`
-    /// pointer inside it (`sdkapp/jdocspinger.go:112-125`,
-    /// `sdkapp/server.go:200-222`), so an answer carrying no documents, or one
-    /// whose document is absent, panics the Go process. Neither can happen
-    /// here: the returned list is never empty, every entry carries a document,
-    /// and an answer that fails either test is a [`ConnError`] the caller
-    /// logs. That is the reserved deviation 31 family, which turns a Go panic
-    /// into a log line.
+    /// Go has three callers. The jdocs pinger and `/api-sdk/get_sdk_settings`
+    /// ask for `[ROBOT_SETTINGS]` (`sdkapp/jdocspinger.go:112-114`,
+    /// `sdkapp/server.go:200-202`), and `/api-sdk/get_robot_stats` asks for
+    /// `[ROBOT_LIFETIME_STATS]` (`sdkapp/server.go:591-600`). All three then
+    /// index `NamedJdocs[0]` with no length check and no nil check on the
+    /// `Doc` pointer inside it (`sdkapp/jdocspinger.go:122-125`,
+    /// `sdkapp/server.go:207-222`, `sdkapp/server.go:600`), so an answer
+    /// carrying no documents, or one whose first document is absent, panics
+    /// the Go process. Neither can happen here: the returned list is never
+    /// empty, every entry carries a document, and an answer that fails either
+    /// test is a [`ConnError`] the caller logs. The empty-list arm is the
+    /// empty `NamedJdocs` panic reserved deviation 31 already names; the
+    /// absent-document arm follows the same policy of turning a Go panic into
+    /// a log line, and reserved deviation 31 does not itself list that one.
+    ///
+    /// The absent-document refusal covers every entry, including the ones Go
+    /// never reads. All three Go sites stop at index zero, so a good first
+    /// document followed by an entry carrying none is usable there and refuses
+    /// the whole pull here. No Go request asks for more than one kind, so
+    /// nothing in the port can reach the difference; refusing whole is the
+    /// shape a caller can act on, and it is recorded as a candidate deviation.
     ///
     /// Nothing else is filtered. The order is the robot's, and an entry the
     /// caller did not ask for is passed through rather than dropped, because
     /// Go's unchecked index takes whatever the robot put first too.
+    ///
+    /// There is no deadline on this call, because the deadline belongs to the
+    /// caller. All three Go sites run undeadlined: the pinger builds its own
+    /// `context.Background()` (`sdkapp/jdocspinger.go:80`) and the two HTTP
+    /// handlers pass `robotObj.Ctx` (`sdkapp/server.go:59`), which is another
+    /// `context.Background()` (`sdkapp/robot.go:329`). The handler commits are
+    /// what decide whether to wrap this call in a timeout of its own or to
+    /// rely on axum dropping the handler future, which deviation 19 describes.
     async fn pull_jdocs(&self, kinds: &[JdocKind]) -> Result<Vec<NamedJdoc>, ConnError>;
 }
 
