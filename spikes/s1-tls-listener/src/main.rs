@@ -35,8 +35,14 @@ struct Args {
     selftest: bool,
 }
 
-const DEFAULT_CERT: &str = "C:/Users/voan2/Documents/GitHub/wire-pod/chipper/epod/ep.crt";
-const DEFAULT_KEY: &str = "C:/Users/voan2/Documents/GitHub/wire-pod/chipper/epod/ep.key";
+// The escape-pod key pair the listener serves. `assets/epod/` is the copy
+// vendored byte-identically from the Go repo, so the spike no longer depends
+// on a Go checkout sitting at one particular absolute path. The manifest dir
+// is two levels under the workspace root, and resolving from it rather than
+// from the working directory is what `xtask::repo_root` does for the same
+// reason. `--cert` and `--key` still override both.
+const DEFAULT_CERT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/epod/ep.crt");
+const DEFAULT_KEY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/epod/ep.key");
 
 fn parse_args() -> (Args, String, String) {
     let mut a = Args {

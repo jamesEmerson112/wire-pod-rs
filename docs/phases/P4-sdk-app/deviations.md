@@ -5,7 +5,8 @@ Every deliberate difference between the early Rust SDK-app slice and the Go serv
 behavioural differences are documented, never silent, so anything not listed here is a bug.
 
 Each entry gives what differs, why, and where it is tested or otherwise recorded. Go citations
-are `path:line` under `C:/Users/voan2/Documents/GitHub/wire-pod/chipper/`.
+are `path:line` under `E:/GitHub/wire-pod/chipper/`, which is where the Go checkout lives
+since the repositories moved to `E:/GitHub`.
 
 ---
 
@@ -845,6 +846,104 @@ reports the provider's signature schemes.
 
 ---
 
+## Reserved for Phase 1
+
+Phase 1 reserves the numbers 25 through 42, one per decision taken when the phase was planned.
+The full text of each belongs to commit C23, which writes the entries proper; until then this
+list is what keeps a source file that cites one of these numbers pointing at something. A line
+marked **landed** describes code that is already on `master`, and the rest describe work the
+phase has not reached yet.
+
+25. mDNS registration goes through `mdns-sd` rather than Go's `kercre123/zeroconf`. The record on
+    the wire is identical and only the library's own timing differs.
+26. The TLS listener advertises ALPN `h2` and `http/1.1`, and the plain ports accept h2c by prior
+    knowledge, with `--alpn off` as the escape hatch back to Go's no-ALPN behaviour.
+27. Every port is bound on `0.0.0.0` and on `[::]` without taking `socket2`, and a failure to bind
+    the IPv6 socket is a warning rather than a fatal error.
+28. The JWT signature slot carries CSPRNG bytes rather than an RS512 signature, because the robot
+    parses the token with `ParseUnverified` and no peer ever receives a key.
+29. **Landed.** Every state file is written as a temporary file beside the target followed by a
+    rename over it, inside `spawn_blocking`, where Go truncates in place with `os.WriteFile`.
+    There is one write per mutation, where two of Go's four jdocs callers write the same bytes
+    twice. The mode is a parameter because Go's writers of one file disagree about it, and like
+    Go's `O_CREATE` open it is applied only when the file is created, carried over from an
+    existing file on Unix and ignored on Windows. Since C8 the writes to one file are serialised
+    by a write gate that marshals inside the turn, so the file can never hold a state the
+    in-memory list has already moved past. Implemented in
+    `crates/wirepod-core/src/persist.rs` and tested by `crates/wirepod-core/tests/persist.rs` and
+    `crates/wirepod-core/tests/jdocs.rs`.
+30. An empty `ReadDocsReq.items` no longer indexes element zero, which is one of the licensed Go
+    bug fixes.
+31. Four other Go panics become log lines: the peer address with no colon, an empty `NamedJdocs`,
+    a nil peer, and a nil PEM block.
+32. `ReadSessionCerts` logs instead of panicking on a file that is not PEM, and keeps Go's early
+    return.
+33. The restart path works in IP mode, where Go panics on a nil `serverTwo` and silently does not
+    restart.
+34. A rebind failure is returned to the HTTP caller that asked for the restart, while a bad key
+    pair at boot still exits 1 the way Go does.
+35. There is no vestigial hugh listener, and `DDL_RPC_PORT` is read only where `ReadConfig` reads
+    it.
+36. No session certificate is downloaded from the DDL servers, which are dead, and the same log
+    line is written in its place.
+37. `ping_jdocs` drops the connection it opened where Go leaks it.
+38. **Landed.** Path resolution is explicit and logged, and Go's Linux `os.Getwd` heuristic at
+    `vars.go:205-227` is not reproduced, so the caller passes the home directory to `sdk_ini_dir`
+    on every platform. Implemented in `crates/wirepod-core/src/paths.rs`, which cites this number
+    in its module doc, on `AssetDir` for the reporting half and on `sdk_ini_dir` for the
+    heuristic, and tested by `crates/wirepod-core/tests/paths.rs`.
+39. The startup path writes log lines Go does not, and writes no plaintext GUID line where Go
+    does.
+40. `/session-certs/<esn>` is served, and the other twenty-one `/api/*` arms stay stubs for this
+    phase.
+41. `use_ip` answers an error, because certificate generation is P7 work.
+42. **Landed.** The two `float32` configuration fields are rendered by `go_json_f32`, which
+    reproduces Go's `float32Encoder` by formatting at 32 bits, so a `top_p` of `0.7` stays `0.7`
+    where a 64-bit rendering of the same value would be `0.699999988079071`. Implemented in
+    `crates/wirepod-core/src/gofmt.rs` and used by `crates/wirepod-core/src/config.rs`; pinned by
+    the `f32json` section of the Go probe recording through
+    `crates/wirepod-core/tests/gofmt_f32.rs` and `crates/wirepod-core/tests/config.rs`.
+
+---
+
+## Candidates recorded in commit bodies, to be written by C23
+
+These are differences the Phase 1 commits found, described in the commit body that introduced
+them and deliberately left unnumbered there, because numbering is C23's work. They are collected
+here so that none is lost between now and then. Nothing in this list has a number yet, and adding
+one is C23's decision rather than this file's.
+
+- The base64 decoder is stricter than Go's `StdEncoding`, which skips carriage returns and
+  newlines anywhere in its input and discards non-zero bits left in a padded final quantum. The
+  direction is one way: a non-canonical spelling Go verifies becomes a `Decode` error here, never
+  the reverse, and Go's own encoder never writes such a spelling (`668129b`, `7fcb764`).
+- Go's `LogTrayChan`, the sixty-four slot non-blocking channel, is not ported; it belongs with the
+  P9 tray shell (`fb3e5ff`).
+- Go's `DEBUG_LOGGING` stdout mirror is not ported, because a tracing formatting layer already
+  does that job and is the layer that takes the filter (`fb3e5ff`).
+- The log component is derived from the tracing target where Go passes it explicitly at every call
+  site, and that same target is what decides whether a line reaches the ring at all (`fb3e5ff`).
+- Unknown and fork-only keys in `apiConfig.json` survive a read-modify-write where Go's decoder
+  drops them; position is not preserved, so a surviving key is written last within its own object
+  and the survivors are sorted (`db1ca2a`, `613a90c`).
+- `gohome_percent` is an `i32` where Go's `int` is 64 bits, so a value between the two ranges is a
+  type error here and an accepted value there (`db1ca2a`, `613a90c`).
+- The two configuration failure arms' second log line carries this module's text rather than Go's
+  `*fs.PathError` or `*json.UnmarshalTypeError` (`db1ca2a`, `613a90c`).
+- Configuration write errors are returned rather than discarded, where Go ignores `os.WriteFile`'s
+  result at all three sites (`db1ca2a`, `613a90c`).
+- `Env` reads each variable once instead of at each point of use, where Go calls
+  `os.Getenv("STT_SERVICE")` four times, so a variable changed mid-boot cannot be seen two ways
+  here (`db1ca2a`, `613a90c`).
+- A JSON string carrying a lone-surrogate escape is a type error that leaves the field alone,
+  where Go's `unquoteBytes` substitutes U+FFFD and stores the result (`613a90c`).
+- In the jdocs store, an empty list is written as the literal `null`, which is what Go's nil slice
+  marshals to and what every state Go can reach produces; unknown keys survive at both levels
+  where Go's decoder drops them, re-serialised in sorted order; and every write hands back its
+  error where Go discards it (`aa524a7`, `b93db05`).
+
+---
+
 ## Additional recorded differences
 
 **`run_event_stream` selects on the cancellation token.** Go's loop relies on the receiver
@@ -912,7 +1011,12 @@ never pushes to.
    can never be byte-compared against Go, because Go decodes and re-encodes every frame with its
    own quantisation tables.
 6. Jdoc hash parity against the live Go-produced hash for ESN 00303f28. That is P1's critical
-   gate, and the slice touches no hashing at all.
+   gate, and the slice touches no hashing at all. Settled on 2026-09-17: the `#[ignore]`d live
+   gate `the_live_stored_hash_verifies_against_the_live_guid` in
+   `crates/wirepod-core/tests/token_hash.rs` passes on this machine, so the ported hashing
+   reproduces the value the Go server wrote and the robot's existing association survives a
+   cutover. The gate asserts and prints nothing about what it loads, and it skips when `APPDATA`
+   is unset or either file is missing.
 7. The Ubuntu CI run for the Rust slice itself. The first green run on both runners was on the
    C3 commit (`5f7170f`, run 34305117622, 2026-09-09), after the toolchain file gained `rustfmt`
    and `clippy`. The core and vector commits after it stay unverified on Linux until they are

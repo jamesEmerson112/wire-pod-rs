@@ -21,6 +21,11 @@ the same LAN, this repo built (`cargo build -p s1-tls-listener`).
    `netsh advfirewall firewall add rule name="s1-spike" dir=in action=allow program="<repo>\target\debug\s1-tls-listener.exe" enable=yes`
 4. From the repo root, in the elevated shell:
    `cargo run -p s1-tls-listener -- --tls-port 443 --http-port 80 --mdns --alpn on`
+   The spike serves the vendored escape-pod key pair at `assets/epod/ep.crt` and
+   `assets/epod/ep.key` by default, resolved from the spike's own manifest
+   directory rather than from the working directory, so no Go checkout has to be
+   present. Pass `--cert <path>` and `--key <path>` to serve a different pair,
+   for example the Go server's own `chipper/epod/` copy.
 5. Watch the output for ~2 minutes. PASS criteria:
    - `[mdns] registered escapepod ...` at startup
    - `[hit] /ok` or `[hit] /ok:80` lines from the robot's IP (step-1 plain

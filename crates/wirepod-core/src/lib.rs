@@ -16,9 +16,11 @@
 //! makes that a compile error rather than a review comment.
 //!
 //! [`state::AppState`] is the one shared value the handlers read, replacing
-//! Go's roughly thirty unsynchronized globals. The rest of the crate's
-//! eventual responsibility (config, the logger ring, and the jdocs and
-//! session-cert stores) arrives in later commits.
+//! Go's roughly thirty unsynchronized globals. The config layer, the logger
+//! ring and the jdocs store have landed since; the rest of the crate's eventual
+//! responsibility (the session-cert, sdk-ini, server-config and transient token
+//! stores, the JWT, and the `AppState` growth that carries them) arrives in
+//! later commits.
 #![deny(clippy::await_holding_lock)]
 
 pub mod clock;

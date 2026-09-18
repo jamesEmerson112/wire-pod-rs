@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-A Rust port of the Go wire-pod `chipper` server, the voice backend for Anki/DDL Vector robots. The goal is a drop-in replacement: the same gRPC, HTTP, and mDNS contract and the same on-disk state files under `%APPDATA%\wire-pod`, so cutover and rollback are "stop one server, start the other". The Go server in the sibling checkout `../wire-pod` (`C:/Users/voan2/Documents/GitHub/wire-pod`) remains the production server until cutover and is the reference implementation for every porting decision. Its `CLAUDE.md` documents the Go architecture and package layout, and `chipper/pkg/` is the source to read when porting a behavior.
+A Rust port of the Go wire-pod `chipper` server, the voice backend for Anki/DDL Vector robots. The goal is a drop-in replacement: the same gRPC, HTTP, and mDNS contract and the same on-disk state files under `%APPDATA%\wire-pod`, so cutover and rollback are "stop one server, start the other". The Go server in the sibling checkout `../wire-pod` (`E:/GitHub/wire-pod`) remains the production server until cutover and is the reference implementation for every porting decision. Its `CLAUDE.md` documents the Go architecture and package layout, and `chipper/pkg/` is the source to read when porting a behavior.
 
-Current state: the port runs in eleven phases, P0 through P10. P0 is done, and most crates under `crates/` are still one-line stubs whose `//!` doc comment states the crate's intended responsibility. Three are not. `wirepod-core`, `wirepod-vector` and `wirepod-server` carry the P4 SDK-app early slice, which was built ahead of P1 through P3 because it ports work done in the Go fork in September and because it is unit-testable without a robot. `wirepod-core` holds robot identity, the injectable timing constants, Go-compatible number formatting, the robot seam expressed in domain types, the per-robot camera and event-stream ownership state machines, the never-pruned camera meters, the connection registry, the bot-info and pinger stores, and `AppState`. `wirepod-vector` holds the tonic implementation of that seam: the client that attaches the SDK bearer metadata to every RPC, the stream adapters, the `tonic::Status` conversion, the TLS connector that dials port 443 with the SDK's accept-all certificate verifier, the connection factory, and a loopback fake robot for tests in both plaintext and TLS. `wirepod-server` holds the axum router and the slice's handlers under `/api-sdk/*`, `/api/*` and `/ok`, and binds no ports.
+Current state: the port runs in eleven phases, P0 through P10. P0 is done, P1 is in progress with commits C0 through C8 landed, and most crates under `crates/` are still one-line stubs whose `//!` doc comment states the crate's intended responsibility. Three are not. `wirepod-core`, `wirepod-vector` and `wirepod-server` carry the P4 SDK-app early slice, which was built ahead of P1 through P3 because it ports work done in the Go fork in September and because it is unit-testable without a robot. `wirepod-core` holds robot identity, the injectable timing constants, Go-compatible number formatting, the robot seam expressed in domain types, the per-robot camera and event-stream ownership state machines, the never-pruned camera meters, the connection registry, the bot-info and pinger stores, and `AppState`, and P1 has added path resolution and atomic persistence, the wall clock and Go's time formatting, token hashing and GUID generation, the logger ring and its tracing layer, the config layer with Go's byte layout and Go's decoder, and the jdocs store. `wirepod-vector` holds the tonic implementation of that seam: the client that attaches the SDK bearer metadata to every RPC, the stream adapters, the `tonic::Status` conversion, the TLS connector that dials port 443 with the SDK's accept-all certificate verifier, the connection factory, and a loopback fake robot for tests in both plaintext and TLS. `wirepod-server` holds the axum router and the slice's handlers under `/api-sdk/*`, `/api/*` and `/ok`, and binds no ports.
 
 The approved plan (phase list, crate map, locked architecture decisions, parity test strategy, risks, magic constants) is copied into the repository at `docs/plan.md`, which is the authoritative copy and carries an Amendments section for decisions that supersede it. Per-phase detail lives in `docs/phases/`, one document per phase, indexed by `docs/phases/README.md`; the `P4-sdk-app/` subfolder holds the SDK-app parity specification. Read those before starting phase work; this file only summarizes them. The plan files under `~/.claude/plans/` are working notes, not the record.
 
@@ -23,10 +23,21 @@ cargo build
 cargo test
 ```
 
-The two extra clippy runs are what lint the test binaries and the feature-gated `test_support` modules, which the plain clippy command never compiles. `Cargo.lock` is a gate as well: the SDK-app slice resolves no new packages, so the set of `(name, version, checksum)` triples must not move, and this must print nothing.
+The two extra clippy runs are what lint the test binaries and the feature-gated `test_support` modules, which the plain clippy command never compiles.
+
+P1 runs two Linux cross-checks locally on top of those six, because CI's Ubuntu runner is only reached on a push and a `cfg(unix)` arm that does not compile would otherwise be found there rather than here:
 
 ```bash
-diff <(git show origin/master:Cargo.lock | grep -E '^(name|version|checksum) = ') <(grep -E '^(name|version|checksum) = ' Cargo.lock)
+cargo check -p wirepod-core --all-targets --target x86_64-unknown-linux-gnu
+cargo clippy -p wirepod-core --all-targets --all-features --target x86_64-unknown-linux-gnu -- -D warnings
+```
+
+They need `rustup target add x86_64-unknown-linux-gnu` once, and they name `wirepod-core` rather than the workspace because the TLS stack pulls in `ring`, which needs a Linux C cross-compiler this machine does not have.
+
+`Cargo.lock` is a gate as well: the set of `(name, version, checksum)` triples must not move within a phase. The ref to compare against is the phase's own baseline commit, the one commit in the phase that is allowed to declare dependencies, rather than a moving `origin/master`; P1's baseline is `c091db4`. This must print nothing.
+
+```bash
+diff <(git show c091db4:Cargo.lock | grep -E '^(name|version|checksum) = ') <(grep -E '^(name|version|checksum) = ' Cargo.lock)
 ```
 
 Default workspace members are `crates/*` and `xtask`. Spikes are only built when named (`-p s1-tls-listener`) or with `--workspace`.
@@ -44,6 +55,15 @@ Asset sync. `.cargo/config.toml` defines the `xtask` alias, so the short form wo
 cargo xtask sync-assets --from ../wire-pod --check   # report drift, exit 1 if any
 cargo xtask sync-assets --from ../wire-pod           # copy the drifted files, report the count, rewrite assets/MANIFEST.sha256
 ```
+
+Go probe recordings. The two probe programs under `docs/phases/P1-robot-connect-auth/` print what Go does, and their recorded stdout is what the Rust parity tests read through `include_str!`.
+
+```bash
+cargo xtask go-probe --check   # rerun both probes and verify their expected.txt, naming the first differing line
+cargo xtask go-probe           # rerun both probes and rewrite their expected.txt
+```
+
+Both forms need `go` on PATH and resolve each probe's own `go.mod` from the Go module cache; with no Go toolchain they print a SKIP line and exit 0, because the recordings are committed artifacts.
 
 Real-robot trial of the SDK-app slice. It serves the router on `127.0.0.1:18080` and dials the robot over TLS while the production Go server keeps running on 8080; `RUNBOOK-SDK-TRIAL.md` is the procedure and `scripts/sdk-trial-diff.sh` compares the two servers request by request:
 
@@ -73,7 +93,7 @@ Each crate replaces specific Go packages under `wire-pod/chipper/pkg/`. Keep thi
 | Crate | Replaces in Go | Responsibility |
 |---|---|---|
 | `wirepod-proto` | protos from `digital-dream-labs/api` and `fforchino/vector-go-sdk` | Generated tonic/prost code, compiled from the vendored protos at build time. |
-| `wirepod-core` | `vars`, `logger` | `AppState` replacing the ~30 unsynchronized globals, config, path resolution, logger ring, jdocs/botinfo/session-cert stores, pinger. The P4 slice landed identity, timings, `gofmt`, the robot seam, ownership, meters, the registry, the bot-info and pinger stores and `AppState`; config, paths, the logger ring and the jdocs and session-cert stores are still to come. |
+| `wirepod-core` | `vars`, `logger` | `AppState` replacing the ~30 unsynchronized globals, config, path resolution, logger ring, jdocs/botinfo/session-cert stores, pinger. The P4 slice landed identity, timings, `gofmt`, the robot seam, ownership, meters, the registry, the bot-info and pinger stores and `AppState`; P1 has since landed paths and persist, the wall clock and time formatting, token hashing, the logger ring and its tracing layer, the config layer with Go's byte layout and decoder, and the jdocs store. What remains for the crate is the session-cert, sdk-ini, server-config and transient token stores, the JWT, and the `AppState` growth that carries them. |
 | `wirepod-audio` | `wirepod/speechrequest` | Ogg/Opus decode, high-pass + gain filter chain, VAD, `SpeechRequest`. Pure and golden-tested. |
 | `wirepod-stt` | `wirepod/stt/<engine>` | `SttEngine` trait with engines behind Cargo features (`stt-vosk` default), selected at runtime. Replaces Go's six per-engine binaries. |
 | `wirepod-intent` | intent matching in `wirepod/ttr`, `wirepod/localization` | Keyphrase matching over the 14 locale files, parameter extraction, words2num. Pure and table-tested. |
@@ -95,7 +115,7 @@ These hold across the three crates that carry P4 slice code, and code added to t
 - `wirepod-core` and `wirepod-server` carry `#![deny(clippy::await_holding_lock)]`. The ownership state machines guard their state with `std::sync::Mutex` and no guard ever crosses an `.await`, which is what lets them be driven from plain `#[test]` functions with no runtime. The one lock that is genuinely held across an await, the per-robot camera op lock, is a `tokio::sync::Mutex`.
 - Every duration the slice waits on is a field of `Timings`, injected through `AppState` rather than read from a constant at the call site. Tests never use tokio's `start_paused`: they run zero settles and millisecond deadlines against the real clock, with a generous ceiling around the assertion so a regression times out instead of hanging.
 - Go's `gen` counter is `Generation` here and its fields are named `generation`, because `gen` is a reserved keyword in edition 2024.
-- Every deliberate difference from the Go server is numbered in `docs/phases/P4-sdk-app/deviations.md`, currently 1 through 23, with what differs, why, and where it is tested. A difference that is not listed there is a bug, not a decision.
+- Every deliberate difference from the Go server is numbered in `docs/phases/P4-sdk-app/deviations.md`, currently 1 through 24, with 25 to 42 reserved for P1 and listed there, with what differs, why, and where it is tested. A difference that is not listed there is a bug, not a decision.
 
 ### wirepod-proto
 
@@ -129,6 +149,7 @@ Line endings are policy, recorded as D11 and as deviation 5 in `docs/phases/P4-s
 ## Live environment
 
 - The Go `chipper.exe`, supervised by the WirePod tray app, is the production server on this machine. It listens on 80, 443, 8080, and 8084 with state in `%APPDATA%\wire-pod`. Anything that binds those ports needs it stopped first. `RUNBOOK-S1.md` has the exact stop, firewall, and restart procedure. Side-by-side testing uses alternate ports (the plan names 18080, 1880, and 1443).
+- The repositories live under `E:/GitHub`: this port at `E:/GitHub/wire-pod-rs` and the Go server at `E:/GitHub/wire-pod`. `C:` is the system drive and holds no checkout.
 - The robot is ESN 00303f28 at 192.168.8.203 in escape-pod mode. Health probe for the Go server: `curl http://localhost:8080/api/is_running` returns `true`.
 - `.env` (gitignored) holds an `OPENAI_API` key for local experiments. The server itself reads its key from the existing `apiConfig.json` in the data dir, not from `.env`.
 
