@@ -19,6 +19,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::esn::Esn;
+use crate::store::jdocs::Jdoc;
 
 /// A gRPC status code, in grpc-go's spelling.
 ///
@@ -340,6 +341,77 @@ pub enum FrameOutcome {
     Closed,
 }
 
+/// Which of the robot's stored documents a [`NamedJdoc`] carries.
+///
+/// The four values and their numbers are the SDK's `JdocType`
+/// (`crates/wirepod-proto/proto/vector/settings.proto:38-43`). They are
+/// repeated here rather than re-exported because this crate cannot see the
+/// generated code; `wirepod-vector` is where the two are pinned to each other.
+///
+/// `vic.AppTokens`, the fifth document wire-pod stores, is absent because the
+/// enum has no value for it: the token server writes it directly
+/// (`servers/token/token.go:125`) and it never crosses this seam.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum JdocKind {
+    /// `ROBOT_SETTINGS = 0`, the only one wire-pod ever asks for
+    /// (`sdkapp/jdocspinger.go:113`, `sdkapp/server.go:201`).
+    #[default]
+    RobotSettings,
+    /// `ROBOT_LIFETIME_STATS = 1`.
+    RobotLifetimeStats,
+    /// `ACCOUNT_SETTINGS = 2`.
+    AccountSettings,
+    /// `USER_ENTITLEMENTS = 3`.
+    UserEntitlements,
+}
+
+impl JdocKind {
+    /// The numeric `JdocType` value, which is what the wire carries.
+    pub const fn as_wire(self) -> i32 {
+        match self {
+            Self::RobotSettings => 0,
+            Self::RobotLifetimeStats => 1,
+            Self::AccountSettings => 2,
+            Self::UserEntitlements => 3,
+        }
+    }
+
+    /// The kind a numeric `JdocType` value names.
+    ///
+    /// Anything outside the four becomes [`JdocKind::RobotSettings`], which is
+    /// proto3's zero value and therefore what an absent field decodes to. The
+    /// choice is unobservable rather than merely unlikely: both Go call sites
+    /// read `NamedJdocs[0].Doc` and never look at the type beside it
+    /// (`sdkapp/jdocspinger.go:122-125`, `sdkapp/server.go:218-222`), and the
+    /// robot is a grpc-go server generated from this same enum, so it only ever
+    /// sends the four. Recorded as a candidate deviation.
+    pub const fn from_wire(kind: i32) -> Self {
+        match kind {
+            1 => Self::RobotLifetimeStats,
+            2 => Self::AccountSettings,
+            3 => Self::UserEntitlements,
+            _ => Self::RobotSettings,
+        }
+    }
+}
+
+/// One stored document as the robot hands it over.
+///
+/// The document is [`crate::store::jdocs::Jdoc`], the struct the jdocs file
+/// holds, rather than a second type beside it. Go does the same thing by hand:
+/// `pingJdocs` copies the wire message field for field into a `vars.AJdoc` and
+/// writes that (`sdkapp/jdocspinger.go:121-126`), as does
+/// `/api-sdk/get_sdk_settings` with three of the four
+/// (`sdkapp/server.go:219-223`). A second near-identical struct here would only
+/// invite the two to drift.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NamedJdoc {
+    /// Which document this is.
+    pub kind: JdocKind,
+    /// The document.
+    pub doc: Jdoc,
+}
+
 /// The reading half of an open event stream.
 ///
 /// `Ok(None)` means the robot closed the stream cleanly. This is the Rust
@@ -405,6 +477,23 @@ pub trait RobotConn: CameraControl + Send + Sync {
 
     /// Opens the camera feed.
     async fn open_camera_feed(&self) -> Result<Box<dyn FrameStream>, ConnError>;
+
+    /// Pulls the named documents off the robot.
+    ///
+    /// Both Go callers ask for exactly `[ROBOT_SETTINGS]` and then index
+    /// `NamedJdocs[0]` with no length check and no nil check on the `Doc`
+    /// pointer inside it (`sdkapp/jdocspinger.go:112-125`,
+    /// `sdkapp/server.go:200-222`), so an answer carrying no documents, or one
+    /// whose document is absent, panics the Go process. Neither can happen
+    /// here: the returned list is never empty, every entry carries a document,
+    /// and an answer that fails either test is a [`ConnError`] the caller
+    /// logs. That is the reserved deviation 31 family, which turns a Go panic
+    /// into a log line.
+    ///
+    /// Nothing else is filtered. The order is the robot's, and an entry the
+    /// caller did not ask for is passed through rather than dropped, because
+    /// Go's unchecked index takes whatever the robot put first too.
+    async fn pull_jdocs(&self, kinds: &[JdocKind]) -> Result<Vec<NamedJdoc>, ConnError>;
 }
 
 /// Dials robots. The registry holds one of these and nothing else knows how a

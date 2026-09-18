@@ -12,8 +12,8 @@ use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 use tonic::{Request, Status};
 use wirepod_core::{
-    BatteryLevel, BatteryReading, CameraControl, ConnError, EventReceiver, FrameStream,
-    ProtocolResult, ProtocolVerdict, RobotConn, StatusCode,
+    BatteryLevel, BatteryReading, CameraControl, ConnError, EventReceiver, FrameStream, Jdoc,
+    JdocKind, NamedJdoc, ProtocolResult, ProtocolVerdict, RobotConn, StatusCode,
 };
 use wirepod_proto::anki::vector::external_interface as pb;
 use wirepod_proto::anki::vector::external_interface::external_interface_client::ExternalInterfaceClient;
@@ -198,6 +198,77 @@ impl RobotConn for TonicRobotConn {
             .into_inner();
         Ok(Box::new(TonicFrameStream::new(stream)))
     }
+
+    async fn pull_jdocs(&self, kinds: &[JdocKind]) -> Result<Vec<NamedJdoc>, ConnError> {
+        // The one field the request has, in the order the caller asked for. Go
+        // builds the same slice with the one element every call site uses
+        // (`sdkapp/jdocspinger.go:112-114`, `sdkapp/server.go:200-202`).
+        let response = self
+            .client()
+            .pull_jdocs(pb::PullJdocsRequest {
+                jdoc_types: kinds.iter().map(|kind| kind.as_wire()).collect(),
+            })
+            .await
+            .map_err(|status| status_error(&status))?
+            .into_inner();
+        if response.named_jdocs.is_empty() {
+            return Err(empty_answer());
+        }
+        response.named_jdocs.into_iter().map(named_jdoc).collect()
+    }
+}
+
+/// The failure an answer carrying no documents produces.
+///
+/// Go indexes `NamedJdocs[0]` with no length check at both call sites
+/// (`sdkapp/jdocspinger.go:122`, `sdkapp/server.go:207`), so this answer takes
+/// the Go process down with an index-out-of-range panic. It becomes an error
+/// the caller logs instead, which is the reserved deviation 31 family.
+///
+/// The code is `Internal`, which is grpc-go's code for a peer that broke the
+/// contract, and the whole rendering therefore reads
+/// `rpc error: code = Internal desc = robot answered PullJdocs with no
+/// documents` like any other robot failure.
+fn empty_answer() -> ConnError {
+    ConnError::new(
+        StatusCode::Internal,
+        "robot answered PullJdocs with no documents",
+    )
+}
+
+/// One wire entry as a domain [`NamedJdoc`].
+///
+/// prost renders `NamedJdoc.doc` as an `Option`, because proto3 cannot tell an
+/// absent message from a default one. Go's field access on the nil pointer
+/// (`sdkapp/jdocspinger.go:122`) is a nil dereference, so this is the second
+/// panic the same deviation turns into a log line. The alternative, treating an
+/// absent document as the default one, is worse than either: `AddJdoc` would
+/// replace a good `vic.RobotSettings` with an empty one and the file would lose
+/// the robot's settings without anything being logged at all.
+fn named_jdoc(named: pb::NamedJdoc) -> Result<NamedJdoc, ConnError> {
+    let kind = JdocKind::from_wire(named.jdoc_type);
+    let doc = named.doc.ok_or_else(|| {
+        ConnError::new(
+            StatusCode::Internal,
+            format!("robot answered PullJdocs with an absent {kind:?} document"),
+        )
+    })?;
+    // The four fields `pingJdocs` copies, in its order
+    // (`sdkapp/jdocspinger.go:122-125`). Both of the document's integers are
+    // `uint64` on the wire (`settings.proto:107-112`) and `u64` in the store,
+    // so no conversion is involved. `extra` stays empty: it exists to carry
+    // keys read off the on-disk file that the struct does not name, and the
+    // wire has no such keys.
+    Ok(NamedJdoc {
+        kind,
+        doc: Jdoc {
+            doc_version: doc.doc_version,
+            fmt_version: doc.fmt_version,
+            client_metadata: doc.client_metadata,
+            json_doc: doc.json_doc,
+            ..Jdoc::default()
+        },
+    })
 }
 
 #[cfg(test)]
@@ -214,5 +285,95 @@ mod tests {
     fn a_guid_that_cannot_be_a_header_value_is_rejected() {
         let err = BearerAuth::new("bad\nvalue").expect_err("newline is not header-safe");
         assert_eq!(err.code, StatusCode::Unauthenticated);
+    }
+
+    /// The numbers `JdocKind` carries are the generated enum's, pinned here
+    /// because this is the only crate that can see both. `wirepod-core` writes
+    /// them out by hand so that it can stay free of `wirepod-proto`.
+    #[test]
+    fn every_kind_is_the_generated_jdoc_type() {
+        let pairs = [
+            (JdocKind::RobotSettings, pb::JdocType::RobotSettings),
+            (
+                JdocKind::RobotLifetimeStats,
+                pb::JdocType::RobotLifetimeStats,
+            ),
+            (JdocKind::AccountSettings, pb::JdocType::AccountSettings),
+            (JdocKind::UserEntitlements, pb::JdocType::UserEntitlements),
+        ];
+        // The enum has four values and no more, so a fifth added upstream
+        // fails here rather than passing silently through `from_wire`.
+        assert_eq!(pairs.len(), 4);
+        for (kind, generated) in pairs {
+            assert_eq!(kind.as_wire(), generated as i32);
+            assert_eq!(JdocKind::from_wire(generated as i32), kind);
+            assert_eq!(
+                pb::JdocType::try_from(kind.as_wire()),
+                Ok(generated),
+                "{kind:?} is not a value the generated enum names"
+            );
+        }
+    }
+
+    /// A number the enum does not name reads as the proto3 zero value, which
+    /// is what an absent field decodes to and what no caller can observe.
+    #[test]
+    fn a_number_outside_the_enum_reads_as_robot_settings() {
+        assert!(pb::JdocType::try_from(4).is_err());
+        assert_eq!(JdocKind::from_wire(4), JdocKind::RobotSettings);
+        assert_eq!(JdocKind::from_wire(-1), JdocKind::RobotSettings);
+    }
+
+    #[test]
+    fn an_answer_with_no_documents_is_internal() {
+        let err = empty_answer();
+        assert_eq!(err.code, StatusCode::Internal);
+        assert_eq!(
+            err.to_string(),
+            "rpc error: code = Internal desc = robot answered PullJdocs with no documents"
+        );
+    }
+
+    #[test]
+    fn an_entry_with_no_document_names_the_kind_it_was_tagged_with() {
+        let err = named_jdoc(pb::NamedJdoc {
+            jdoc_type: pb::JdocType::AccountSettings as i32,
+            doc: None,
+        })
+        .expect_err("an absent document is not usable");
+        assert_eq!(err.code, StatusCode::Internal);
+        assert_eq!(
+            err.to_string(),
+            "rpc error: code = Internal desc = robot answered PullJdocs with an absent \
+             AccountSettings document"
+        );
+    }
+
+    #[test]
+    fn an_entry_carries_its_four_fields_across() {
+        let named = named_jdoc(pb::NamedJdoc {
+            jdoc_type: pb::JdocType::RobotSettings as i32,
+            doc: Some(pb::Jdoc {
+                doc_version: 41,
+                fmt_version: 1,
+                client_metadata: "wirepod-new-token".to_owned(),
+                json_doc: "{\"clock_24_hour\":true}".to_owned(),
+            }),
+        })
+        .expect("a complete document");
+        assert_eq!(named.kind, JdocKind::RobotSettings);
+        // Compared whole rather than field by field, so a field that stops
+        // being copied fails here. `extra` is empty because the store's
+        // round-trip map carries keys read off the file and the wire has none.
+        assert_eq!(
+            named.doc,
+            Jdoc {
+                doc_version: 41,
+                fmt_version: 1,
+                client_metadata: "wirepod-new-token".to_owned(),
+                json_doc: "{\"clock_24_hour\":true}".to_owned(),
+                ..Jdoc::default()
+            }
+        );
     }
 }

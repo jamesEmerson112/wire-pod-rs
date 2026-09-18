@@ -27,8 +27,8 @@ use tokio::sync::{Notify, mpsc, oneshot};
 
 use crate::robot::conn::{
     BatteryReading, CameraControl, CameraFrame, ConnError, ConnTarget, EventItem, EventReceiver,
-    FrameOutcome, FrameSink, FrameStream, ProtocolResult, ProtocolVerdict, RobotConn,
-    RobotConnFactory, StatusCode, StimEvent,
+    FrameOutcome, FrameSink, FrameStream, JdocKind, NamedJdoc, ProtocolResult, ProtocolVerdict,
+    RobotConn, RobotConnFactory, StatusCode, StimEvent,
 };
 use crate::robot::meter::CamMeter;
 
@@ -55,6 +55,8 @@ pub enum RobotCall {
     OpenCameraFeed,
     /// `enable_image_streaming`, with the flag.
     EnableImageStreaming(bool),
+    /// `pull_jdocs`, with the kinds it asked for.
+    PullJdocs(Vec<JdocKind>),
 }
 
 type ReceiverResult = Result<Box<dyn EventReceiver>, ConnError>;
@@ -69,6 +71,7 @@ struct FakeRobotState {
     event_stream_gate: Option<Gate>,
     camera_feeds: Vec<FrameStreamResult>,
     camera_result: Result<(), ConnError>,
+    jdocs: Result<Vec<NamedJdoc>, ConnError>,
     calls: Vec<RobotCall>,
 }
 
@@ -104,6 +107,10 @@ impl FakeRobotConn {
                 event_stream_gate: None,
                 camera_feeds: Vec::new(),
                 camera_result: Ok(()),
+                // One `vic.RobotSettings` document, because the seam never
+                // answers with an empty list and the pinger indexes the first
+                // entry (`sdkapp/jdocspinger.go:122-125`).
+                jdocs: Ok(vec![NamedJdoc::default()]),
                 calls: Vec::new(),
             }),
         }
@@ -152,6 +159,18 @@ impl FakeRobotConn {
     #[must_use]
     pub fn with_camera_result(self, result: Result<(), ConnError>) -> Self {
         self.lock().camera_result = result;
+        self
+    }
+
+    /// Scripts what `pull_jdocs` answers.
+    ///
+    /// The list is handed back whole on every call, because the seam's contract
+    /// is that an answer is either usable or an error; the two unusable shapes
+    /// the wire allows are rejected in `wirepod-vector` and never reach a
+    /// [`NamedJdoc`].
+    #[must_use]
+    pub fn with_jdocs(self, jdocs: Result<Vec<NamedJdoc>, ConnError>) -> Self {
+        self.lock().jdocs = jdocs;
         self
     }
 
@@ -279,6 +298,12 @@ impl RobotConn for FakeRobotConn {
             return Err(Self::exhausted("camera feed"));
         }
         Ok(state.camera_feeds.remove(0)?)
+    }
+
+    async fn pull_jdocs(&self, kinds: &[JdocKind]) -> Result<Vec<NamedJdoc>, ConnError> {
+        let mut state = self.lock();
+        state.calls.push(RobotCall::PullJdocs(kinds.to_vec()));
+        state.jdocs.clone()
     }
 }
 

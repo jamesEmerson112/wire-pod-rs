@@ -16,10 +16,10 @@ use tokio_util::sync::CancellationToken;
 use wirepod_core::robot::events::{EVENT_CONNECTION_ID, EVENT_WHITELIST, run_event_stream};
 use wirepod_core::robot::session::{EventOwner, StimSample};
 use wirepod_core::{
-    ConnTarget, Esn, EventItem, EventLoopExit, ProtocolResult, RobotConn, RobotConnFactory,
-    StatusCode, StimEvent,
+    ConnTarget, Esn, EventItem, EventLoopExit, JdocKind, ProtocolResult, RobotConn,
+    RobotConnFactory, StatusCode, StimEvent,
 };
-use wirepod_vector::test_support::{FakeRobotHandle, spawn_fake_robot};
+use wirepod_vector::test_support::{FakeRobotHandle, ScriptedDoc, ScriptedJdoc, spawn_fake_robot};
 use wirepod_vector::{TonicConnFactory, plaintext_builder};
 
 /// The ceiling every test runs under.
@@ -66,6 +66,15 @@ async fn every_call_carries_the_bearer_credential() {
             .await
             .expect("event stream");
         conn.open_camera_feed().await.expect("camera feed");
+        // The answer has to be usable, because the seam refuses the empty one
+        // the fake defaults to. `jdocs.rs` is where that refusal is tested.
+        handle.set_jdocs(vec![ScriptedJdoc {
+            jdoc_type: JdocKind::RobotSettings.as_wire(),
+            doc: Some(ScriptedDoc::default()),
+        }]);
+        conn.pull_jdocs(&[JdocKind::RobotSettings])
+            .await
+            .expect("pull jdocs");
 
         let calls = handle.calls();
         assert_eq!(
@@ -76,6 +85,7 @@ async fn every_call_carries_the_bearer_credential() {
                 "EnableImageStreaming",
                 "EventStream",
                 "CameraFeed",
+                "PullJdocs",
             ]
         );
         for call in &calls {
