@@ -16,7 +16,7 @@
 //! `\u0026`, `\u003c` and `\u003e`. A log line is the freest text in the
 //! server, since it carries whatever a robot, an operator or an LLM put in it,
 //! so those three characters are ordinary rather than exotic. The handler C20
-//! brings therefore writes [`crate::config::go_marshal`]'s bytes followed by a
+//! brings therefore writes [`crate::gojson::go_marshal`]'s bytes followed by a
 //! `\n`, and never `serde_json::to_vec`, which escapes none of the three. The
 //! two plain-text handlers beside it write their buffers verbatim
 //! (`webserver.go:281`, `:286`) and have no encoder to match.
@@ -209,7 +209,7 @@ impl LogLevel {
 /// The encoder is part of it too, for the reason the module docs give: these go
 /// out through Go's `json.NewEncoder` (`config-ws/webserver.go:303`), so
 /// `msg` carries `&`, `<` and `>` as `\u0026`, `\u003c` and `\u003e`.
-/// [`crate::config::go_marshal`] is the only marshaller here that does that.
+/// [`crate::gojson::go_marshal`] is the only marshaller here that does that.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Entry {
     /// Go's `TimeMS`, tagged `t`: `time.Now().UnixMilli()` (`logger.go:141`).

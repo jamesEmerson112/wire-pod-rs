@@ -19,8 +19,8 @@
 //! for field. All four of the inner document's fields carry `omitempty`, so a
 //! zero one is absent rather than present-and-zero, which is why only one of
 //! the five documents this machine holds has a `client_metadata` key. And every
-//! string is written through [`crate::config::GoFormatter`], reached by
-//! [`crate::config::go_marshal`], which reproduces `encoding/json`'s HTML
+//! string is written through [`crate::gojson::GoFormatter`], reached by
+//! [`crate::gojson::go_marshal`], which reproduces `encoding/json`'s HTML
 //! escaping. That last one matters more here than in the config file:
 //! `json_doc` is a JSON *string* holding JSON *text*, so a `<`, `>` or `&`
 //! anywhere inside a robot setting is escaped by Go and has to be escaped here.
@@ -28,7 +28,7 @@
 //! **Decoding.** The file is read back at boot and a hand-edited one is on-disk
 //! state like any other, so the decoder is Go's rather than `serde`'s. The
 //! object loop, the fold, the duplicate rule and the fault recording all come
-//! from [`crate::config`]; this module adds only what a root that is an array
+//! from [`crate::gojson`]; this module adds only what a root that is an array
 //! needs, `DecodedDocs`, and the two structs' tag tables. That is the whole
 //! difference between the two files as far as `encoding/json` is concerned.
 //!
@@ -59,7 +59,7 @@ use serde::de::{IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::value::RawValue;
 
-use crate::config::{
+use crate::gojson::{
     DecodeFault, Extra, Faults, GoObject, Kind, go_marshal, store_object, store_string, store_u64,
 };
 use crate::paths::DataDir;
@@ -156,7 +156,7 @@ fn is_zero(value: &u64) -> bool {
 // Each pair below is one struct's half of `encoding/json`'s decoder: the tags
 // it answers to, and what one value does to one field. The loop itself,
 // the exact-then-folded key match, the duplicate rule and the fault recording
-// are `crate::config`'s and are Go's.
+// are `crate::gojson`'s and are Go's.
 
 impl GoObject for Jdoc {
     const TAGS: &'static [&'static str] =
@@ -238,11 +238,12 @@ impl<'de> Deserialize<'de> for BotJdoc {
 /// One object decoded into a fresh value, for the two [`Deserialize`] impls
 /// above.
 ///
-/// `crate::config` has the same shape for its own structs and keeps it private,
-/// because a [`Deserialize`] impl can hand back a value or an error and Go's
-/// decoder produces both at once. Here the root is a list, so the fault the
-/// whole file records comes out of [`DecodedDocs`] instead and this one is only
-/// the single-object convenience.
+/// [`crate::gojson::Decoded`] is the same shape for a file whose root is an
+/// object, and it carries the fault out with the value, because a
+/// [`Deserialize`] impl can hand back a value or an error and Go's decoder
+/// produces both at once. Here the root is a list, so the fault the whole file
+/// records comes out of [`DecodedDocs`] instead and this one is only the
+/// single-object convenience.
 struct Decoded<T> {
     value: T,
 }
@@ -400,7 +401,7 @@ impl std::error::Error for JdocsDecodeError {
 
 /// Go's `json.Marshal(BotJdocs)` (`vars.go:316`).
 ///
-/// Compact, in declaration order, with [`crate::config::GoFormatter`]'s string
+/// Compact, in declaration order, with [`crate::gojson::GoFormatter`]'s string
 /// escaping and no trailing newline, which is exactly the bytes `os.WriteFile`
 /// puts in the file. An empty list is `null`, for the reason the module doc
 /// gives.

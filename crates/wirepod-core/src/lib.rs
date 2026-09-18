@@ -2,7 +2,8 @@
 //! timing constants, Go-compatible number formatting, the robot seam, the
 //! per-robot stream ownership state machines, the stim receive loop, the camera
 //! guard and frame pump, the never-pruned camera meters, the bot-info, jdocs
-//! and jdocs-pinger stores, the resolution of Go's two on-disk layouts, and the
+//! and jdocs-pinger stores, the resolution of Go's two on-disk layouts, the
+//! `encoding/json` encoder and decoder every state file goes through, and the
 //! atomic replacement every state file is written through.
 //!
 //! The seam in [`robot::conn`] is expressed in domain types, so this crate
@@ -27,6 +28,7 @@ pub mod clock;
 pub mod config;
 pub mod esn;
 pub mod gofmt;
+pub mod gojson;
 pub mod logger;
 pub mod paths;
 pub mod persist;
@@ -42,14 +44,15 @@ pub mod wallclock;
 
 pub use crate::clock::{Clock, ManualClock, SystemClock};
 pub use crate::config::{
-    ApiConfig, BatteryConfig, BootConfig, BootOutcome, DecodeError, DecodeFault, Env, Extra,
-    GoFormatter, KnowledgeConfig, ServerConfig, SttConfig, WeatherConfig, create_config_from_env,
-    go_marshal, read_config, write_config_to_disk,
+    ApiConfig, BatteryConfig, BootConfig, BootOutcome, DecodeError, Env, KnowledgeConfig,
+    ServerConfig, SttConfig, WeatherConfig, create_config_from_env, read_config,
+    write_config_to_disk,
 };
 pub use crate::esn::{Esn, Generation};
 pub use crate::gofmt::{
     GoJsonError, go_format_f32, go_json_f32, go_json_f32_raw, go_json_f64, go_json_f64_raw,
 };
+pub use crate::gojson::{DecodeFault, Extra, GoFormatter, go_marshal};
 pub use crate::robot::{
     BatteryLevel, BatteryReading, CamGuard, CamMeter, CamMeters, CamOwner, CameraControl,
     CameraFrame, ConnError, ConnTarget, EVENT_CONNECTION_ID, EVENT_WHITELIST, EventItem,

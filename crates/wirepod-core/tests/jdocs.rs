@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tracing_subscriber::layer::SubscriberExt;
-use wirepod_core::config::{DecodeFault, Extra};
+use wirepod_core::gojson::{DecodeFault, Extra};
 use wirepod_core::logger::{LogLayer, LogRing, ManualLogClock};
 use wirepod_core::paths::DataDir;
 use wirepod_core::store::jdocs::{

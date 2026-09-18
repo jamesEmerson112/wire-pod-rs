@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::layer::SubscriberExt;
-use wirepod_core::config::go_marshal;
+use wirepod_core::gojson::go_marshal;
 use wirepod_core::logger::{
     COMPONENTS, INFO_TRIM_AT, LogLayer, LogLevel, LogRing, ManualLogClock, RING_LEN, TRAY_TRIM_AT,
     component_for_target, is_wire_pod_target, strip_ansi,

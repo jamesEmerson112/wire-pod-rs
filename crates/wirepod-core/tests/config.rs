@@ -32,9 +32,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing_subscriber::layer::SubscriberExt;
 use wirepod_core::config::{
     ApiConfig, BatteryConfig, BootOutcome, CONFIG_FILE_MODE, DEFAULT_GOHOME_PERCENT, DecodeError,
-    DecodeFault, Env, LLAMA2_MODEL, LLAMA3_MODEL, config_gate, create_config_from_env, go_marshal,
-    read_config, write_config_to_disk,
+    Env, LLAMA2_MODEL, LLAMA3_MODEL, config_gate, create_config_from_env, read_config,
+    write_config_to_disk,
 };
+use wirepod_core::gojson::{DecodeFault, go_marshal};
 use wirepod_core::logger::{LogLayer, LogRing, ManualLogClock};
 use wirepod_core::paths::DataDir;
 use wirepod_core::persist::WriteGate;
