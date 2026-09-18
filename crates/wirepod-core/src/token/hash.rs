@@ -34,9 +34,9 @@
 //! therefore the only thing that exercises this port's copy.
 //! `ClientToken` (`:36-41`) and `ClientTokenManager` (`:43-45`) are the shape
 //! `WriteTokenHash` marshals into the `vic.AppTokens` document (`token.go:102`,
-//! `token.go:109-115`), so they belong to whichever commit ports that function
-//! and should be added to this module rather than written a third time.
-//! `tests/token_hash.rs` carries a private copy of both today.
+//! `token.go:109-115`), so they went to the commit that ported that function
+//! and live in [`crate::token::jwt`] beside it. `tests/token_hash.rs` reads the
+//! live document through those rather than through a copy of its own.
 
 use std::cmp::Ordering;
 use std::fmt;

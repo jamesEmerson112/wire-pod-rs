@@ -19,10 +19,10 @@
 //!
 //! [`state::AppState`] is the one shared value the handlers read, replacing
 //! Go's roughly thirty unsynchronized globals. The config layer, the logger
-//! ring, the jdocs store, the session-certificate store, the SDK ini file and
-//! the transient token stores have landed since; the rest of the crate's
-//! eventual responsibility (the server-config store, the JWT, and the
-//! `AppState` growth that carries them) arrives in later commits.
+//! ring, the jdocs store, the session-certificate store, the SDK ini file, the
+//! transient token stores and the token server's JWT have landed since; the
+//! rest of the crate's eventual responsibility (the server-config store and
+//! the `AppState` growth that carries them) arrives in later commits.
 #![deny(clippy::await_holding_lock)]
 
 pub mod clock;
@@ -76,7 +76,9 @@ pub use crate::store::{
 };
 pub use crate::timings::Timings;
 pub use crate::token::{
-    GUID_B64_LEN, HASH_SIZE, HASHED_B64_LEN, HASHED_RAW_LEN, Hashed, SALT_SIZE, TOKEN_SIZE,
+    Claims, ClientToken, ClientTokenManager, GUID_B64_LEN, HASH_SIZE, HASHED_B64_LEN,
+    HASHED_RAW_LEN, Hashed, RandomError, Requestor, SALT_SIZE, TOKEN_SIZE, TokenBundle,
     TokenHashError, TokenPair, compare_hash_and_token, create_token_and_hashed_token,
-    encode_token_and_hash, hash_token, new_from_hash,
+    encode_token_and_hash, generate_token_id, hash_token, issue_token, new_from_hash,
+    write_token_hash,
 };

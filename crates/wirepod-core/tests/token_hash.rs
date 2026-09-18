@@ -557,7 +557,7 @@ fn the_live_stored_hash_verifies_against_the_live_guid() {
     use std::path::PathBuf;
 
     use serde::Deserialize;
-    use wirepod_core::{BotInfo, Esn};
+    use wirepod_core::{BotInfo, ClientTokenManager, Esn};
 
     /// One element of the jdocs file, Go's `botjdoc` (`vars.go:137-144`).
     #[derive(Deserialize)]
@@ -575,21 +575,6 @@ fn the_live_stored_hash_verifies_against_the_live_guid() {
     struct LiveJdoc {
         #[serde(default)]
         json_doc: String,
-    }
-
-    /// The document `vic.AppTokens` carries, Go's `ClientTokenManager`
-    /// (`hashing.go:43-45`).
-    #[derive(Deserialize)]
-    struct LiveTokens {
-        #[serde(default)]
-        client_tokens: Vec<LiveToken>,
-    }
-
-    /// Go's `ClientToken` (`hashing.go:36-41`), cut to the stored hash.
-    #[derive(Deserialize)]
-    struct LiveToken {
-        #[serde(default)]
-        hash: String,
     }
 
     let Some(appdata) = std::env::var_os("APPDATA") else {
@@ -629,7 +614,9 @@ fn the_live_stored_hash_verifies_against_the_live_guid() {
             "a robot has a stored vic.AppTokens document but no bot-info entry, so it has no \
              GUID to check the stored hash against and its association is already broken",
         );
-        let tokens: LiveTokens = serde_json::from_str(&entry.jdoc.json_doc)
+        // Go's `ClientTokenManager` and `ClientToken` (`hashing.go:36-45`), as
+        // `crate::token::jwt` ports them.
+        let tokens: ClientTokenManager = serde_json::from_str(&entry.jdoc.json_doc)
             .unwrap_or_else(|_| panic!("a live vic.AppTokens jdoc is not a client-token document"));
 
         // Go appends a client token per association and the current GUID
