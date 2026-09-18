@@ -16,8 +16,8 @@ pub use crate::token::jwt::{
     ALG, APP_ID, APP_TOKENS_DOC, CLIENT_NAME, Claims, ClientToken, ClientTokenManager,
     DEFAULT_REQUESTOR_ID, HEADER, NEW_TOKEN_METADATA, NEW_TOKEN_VERSION, RandomError, Requestor,
     SIGNATURE_LEN, TOKEN_TYPE, TokenBundle, USER_ID, encode, encode_segment, generate_token_id,
-    issue_token, marshal_claims, marshal_client_tokens, random_signature, signing_input, uuid_v4,
-    write_token_hash,
+    issue_token, marshal_claims, marshal_client_tokens, random_signature, serialize_client_tokens,
+    signing_input, uuid_v4, write_token_hash,
 };
 pub use crate::token::stores::{
     PrimaryEntry, PrimaryWalk, SecondaryEntry, SessionEntry, SessionMatch, TokenStores, host_of,

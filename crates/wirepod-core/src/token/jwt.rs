@@ -49,7 +49,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use serde::{Deserialize, Serialize};
 
-use crate::esn::Esn;
 use crate::gojson::{Extra, go_marshal};
 use crate::store::jdocs::{Jdoc, JdocsStore};
 use crate::timefmt::{add_months, rfc3339_nano};
@@ -150,7 +149,7 @@ impl std::error::Error for RandomError {}
 ///
 /// Go starts at the default (`token.go:187`) and overwrites it with `vic:` plus
 /// the serial once the peer address has been matched to a robot
-/// (`token.go:222`). The two arms are that decision, lifted out of the control
+/// (`token.go:223`). The two arms are that decision, lifted out of the control
 /// flow so this module never touches a peer address.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Requestor {
@@ -158,8 +157,27 @@ pub enum Requestor {
     /// [`DEFAULT_REQUESTOR_ID`] (`token.go:187`).
     Unknown,
     /// The ESN is known, so the token claims `vic:` plus the serial
-    /// (`token.go:222`).
-    Robot(Esn),
+    /// (`token.go:223`).
+    ///
+    /// # Why this is a raw string and not an [`Esn`](crate::esn::Esn)
+    ///
+    /// `token.go:223` is `requestorId = "vic:" + esn`, and `esn` is whatever
+    /// `GetEsnFromTarget` handed back, which is `robot.Esn` copied out of the
+    /// bot-info file untouched (`token.go:70`). `StoreBotInfo` put it there as
+    /// `strings.TrimSpace(strings.Split(thing, ":")[1])`
+    /// (`botInfoStorer.go:134`): trimmed, never lowercased. So the claim
+    /// carries the serial in whatever case the robot's own `thing` spelled it,
+    /// and the robot reads that claim back
+    /// (`vector-cloud/internal/token/identity/token.go:14`, `:145`).
+    ///
+    /// An [`Esn`](crate::esn::Esn) would trim and ASCII-lowercase it in
+    /// [`Esn::new`](crate::esn::Esn::new), which would change the claim for
+    /// any robot whose `thing` carries an
+    /// uppercase serial. Nothing on this machine does, so the difference is
+    /// unreachable today; carrying the raw string is what keeps that an
+    /// accident of the live data rather than something this port has decided.
+    /// [`write_token_hash`] takes a bare `&str` for the same reason.
+    Robot(String),
 }
 
 impl Requestor {
@@ -167,7 +185,8 @@ impl Requestor {
     pub fn id(&self) -> String {
         match self {
             Self::Unknown => DEFAULT_REQUESTOR_ID.to_owned(),
-            Self::Robot(esn) => format!("vic:{esn}"),
+            // `token.go:223`, concatenating the serial exactly as it arrived.
+            Self::Robot(serial) => format!("vic:{serial}"),
         }
     }
 }
@@ -248,6 +267,12 @@ impl Claims {
 
 /// The claim payload, as `SigningString` marshals it before encoding
 /// (`golang-jwt/jwt@v3.2.2/token.go:65-83`).
+///
+/// [`go_marshal`] rather than [`serde_json::to_vec`], because that library
+/// marshals the claim map with `encoding/json` and `token_id` and
+/// `requestor_id` are the two claims whose value comes from outside this
+/// module. A serial carrying `<`, `>`, `&`, U+2028 or U+2029 is the whole
+/// difference between the two encoders, and Go would `\u`-escape it.
 ///
 /// # Panics
 ///
@@ -368,7 +393,7 @@ pub fn issue_token(claims: &Claims) -> Result<String, RandomError> {
 ///
 /// `tokenpb.TokenBundle` has three fields (`proto/token/token.proto:86-91`) and
 /// Go sets two of them: `token` at `token.go:268` and `client_token` at
-/// `token.go:244` or `token.go:247`. `sts_token` is never touched, so there is
+/// `token.go:241` or `token.go:246`. `sts_token` is never touched, so there is
 /// no slot for it here. The second field is named for what it holds rather than
 /// for the wire: the value is the GUID from
 /// [`create_token_and_hashed_token`](crate::token::hash::create_token_and_hashed_token),
@@ -424,7 +449,10 @@ pub struct ClientTokenManager {
     /// `hashing.go:44`: every client token the robot has been issued, oldest
     /// first. In the running Go server this list is always exactly one long,
     /// for the reason [`write_token_hash`] sets out.
-    #[serde(default)]
+    ///
+    /// An empty list is written as `null` rather than `[]`, which is what Go's
+    /// nil slice marshals to. See [`serialize_client_tokens`].
+    #[serde(default, serialize_with = "serialize_client_tokens")]
     pub client_tokens: Vec<ClientToken>,
     /// Keys inside the document this struct does not name, preserved across a
     /// round trip. Go drops them.
@@ -432,11 +460,47 @@ pub struct ClientTokenManager {
     pub extra: Extra,
 }
 
+/// Writes an empty [`ClientTokenManager::client_tokens`] as `null`, which is
+/// what Go's nil slice marshals to.
+///
+/// This is the same shape mismatch [`crate::store::jdocs`] resolves the same
+/// way, and for the same reason. Go's `ClientTokens` is nil, empty or
+/// populated, and `json.Marshal` writes `null` for the nil one and `[]` for the
+/// empty one; a [`Vec`] cannot tell the first two apart. Every state Go can
+/// reach is the nil one: `WriteTokenHash` declares `var tokenJson
+/// ClientTokenManager` (`token.go:102`), which leaves the slice nil, and the
+/// only thing it does to the slice is append (`token.go:114`), so the list is
+/// nil right up to the append and one long afterwards. `[]` therefore reaches
+/// a `json_doc` only if an operator puts it there by hand, and this server
+/// rewrites it as `null` where Go would leave it, which is the one difference
+/// the round trip does not preserve.
+///
+/// # Errors
+///
+/// Only the serializer's own.
+pub fn serialize_client_tokens<S>(tokens: &[ClientToken], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    if tokens.is_empty() {
+        serializer.serialize_none()
+    } else {
+        tokens.serialize(serializer)
+    }
+}
+
 /// The `vic.AppTokens` document's bytes, as `json.Marshal(tokenJson)` writes
 /// them (`token.go:115`).
 ///
 /// A [`String`] rather than a byte vector because the result goes straight into
 /// [`Jdoc::json_doc`], which is JSON text inside a JSON string.
+///
+/// [`go_marshal`] rather than [`serde_json::to_vec`], so that `<`, `>`, `&`,
+/// U+2028 and U+2029 anywhere in the document come out `\u`-escaped the way
+/// `json.Marshal` writes them; those five are the whole difference between the
+/// two encoders, and they can reach here through an unknown key or value that
+/// a round trip preserved. An empty list is `null`, for the reason
+/// [`serialize_client_tokens`] gives.
 ///
 /// # Panics
 ///
@@ -468,9 +532,20 @@ pub fn marshal_client_tokens(manager: &ClientTokenManager) -> String {
 /// That is reproduced rather than fixed, and the two spellings are why
 /// [`JdocsStore::get_jdoc`] takes a bare `&str`: normalising the lookup would
 /// make the document accumulate, which changes a file the Go server reads back.
-/// It is also why the `if jdocExists` arm below cannot be reached from the
-/// running server, and why this port's decode of an existing `json_doc` is
-/// dead code in the same way `CompareHashAndToken` is.
+///
+/// # The existing-document arm is dead
+///
+/// Because the lookup can never hit, the `Some` arm of the match below and the
+/// decode of a non-empty `json_doc` that follows it are unreachable from the
+/// running server. Nothing anywhere writes a jdoc under a bare serial, so
+/// there is no document for the lookup to find: `jdocExists` is always false
+/// at `token.go:101`, `token.go:103-107` always runs, and every reachable call
+/// here takes the `None` arm and decodes the empty string, which fails in both
+/// languages and leaves the manager empty. Both arms are written out anyway so
+/// that the port says what Go says rather than asserting a fact about the
+/// caller, but nothing observable depends on what the dead one does. This is
+/// the same kind of dead code `CompareHashAndToken` is, and C23 should describe
+/// it that way.
 ///
 /// # The clock
 ///
@@ -492,7 +567,8 @@ pub async fn write_token_hash(
     clock: &dyn WallClock,
 ) -> io::Result<()> {
     // `token.go:101`, under the bare serial, and `token.go:103-107` filling the
-    // blank document the miss hands back.
+    // blank document the miss hands back. The miss is unconditional: see the
+    // doc comment. The `Some` arm below is dead.
     let existing = jdocs.get_jdoc(esn, APP_TOKENS_DOC);
     let (doc_version, fmt_version, client_metadata, json_doc) = match existing {
         Some(jdoc) => (
@@ -511,7 +587,7 @@ pub async fn write_token_hash(
 
     // `token.go:108`, whose error Go discards. An empty `json_doc`, which is
     // what every reachable call has, fails to decode in both languages and
-    // leaves the manager empty.
+    // leaves the manager empty; this is the only value the line ever sees.
     let mut manager: ClientTokenManager = serde_json::from_str(&json_doc).unwrap_or_default();
 
     // `token.go:109-114`. The clock is read here, where Go reads it.

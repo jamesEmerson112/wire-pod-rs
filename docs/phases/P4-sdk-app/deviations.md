@@ -966,6 +966,44 @@ one is C23's decision rather than this file's.
   GUIDs, hashes and certificate bytes, so a `{:?}` in a handler cannot put a secret into the log
   ring the web UI serves. Go has no equivalent and writes a plaintext GUID line at startup, which
   reserved deviation 39 already covers from the other direction (`84bed48`).
+- The JWT signature slot carries 128 CSPRNG bytes rather than an RS512 signature. This is reserved
+  deviation 28. Go generates a throwaway 1024-bit RSA key per request (`token.go:266`), keeps
+  nothing and publishes no public half, and the robot parses with `ParseUnverified`
+  (`vector-cloud/internal/token/identity/identity.go:158`), which is the only parse of a token in
+  either tree, so no verifier exists on either side of the wire. 128 bytes is the length such a
+  signature has, and they are drawn rather than fixed so that two tokens issued in the same second
+  still differ (`6d72056`).
+- A failed random draw for the token id or the signature is a returned `RandomError` rather than
+  Go's panic in `uuid.New` (`token.go:181`) and discarded `_` at `token.go:266`. This is the C2
+  note's rule applied to the second draw site (`6d72056`).
+- `write_token_hash` returns the rewrite's error, where Go discards `os.WriteFile`'s result inside
+  `WriteJdocs` (`vars.go:317`) and returns nil unconditionally (`6d72056`).
+- A marshal failure inside `write_token_hash` is unreachable here rather than survivable: Go logs
+  it and then stores the nil bytes as an empty `json_doc` anyway (`token.go:115-119`), which would
+  empty the document (`6d72056`).
+- Unknown keys inside a `vic.AppTokens` document and inside one client token survive a
+  read-modify-write, where Go's decoder drops them; survivors are re-serialised in sorted order.
+  This is the same choice C8 made for the jdocs file itself (`6d72056`).
+- An empty `ClientTokenManager` is written as `{"client_tokens":null}`, which is what Go's nil
+  slice marshals to and the only empty state Go can reach: `WriteTokenHash` declares `var
+  tokenJson ClientTokenManager` (`token.go:102`) and only appends to it (`token.go:114`). A `[]`
+  put into a `json_doc` by hand therefore comes back out as `null`, which is the one thing the
+  round trip does not preserve. Same shape mismatch and same resolution as the jdocs list above
+  (`6d72056`).
+- The `requestor_id` claim carries the serial exactly as the bot-info file spells it, because
+  `token.go:223` concatenates `robot.Esn` verbatim and `StoreBotInfo` wrote it trimmed but never
+  lowercased (`botInfoStorer.go:134`). `Requestor::Robot` therefore holds a raw `String` rather
+  than an `Esn`, whose `Esn::new` would ASCII-lowercase it. This is parity rather than a
+  difference, and it is recorded because the two obvious spellings disagree only for a serial no
+  live robot has: every `thing` this machine has seen is lowercase (`6d72056`).
+- `write_token_hash`'s existing-document arm is dead. Go looks the document up under the bare
+  serial (`token.go:101`) and stores it under `vic:` plus the serial (`token.go:125`), and nothing
+  anywhere writes a jdoc under a bare serial, so `jdocExists` is always false, `token.go:103-107`
+  always runs, and the decode at `token.go:108` only ever sees the empty string. The port
+  reproduces both arms rather than fixing the lookup, because normalising either spelling would
+  make the document accumulate and change a file the Go server reads back. One consequence is
+  itself unreachable for the same reason: a type error part way through an existing `json_doc`
+  leaves the manager empty here where Go keeps whatever decoded before the fault (`6d72056`).
 
 ---
 

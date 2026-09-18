@@ -29,14 +29,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use wirepod_core::esn::Esn;
+use serde_json::Value;
 use wirepod_core::store::jdocs::{JdocsStore, parse_jdocs};
 use wirepod_core::timefmt::{days_from_civil, rfc3339_nano};
 use wirepod_core::token::jwt::{
-    ALG, APP_TOKENS_DOC, Claims, ClientTokenManager, DEFAULT_REQUESTOR_ID, HEADER,
+    ALG, APP_TOKENS_DOC, Claims, ClientToken, ClientTokenManager, DEFAULT_REQUESTOR_ID, HEADER,
     NEW_TOKEN_METADATA, NEW_TOKEN_VERSION, Requestor, SIGNATURE_LEN, TOKEN_TYPE, TokenBundle,
     USER_ID, encode, encode_segment, generate_token_id, issue_token, marshal_claims,
-    random_signature, signing_input, uuid_v4, write_token_hash,
+    marshal_client_tokens, random_signature, signing_input, uuid_v4, write_token_hash,
 };
 use wirepod_core::wallclock::{FixedWallClock, WallClock, WallTime};
 
@@ -305,7 +305,7 @@ fn recorded_claims(recorded: &BTreeMap<String, String>) -> Claims {
 
     let clock = FixedWallClock::new(instant, offset);
     Claims::new(
-        &Requestor::Robot(Esn::new(serial)),
+        &Requestor::Robot(serial.to_owned()),
         claim(recorded, "kind=value name=token_id"),
         &clock,
     )
@@ -469,6 +469,91 @@ fn the_two_hard_coded_claims_are_the_ones_go_writes() {
     let claims = Claims::new(&Requestor::Unknown, "id", &clock);
     assert_eq!(claims.token_type, TOKEN_TYPE, "token.go:263");
     assert_eq!(claims.user_id, USER_ID, "token.go:31, token.go:264");
+}
+
+/// `token.go:223` is `requestorId = "vic:" + esn`, which copies the serial
+/// verbatim, so the claim carries whatever case the bot-info file spells.
+///
+/// That file's spelling is `StoreBotInfo`'s
+/// `strings.TrimSpace(strings.Split(thing, ":")[1])`
+/// (`botInfoStorer.go:134`): trimmed once on the way in and never lowercased.
+/// `GetEsnFromTarget` then returns `robot.Esn` untouched (`token.go:70`). The
+/// robot parses the claim back out of the token
+/// (`vector-cloud/internal/token/identity/token.go:14`, `:145`), so
+/// normalising it here would change a value the robot reads. Every serial this
+/// machine has seen is lowercase, which is what makes the difference
+/// unreachable rather than absent.
+#[test]
+fn a_requestor_claims_the_serial_in_the_case_it_arrived_in() {
+    assert_eq!(
+        Requestor::Robot("0000ABCD".to_owned()).id(),
+        "vic:0000ABCD",
+        "the serial was normalised, so this is not the claim token.go:223 builds"
+    );
+    assert_eq!(
+        Requestor::Robot("0000abcd".to_owned()).id(),
+        "vic:0000abcd",
+        "a lowercase serial is unchanged, which is why nothing observes this today"
+    );
+    // Nothing is trimmed either: Go trimmed once, at `botInfoStorer.go:134`,
+    // and `token.go:223` concatenates whatever survived that.
+    assert_eq!(
+        Requestor::Robot(" 0000abcd ".to_owned()).id(),
+        "vic: 0000abcd "
+    );
+
+    // And the spelling travels into the claim set unchanged.
+    let clock = FixedWallClock::new(WallTime::new(0, 0), 0);
+    let claims = Claims::new(&Requestor::Robot("0000ABCD".to_owned()), "id", &clock);
+    assert_eq!(claims.requestor_id, "vic:0000ABCD");
+    let payload = String::from_utf8(marshal_claims(&claims)).expect("the payload is UTF-8");
+    assert!(
+        payload.contains(r#""requestor_id":"vic:0000ABCD""#),
+        "the payload lowercased the serial: {payload}"
+    );
+}
+
+/// The claim payload goes through `go_marshal`, not `serde_json`, so the five
+/// characters `encoding/json` escapes and `serde_json` does not come out
+/// `\u`-escaped: `<`, `>` and `&` from the `htmlSafeSet` test
+/// (`encode.go:984`, `encode.go:1005-1007`) and U+2028 and U+2029
+/// unconditionally (`encode.go:1030-1043`).
+///
+/// `requestor_id` is the claim that can carry them, because `token.go:223`
+/// concatenates the serial out of the bot-info file without inspecting it, and
+/// that file is JSON an operator can edit. The assertion is against the
+/// escaped bytes and against `serde_json`'s own output, so the test fails both
+/// if the escaping goes away and if the two encoders ever stop disagreeing.
+#[test]
+fn the_claim_payload_escapes_the_five_characters_go_escapes() {
+    let clock = FixedWallClock::new(WallTime::new(0, 0), 0);
+    let serial = "a<b&c>d\u{2028}e\u{2029}f";
+    let claims = Claims::new(&Requestor::Robot(serial.to_owned()), "token-id", &clock);
+    let payload = String::from_utf8(marshal_claims(&claims)).expect("the payload is UTF-8");
+
+    assert!(
+        payload.contains(r#""requestor_id":"vic:a\u003cb\u0026c\u003ed\u2028e\u2029f""#),
+        "the payload is not the bytes Go's json.Marshal writes: {payload}"
+    );
+    for raw in ['<', '&', '>', '\u{2028}', '\u{2029}'] {
+        assert!(
+            !payload.contains(raw),
+            "the payload carries a raw {raw:?}: {payload}"
+        );
+    }
+
+    // And that is not what `serde_json::to_vec` would have written, so the
+    // difference is this module's choice of encoder rather than serde's.
+    let plain = String::from_utf8(serde_json::to_vec(&claims).expect("the claims serialise"))
+        .expect("the payload is UTF-8");
+    assert_ne!(
+        payload, plain,
+        "serde_json and go_marshal agree on this payload, so it proves nothing"
+    );
+    assert!(
+        plain.contains(&format!("vic:{serial}")),
+        "serde_json escaped one of the five after all: {plain}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -681,7 +766,7 @@ fn a_drawn_token_id_has_the_shape_and_is_not_the_same_twice() {
 #[test]
 fn a_segment_uses_the_url_alphabet_and_carries_no_padding() {
     let clock = FixedWallClock::new(WallTime::new(0, 0), 0);
-    let claims = Claims::new(&Requestor::Robot(Esn::new("?~?~?~?~")), "t", &clock);
+    let claims = Claims::new(&Requestor::Robot("?~?~?~?~".to_owned()), "t", &clock);
     let payload = marshal_claims(&claims);
 
     let standard = STANDARD.encode(&payload);
@@ -785,7 +870,7 @@ fn the_signature_slot_is_drawn_and_differs_between_two_tokens() {
 }
 
 /// The bundle mirrors the two fields Go sets on `tokenpb.TokenBundle`
-/// (`token.go:244`, `token.go:268`) without this crate depending on the
+/// (`token.go:241`, `token.go:268`) without this crate depending on the
 /// generated message.
 #[test]
 fn the_bundle_carries_the_two_fields_go_sets() {
@@ -893,11 +978,16 @@ async fn write_token_hash_writes_the_document_go_writes() {
         format!("vic:{TEST_ESN}"),
         "token.go:125 stores under `vic:` plus the serial"
     );
-    assert_eq!(entry.name, APP_TOKENS_DOC, "token.go:125");
-    // The literal, not the constant, because a constant asserted against
-    // itself would move with a change to it. `doc_version` also carries
-    // `omitempty` (`vars.go:131`), so a zero here would drop the key from the
-    // file the robot reads back.
+    // Every one of these is asserted against the literal Go spells rather than
+    // against the constant that names it, because a constant compared with
+    // itself moves with any change to it and proves nothing. `doc_version`
+    // also carries `omitempty` (`vars.go:131`), so a zero here would drop the
+    // key from the file the robot reads back.
+    assert_eq!(
+        APP_TOKENS_DOC, "vic.AppTokens",
+        "token.go:101 reads and token.go:125 writes this document name"
+    );
+    assert_eq!(entry.name, "vic.AppTokens", "token.go:125");
     assert_eq!(
         NEW_TOKEN_VERSION, 1,
         "token.go:104-105 writes the literal 1"
@@ -905,7 +995,11 @@ async fn write_token_hash_writes_the_document_go_writes() {
     assert_eq!(entry.jdoc.doc_version, 1, "token.go:104");
     assert_eq!(entry.jdoc.fmt_version, 1, "token.go:105");
     assert_eq!(
-        entry.jdoc.client_metadata, NEW_TOKEN_METADATA,
+        NEW_TOKEN_METADATA, "wirepod-new-token",
+        "token.go:106 writes this literal"
+    );
+    assert_eq!(
+        entry.jdoc.client_metadata, "wirepod-new-token",
         "token.go:106"
     );
     assert_eq!(
@@ -994,4 +1088,158 @@ async fn two_robots_get_two_documents() {
     assert_eq!(docs.len(), 2, "the two robots shared one document");
     assert_eq!(docs[0].thing, "vic:00000000");
     assert_eq!(docs[1].thing, "vic:00000001");
+}
+
+/// An empty client token list is written as `null`, which is what Go's nil
+/// slice marshals to, and a populated one as an array.
+///
+/// `WriteTokenHash` declares `var tokenJson ClientTokenManager`
+/// (`token.go:102`), leaving the slice nil, and only ever appends to it
+/// (`token.go:114`), so nil is the only empty state Go can reach and `null` is
+/// what it would write. A [`Vec`] cannot tell a nil slice from an empty one,
+/// so an empty list written by hand into a `json_doc` as `[]` comes back out
+/// as `null`; that is the one thing the round trip does not preserve, and it
+/// is the same trade [`wirepod_core::store::jdocs::marshal_jdocs`] makes.
+#[test]
+fn an_empty_client_token_list_is_go_s_null() {
+    assert_eq!(
+        marshal_client_tokens(&ClientTokenManager::default()),
+        r#"{"client_tokens":null}"#,
+        "an empty list is not the null Go's nil ClientTokens marshals to"
+    );
+
+    // An unknown key the round trip preserved still follows it.
+    let mut manager = ClientTokenManager::default();
+    manager
+        .extra
+        .insert("unknown".to_owned(), Value::Bool(true));
+    assert_eq!(
+        marshal_client_tokens(&manager),
+        r#"{"client_tokens":null,"unknown":true}"#
+    );
+
+    // And one token is an array, which is every state the running server has.
+    let one = ClientTokenManager {
+        client_tokens: vec![ClientToken {
+            hash: "h".to_owned(),
+            client_name: "wirepod".to_owned(),
+            app_id: "SDK".to_owned(),
+            issued_at: "t".to_owned(),
+            extra: BTreeMap::new(),
+        }],
+        extra: BTreeMap::new(),
+    };
+    assert_eq!(
+        marshal_client_tokens(&one),
+        concat!(
+            r#"{"client_tokens":[{"hash":"h","client_name":"wirepod","#,
+            r#""app_id":"SDK","issued_at":"t"}]}"#
+        ),
+        "a populated list is not the array Go writes"
+    );
+}
+
+/// `marshal_client_tokens` goes through `go_marshal` too, so the five
+/// characters `encoding/json` escapes reach the `json_doc` escaped, in a named
+/// field and in an unknown key or value the round trip preserved alike.
+///
+/// The escaping matters here because the result is JSON text nested inside a
+/// JSON string, and because the Go server reads this document back: a `<` left
+/// raw where Go writes `\u003c` is a byte difference in a file both servers
+/// own.
+#[test]
+fn the_client_token_document_escapes_the_five_characters_go_escapes() {
+    let awkward = "<&>\u{2028}\u{2029}";
+    let mut token = ClientToken {
+        hash: awkward.to_owned(),
+        client_name: "wirepod".to_owned(),
+        app_id: "SDK".to_owned(),
+        issued_at: "t".to_owned(),
+        extra: BTreeMap::new(),
+    };
+    token.extra.insert(
+        format!("key{awkward}"),
+        Value::String(format!("v{awkward}")),
+    );
+    let manager = ClientTokenManager {
+        client_tokens: vec![token],
+        extra: BTreeMap::new(),
+    };
+
+    let document = marshal_client_tokens(&manager);
+    let escaped = r"\u003c\u0026\u003e\u2028\u2029";
+    assert!(
+        document.contains(&format!(r#""hash":"{escaped}""#)),
+        "a named field was not escaped the way Go escapes it: {document}"
+    );
+    assert!(
+        document.contains(&format!(r#""key{escaped}":"v{escaped}""#)),
+        "an unknown key or its value was not escaped: {document}"
+    );
+    for raw in ['<', '&', '>', '\u{2028}', '\u{2029}'] {
+        assert!(
+            !document.contains(raw),
+            "the document carries a raw {raw:?}: {document}"
+        );
+    }
+
+    // And `serde_json::to_vec` would have written none of that, so the
+    // difference is this module's choice of encoder.
+    let plain = String::from_utf8(serde_json::to_vec(&manager).expect("the manager serialises"))
+        .expect("the document is UTF-8");
+    assert_ne!(
+        document, plain,
+        "serde_json and go_marshal agree on this document, so it proves nothing"
+    );
+    assert!(
+        plain.contains(&format!(r#""hash":"{awkward}""#)),
+        "serde_json escaped one of the five after all: {plain}"
+    );
+}
+
+/// The rewrite's error reaches the caller, where Go discards `os.WriteFile`'s
+/// result inside `WriteJdocs` (`vars.go:317`) and returns nil unconditionally.
+///
+/// The store is pointed at a path whose parent is a regular file, so
+/// [`wirepod_core::persist::write_atomic`] cannot create the temporary it
+/// renames over the target and the write fails for a reason no test needs to
+/// simulate. The document still reaches the in-memory list, because
+/// `token.go:125` runs before the write in both languages.
+#[tokio::test]
+async fn a_failed_rewrite_is_returned_rather_than_discarded() {
+    let directory = TempDir::new("unwritable");
+    let blocker = directory.path.join("not-a-directory");
+    fs::write(&blocker, b"").expect("could not create the blocking file");
+
+    let store = JdocsStore::new(
+        blocker
+            .join("jdocs.json")
+            .to_str()
+            .expect("the temporary path is UTF-8")
+            .to_owned(),
+    );
+    let clock = FixedWallClock::new(WallTime::new(0, 0), 0);
+
+    let error = tokio::time::timeout(
+        CEILING,
+        write_token_hash(&store, TEST_ESN, PLACEHOLDER_HASH, &clock),
+    )
+    .await
+    .expect("write_token_hash did not finish")
+    .expect_err("a write whose parent is a file must fail, and the failure must be returned");
+    assert!(
+        !error.to_string().is_empty(),
+        "the returned error says nothing"
+    );
+
+    assert_eq!(
+        store.snapshot().len(),
+        1,
+        "token.go:125 adds the document before the write, so a failed write still leaves it"
+    );
+    assert!(
+        !blocker.is_dir(),
+        "the blocking file was replaced by a directory, so the write did not fail for the \
+         reason this test needs"
+    );
 }
