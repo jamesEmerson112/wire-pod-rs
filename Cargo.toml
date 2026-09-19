@@ -22,6 +22,7 @@ futures-core = "0.3"
 getrandom = "0.2"
 http = "1"
 http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "http2", "server"] }
 # `tokio` is the feature `hyper_util::rt::TokioIo` lives behind, which is what the
 # TLS connector hands back to tonic. `tonic` already enables exactly that one
 # feature, so turning it on here adds no package.
@@ -29,6 +30,7 @@ hyper-util = { version = "0.1", features = ["tokio"] }
 # `localtime_r` for the local UTC offset, and `chmod` for the file modes Go
 # applies. Unix only.
 libc = "0.2"
+mdns-sd = "0.11"
 prost = "0.13"
 prost-types = "0.13"
 protox = "0.7"

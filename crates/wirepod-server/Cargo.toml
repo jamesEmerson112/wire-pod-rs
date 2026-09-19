@@ -30,6 +30,16 @@ tokio-util.workspace = true
 tower.workspace = true
 tracing.workspace = true
 wirepod-core.workspace = true
+# The listeners and the three gRPC services (initwirepod, servers/*, mdnshandler).
+hyper.workspace = true
+hyper-util = { workspace = true, features = ["server-auto", "service"] }
+mdns-sd.workspace = true
+rustls.workspace = true
+rustls-pemfile.workspace = true
+tokio-rustls.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+wirepod-proto.workspace = true
 
 [dev-dependencies]
 # `tokio`, `tokio-util` and `tower` are deliberately absent: a crate's own

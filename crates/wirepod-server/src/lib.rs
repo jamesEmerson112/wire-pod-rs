@@ -26,16 +26,25 @@
 #![deny(clippy::await_holding_lock)]
 
 pub mod api;
+pub mod chipper;
 pub mod conncheck;
 pub mod form;
+pub mod initweb;
+pub mod jdocs;
+pub mod jdocspinger;
 pub mod literals;
+pub mod mdns;
 pub mod mux;
+pub mod peer;
 pub mod reply;
 pub mod router;
 pub mod sdkapp;
 pub mod serve;
+pub mod startserver;
 #[cfg(feature = "test-util")]
 pub mod test_support;
+pub mod token;
+pub mod vtt;
 
 pub use crate::form::Form;
 pub use crate::router::{
