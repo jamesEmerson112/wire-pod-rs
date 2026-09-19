@@ -4375,6 +4375,15 @@ version = "0.1.0"
 [[package]]
 name = "wirepod-ttr"
 version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "wirepod-core",
+ "wirepod-intent",
+]
 
 [[package]]
 name = "wirepod-vector"
