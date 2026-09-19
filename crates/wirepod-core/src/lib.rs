@@ -36,6 +36,7 @@ pub mod config;
 pub mod esn;
 pub mod gofmt;
 pub mod gojson;
+pub mod intents;
 pub mod logger;
 pub mod paths;
 pub mod persist;
