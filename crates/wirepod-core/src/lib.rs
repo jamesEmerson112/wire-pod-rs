@@ -2,10 +2,13 @@
 //! timing constants, Go-compatible number formatting, the robot seam, the
 //! per-robot stream ownership state machines, the stim receive loop, the camera
 //! guard and frame pump, the never-pruned camera meters, the bot-info, jdocs,
-//! jdocs-pinger, session-certificate and SDK-ini stores, the resolution of Go's
-//! two on-disk layouts, the
-//! `encoding/json` encoder and decoder every state file goes through, and the
-//! atomic replacement every state file is written through.
+//! jdocs-pinger, session-certificate and SDK-ini stores, the transient token
+//! stores, the token hashing and the token server's JWT, the `apiConfig.json`
+//! layer, the logger ring and the `tracing` layer that fills it, the monotonic
+//! and calendar clocks and Go's two time layouts, the resolution of Go's two
+//! on-disk layouts, the `encoding/json` encoder and decoder every state file
+//! goes through, and the atomic replacement every state file is written
+//! through.
 //!
 //! The seam in [`robot::conn`] is expressed in domain types, so this crate
 //! depends on neither `wirepod-proto` nor tonic. `wirepod-vector` implements it
@@ -18,11 +21,14 @@
 //! makes that a compile error rather than a review comment.
 //!
 //! [`state::AppState`] is the one shared value the handlers read, replacing
-//! Go's roughly thirty unsynchronized globals. The config layer, the logger
-//! ring, the jdocs store, the session-certificate store, the SDK ini file, the
-//! transient token stores and the token server's JWT have landed since; the
-//! rest of the crate's eventual responsibility (the server-config store and
-//! the `AppState` growth that carries them) arrives in later commits.
+//! Go's roughly thirty unsynchronized globals, and it now carries every store
+//! Phase 1 has landed: the resolved paths, the configuration and the one gate
+//! its writers share, the jdocs, session-certificate, SDK-ini and transient
+//! token stores, the logger ring and the calendar clock, beside the bot-info
+//! file, the pinger, the registry, the timings and the monotonic clock the P4
+//! slice brought. The server-config store is the one piece of the crate's
+//! eventual responsibility still outstanding, and it arrives in a later
+//! commit.
 #![deny(clippy::await_holding_lock)]
 
 pub mod clock;
@@ -62,7 +68,7 @@ pub use crate::robot::{
     RobotEntry, RobotRegistry, SdkSession, StatusCode, StimEvent, StimSample, cam_stream_pump,
     run_event_stream, start_cam_stream,
 };
-pub use crate::state::{AppState, AppStateBuilder};
+pub use crate::state::{AppState, AppStateBuilder, Paths, WallLogClock};
 pub use crate::store::{
     AddOutcome, BotInfo, BotInfoRobot, BotInfoWire, BotJdoc, BotStatus, BotStatusKind,
     DEFAULT_SECTION, IniEdit, IniError, IniFile, IniKey, IniSection, JDOCS_FILE_MODE, Jdoc,
@@ -77,8 +83,8 @@ pub use crate::store::{
 pub use crate::timings::Timings;
 pub use crate::token::{
     Claims, ClientToken, ClientTokenManager, GUID_B64_LEN, HASH_SIZE, HASHED_B64_LEN,
-    HASHED_RAW_LEN, Hashed, RandomError, Requestor, SALT_SIZE, TOKEN_SIZE, TokenBundle,
-    TokenHashError, TokenPair, compare_hash_and_token, create_token_and_hashed_token,
-    encode_token_and_hash, generate_token_id, hash_token, issue_token, new_from_hash,
-    write_token_hash,
+    HASHED_RAW_LEN, Hashed, PrimaryEntry, PrimaryWalk, RandomError, Requestor, SALT_SIZE,
+    SecondaryEntry, SessionEntry, SessionMatch, TOKEN_SIZE, TokenBundle, TokenHashError, TokenPair,
+    TokenStores, compare_hash_and_token, create_token_and_hashed_token, encode_token_and_hash,
+    generate_token_id, hash_token, host_of, issue_token, new_from_hash, write_token_hash,
 };

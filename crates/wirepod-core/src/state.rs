@@ -1,28 +1,166 @@
 //! The shared server state the SDK-app handlers read.
 //!
 //! Go keeps this as roughly thirty unsynchronized package-level globals spread
-//! across `vars`, `sdkapp` and `config-ws`. This is the same state as one value
-//! shared as an `Arc`, holding only what the early slice's handlers need: the
-//! bot-info file, the jdocs pinger, the robot registry, the timings and the
-//! clock. Everything else the plan lists for `wirepod-core` (config, path
-//! resolution, the logger ring, the jdocs and session-cert stores) arrives in
-//! P1 and lands here.
+//! across `vars`, `logger`, `sdkapp`, `config-ws` and the token server. This is
+//! the same state as one value shared as an `Arc`, and every field below names
+//! the global it stands in for. What is still missing is the server-config
+//! store, which a later commit brings; nothing else Phase 1 landed is outside
+//! this struct.
 //!
 //! The bot-info store is a [`std::sync::RwLock`], and the only way to read it
 //! across an `.await` is [`AppState::bot_info_snapshot`], which clones. That is
 //! deliberate: the crate's `deny(clippy::await_holding_lock)` does not follow a
 //! guard handed out to `wirepod-server`, so no guard is handed out.
+//!
+//! The configuration is an [`Arc`] *inside* the lock rather than a value inside
+//! one, for the same reason. A reader clones the `Arc` and drops the guard in
+//! one expression, so a handler can hold a whole configuration across an
+//! `.await` without holding the lock; a rewrite replaces the pointer and the
+//! readers that already cloned keep the document they started with, which is
+//! the one thing Go's shared global cannot offer.
+//!
+//! Nothing here derives [`Debug`]. The configuration carries the operator's
+//! provider keys and the bot-info file carries the robots' GUIDs, and a
+//! `{:?}` of this struct would put both into the log ring the web UI serves.
+//! The individual stores that could leak a secret redact their own `Debug`
+//! (see [`crate::token::stores::TokenStores`]); this type simply has none.
 
+use std::path::Path;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use crate::clock::{Clock, SystemClock};
+use crate::config::ApiConfig;
 use crate::esn::Esn;
+use crate::logger::{LogClock, LogInstant, LogRing};
+use crate::paths::{AssetDir, DataDir, sdk_ini_dir};
+use crate::persist::WriteGate;
 use crate::robot::conn::RobotConnFactory;
 use crate::robot::registry::{GetRobotError, RobotEntry, RobotRegistry};
 use crate::store::bot_info::BotInfo;
 use crate::store::bot_status::PingerState;
+use crate::store::jdocs::JdocsStore;
+use crate::store::sdk_ini::SdkIniStore;
+use crate::store::session_certs::SessionCertStore;
+use crate::timefmt::legacy_stamp;
 use crate::timings::Timings;
+use crate::token::stores::TokenStores;
+use crate::wallclock::{SystemWallClock, WallClock};
+
+/// Where the server's files live, resolved once and passed down.
+///
+/// Go's counterpart is the block of path globals at `vars.go:35-55` plus
+/// `ApiConfigPath` at `config.go:13`, which `vars.Init` rewrites in place when
+/// the build is packaged (`vars.go:158-188`). Every later reader takes the
+/// global, so in Go the layout is decided by a build tag and a startup
+/// side effect. Here it is a value, which is what lets a test point a whole
+/// server at a temporary directory.
+///
+/// [`AssetDir`] has no Go global at all, for the reason
+/// [`crate::paths::AssetDir`] gives: Go reads those files through literals
+/// relative to the working directory and the packaged wrapper changes
+/// directory before starting the server.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Paths {
+    data: DataDir,
+    assets: AssetDir,
+}
+
+impl Paths {
+    /// The state directory and the asset directory the operator resolved.
+    pub fn new(data: DataDir, assets: AssetDir) -> Self {
+        Self { data, assets }
+    }
+
+    /// The directory the server's mutable state lives in.
+    pub fn data(&self) -> &DataDir {
+        &self.data
+    }
+
+    /// The directory the files that ship with the server live in.
+    pub fn assets(&self) -> &AssetDir {
+        &self.assets
+    }
+}
+
+impl Default for Paths {
+    /// Go's un-packaged layout: the relative literals of `vars.go:35-55`
+    /// resolved against the working directory, and the working directory
+    /// itself for the assets.
+    ///
+    /// This is the branch `vars.Init` leaves alone. The packaged branch roots
+    /// every path at `os.UserConfigDir()` joined with `PodName`
+    /// (`vars.go:166`), which on this machine is `%APPDATA%\wire-pod` and is
+    /// where the live server's state is, so it is emphatically not a default:
+    /// a builder that defaulted there would have a test writing over the
+    /// running server's files. [`DataDir::packaged`] is that layout and the
+    /// boot path names it explicitly.
+    fn default() -> Self {
+        Self::new(DataDir::source(), AssetDir::new("."))
+    }
+}
+
+/// The default SDK ini directory: `./.anki_vector/`.
+///
+/// Go resolves this one from the user's home directory on every platform it
+/// supports here (`vars.go:208`), and there is no relative literal to fall back
+/// on. Defaulting to the home directory would put an unconfigured test's writes
+/// in the real `~/.anki_vector/`, beside the ini file the production server and
+/// the Python SDK share, so the default is rooted at the working directory like
+/// every other one above and the boot path passes the home directory
+/// explicitly.
+fn default_sdk_ini_dir() -> String {
+    sdk_ini_dir(Path::new("."))
+}
+
+/// The production [`LogClock`]: Go's `time.Now()` at the top of `logf`.
+///
+/// Go reads the clock once per line (`logger.go:138`) and spends that one
+/// reading twice, as `UnixMilli` for the JSON entry (`logger.go:141`) and
+/// formatted with the `2006.01.02 15:04:05` layout for the two text lines
+/// (`logger.go:103`, `:114`). This is that, over the crate's wall-clock seam:
+/// one [`WallClock::now`], one offset lookup at that instant, and both fields
+/// built from them. Reading twice is the bug this type exists to make
+/// impossible, because a line whose stamp and millisecond field straddle a
+/// second would show the web UI one time and the poller another.
+///
+/// The offset is resolved at the instant rather than read once at startup, for
+/// the reason [`crate::wallclock`] gives: a server that runs across a daylight
+/// saving transition keeps stamping lines, and Go's `time.Now()` is in
+/// `time.Local`, so the stamp follows the transition.
+pub struct WallLogClock {
+    wall: Arc<dyn WallClock>,
+}
+
+impl WallLogClock {
+    /// A log clock reading `wall`.
+    pub fn new(wall: Arc<dyn WallClock>) -> Self {
+        Self { wall }
+    }
+}
+
+impl LogClock for WallLogClock {
+    fn now(&self) -> LogInstant {
+        // One reading, as `logger.go:138`. Everything below is derived from it.
+        let at = self.wall.now();
+        let offset = self.wall.utc_offset_secs_at(at.unix_secs);
+        LogInstant {
+            // Go's `UnixMilli` (`logger.go:141`): seconds times a thousand
+            // plus the truncated fraction. [`crate::wallclock::WallTime`] keeps
+            // its nanosecond field in `[0, 1e9)` however far the seconds are
+            // from the epoch, exactly as `time.Time` does, so this is Go's
+            // arithmetic and not an approximation of it. The saturation covers
+            // a clock set roughly three hundred million years out, where Go
+            // would wrap; nothing observes the difference and a panic inside
+            // the logger would be worse than either.
+            unix_millis: at
+                .unix_secs
+                .saturating_mul(1_000)
+                .saturating_add(i64::from(at.nanos / 1_000_000)),
+            stamp: legacy_stamp(at, offset),
+        }
+    }
+}
 
 /// Everything a handler needs, shared as an `Arc`.
 pub struct AppState {
@@ -31,6 +169,35 @@ pub struct AppState {
     registry: RobotRegistry,
     timings: Timings,
     clock: Arc<dyn Clock>,
+    /// The path globals of `vars.go:35-55` and `config.go:13`, resolved.
+    paths: Paths,
+    /// Go's `vars.APIConfig` (`config.go:15`).
+    config: RwLock<Arc<ApiConfig>>,
+    /// No Go counterpart: its three writers call `os.WriteFile(ApiConfigPath,
+    /// ...)` directly (`config.go:64`, `:99`, `:155`) and are ordered by
+    /// nothing. The gate is what orders them here, and it only does so while
+    /// they all hold this one, which is why it is state rather than something
+    /// a writer builds.
+    config_gate: WriteGate,
+    /// Go's `vars.BotJdocs` (`vars.go:61`).
+    jdocs: JdocsStore,
+    /// Go's `vars.RecurringInfo` (`vars.go:80`).
+    session_certs: SessionCertStore,
+    /// Go's `vars.SDKIniPath` (`vars.go:60`). Go keeps the directory and
+    /// nothing else, because each of its three writers reloads the file; the
+    /// store keeps the directory, the gate and the turn that stops two of those
+    /// load-edit-save cycles from interleaving.
+    sdk_ini: SdkIniStore,
+    /// Go's `TokenHashStore` (`token/token.go:37`), `SecondaryTokenStore`
+    /// (`:41`), `SessionWriteStoreNames` (`:44`) and `SessionWriteStoreCerts`
+    /// (`:45`), the last two of which are one list here.
+    tokens: TokenStores,
+    /// Go's whole `logger` package state (`logger.go:57-77`).
+    logs: Arc<LogRing>,
+    /// No Go global: Go calls `time.Now()` at each site. The seam is here so
+    /// the token server's claims and the log ring's stamps can both be frozen
+    /// in a test.
+    wall: Arc<dyn WallClock>,
 }
 
 impl AppState {
@@ -98,20 +265,107 @@ impl AppState {
     pub fn clock(&self) -> &Arc<dyn Clock> {
         &self.clock
     }
+
+    /// Where every file the server reads or writes lives.
+    pub fn paths(&self) -> &Paths {
+        &self.paths
+    }
+
+    /// The configuration as it stands, as a pointer the caller keeps.
+    ///
+    /// The lock is taken and released inside this call, so the returned
+    /// document can be held across an `.await` and read as many times as the
+    /// handler likes. It is a snapshot: a [`AppState::replace_config`] that
+    /// lands afterwards is invisible to it, which is what a handler part way
+    /// through answering a request wants, and what Go's shared global denies
+    /// it.
+    pub fn config(&self) -> Arc<ApiConfig> {
+        Arc::clone(&self.config.read().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// Replaces the configuration, which the web UI's save and the boot
+    /// rewrite both do.
+    ///
+    /// This is memory only. The file is written through
+    /// [`AppState::config_gate`], and the two are separate calls because Go's
+    /// are: `WriteConfigToDisk` writes whatever the global already holds
+    /// (`config.go:61-65`), so a caller sets the global and then writes.
+    pub fn replace_config(&self, config: ApiConfig) {
+        *self.config.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(config);
+    }
+
+    /// The one gate `apiConfig.json`'s writers share.
+    ///
+    /// Two gates over one file order nothing, so every writer takes this one.
+    pub fn config_gate(&self) -> &WriteGate {
+        &self.config_gate
+    }
+
+    /// The jdocs file.
+    pub fn jdocs(&self) -> &JdocsStore {
+        &self.jdocs
+    }
+
+    /// The robots with a session certificate on disk.
+    pub fn session_certs(&self) -> &SessionCertStore {
+        &self.session_certs
+    }
+
+    /// The SDK's own `sdk_config.ini`.
+    pub fn sdk_ini(&self) -> &SdkIniStore {
+        &self.sdk_ini
+    }
+
+    /// The token server's three transient stores.
+    pub fn tokens(&self) -> &TokenStores {
+        &self.tokens
+    }
+
+    /// The log ring the web UI's three handlers read.
+    ///
+    /// An [`Arc`], because the `tracing` layer that fills it holds one too
+    /// ([`crate::logger::LogLayer::new`]): the binary builds the ring, installs
+    /// the layer with a clone and hands another clone here, so the lines the
+    /// layer records are the lines this reads.
+    pub fn logs(&self) -> &Arc<LogRing> {
+        &self.logs
+    }
+
+    /// The calendar clock the token server's claims and the log ring's stamps
+    /// are read from.
+    pub fn wall(&self) -> &Arc<dyn WallClock> {
+        &self.wall
+    }
 }
 
 /// Builds an [`AppState`].
 ///
 /// The connection factory is the one thing with no sensible default, because it
 /// decides whether the server talks to a real robot. Everything else defaults:
-/// [`Timings::default`], a [`SystemClock`], an empty [`BotInfo`] and no
-/// liveness deadline.
+/// [`Timings::default`], a [`SystemClock`], a [`SystemWallClock`], an empty
+/// [`BotInfo`], no liveness deadline, the zero [`ApiConfig`], an empty store per
+/// file and an empty log ring, with every path rooted at the working directory
+/// the way an un-packaged Go build leaves it ([`Paths::default`]).
+///
+/// The three stores whose identity is a path are resolved in
+/// [`AppStateBuilder::build`] rather than in [`AppStateBuilder::new`], so that
+/// [`AppStateBuilder::paths`] can be called in any order and the defaults still
+/// follow it.
 pub struct AppStateBuilder {
     factory: Arc<dyn RobotConnFactory>,
     bot_info: BotInfo,
     timings: Timings,
     clock: Option<Arc<dyn Clock>>,
     liveness_deadline: Option<Duration>,
+    paths: Paths,
+    config: ApiConfig,
+    config_gate: Option<WriteGate>,
+    jdocs: Option<JdocsStore>,
+    session_certs: SessionCertStore,
+    sdk_ini: Option<SdkIniStore>,
+    tokens: TokenStores,
+    logs: Option<Arc<LogRing>>,
+    wall: Option<Arc<dyn WallClock>>,
 }
 
 impl AppStateBuilder {
@@ -123,6 +377,15 @@ impl AppStateBuilder {
             timings: Timings::default(),
             clock: None,
             liveness_deadline: None,
+            paths: Paths::default(),
+            config: ApiConfig::default(),
+            config_gate: None,
+            jdocs: None,
+            session_certs: SessionCertStore::new(),
+            sdk_ini: None,
+            tokens: TokenStores::new(),
+            logs: None,
+            wall: None,
         }
     }
 
@@ -151,9 +414,95 @@ impl AppStateBuilder {
         self
     }
 
+    /// Resolves every file under `paths` rather than under the working
+    /// directory.
+    ///
+    /// This also decides where the three defaulted stores below point, so a
+    /// builder that names the paths and nothing else gets a configuration gate,
+    /// a jdocs store and an ini store rooted there.
+    pub fn paths(mut self, paths: Paths) -> Self {
+        self.paths = paths;
+        self
+    }
+
+    /// Starts from a loaded configuration rather than the zero one.
+    pub fn config(mut self, config: ApiConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// Writes `apiConfig.json` through `gate` rather than through the one
+    /// [`crate::config::config_gate`] builds for the data directory.
+    pub fn config_gate(mut self, gate: WriteGate) -> Self {
+        self.config_gate = Some(gate);
+        self
+    }
+
+    /// Starts from a loaded jdocs store rather than an empty one at the data
+    /// directory's jdocs path.
+    pub fn jdocs(mut self, jdocs: JdocsStore) -> Self {
+        self.jdocs = Some(jdocs);
+        self
+    }
+
+    /// Starts from a loaded session-certificate store rather than an empty one.
+    pub fn session_certs(mut self, session_certs: SessionCertStore) -> Self {
+        self.session_certs = session_certs;
+        self
+    }
+
+    /// Writes the SDK ini through `sdk_ini` rather than through an empty store
+    /// at `./.anki_vector/`. The boot path passes the home directory here.
+    pub fn sdk_ini(mut self, sdk_ini: SdkIniStore) -> Self {
+        self.sdk_ini = Some(sdk_ini);
+        self
+    }
+
+    /// Starts from a non-empty set of transient token stores, which only a test
+    /// wants: the running server starts all three empty and Go's restart clears
+    /// them.
+    pub fn tokens(mut self, tokens: TokenStores) -> Self {
+        self.tokens = tokens;
+        self
+    }
+
+    /// Reads and fills `logs` rather than a ring of its own.
+    ///
+    /// The binary passes the ring it already gave [`crate::logger::LogLayer`],
+    /// because a ring nothing writes to would leave the web UI's three log
+    /// handlers permanently empty.
+    pub fn logs(mut self, logs: Arc<LogRing>) -> Self {
+        self.logs = Some(logs);
+        self
+    }
+
+    /// Reads calendar time from `wall` rather than from the system clock.
+    ///
+    /// A ring left to default is built over this clock, so a test that fixes
+    /// the wall clock fixes its log stamps with it.
+    pub fn wall(mut self, wall: Arc<dyn WallClock>) -> Self {
+        self.wall = Some(wall);
+        self
+    }
+
     /// The finished state, ready to be handed to the router.
     pub fn build(self) -> Arc<AppState> {
         let clock: Arc<dyn Clock> = self.clock.unwrap_or_else(|| Arc::new(SystemClock::new()));
+        let wall: Arc<dyn WallClock> = self
+            .wall
+            .unwrap_or_else(|| Arc::new(SystemWallClock::new()));
+        let logs = self.logs.unwrap_or_else(|| {
+            Arc::new(LogRing::new(Arc::new(WallLogClock::new(Arc::clone(&wall)))))
+        });
+        let config_gate = self
+            .config_gate
+            .unwrap_or_else(|| crate::config::config_gate(self.paths.data()));
+        let jdocs = self
+            .jdocs
+            .unwrap_or_else(|| JdocsStore::new(self.paths.data().jdocs_path()));
+        let sdk_ini = self
+            .sdk_ini
+            .unwrap_or_else(|| SdkIniStore::new(default_sdk_ini_dir()));
         let registry = RobotRegistry::new(self.factory)
             .with_timings(self.timings)
             .with_clock(Arc::clone(&clock))
@@ -164,6 +513,15 @@ impl AppStateBuilder {
             registry,
             timings: self.timings,
             clock,
+            paths: self.paths,
+            config: RwLock::new(Arc::new(self.config)),
+            config_gate,
+            jdocs,
+            session_certs: self.session_certs,
+            sdk_ini,
+            tokens: self.tokens,
+            logs,
+            wall,
         })
     }
 }
