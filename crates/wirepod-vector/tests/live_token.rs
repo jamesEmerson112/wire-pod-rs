@@ -32,10 +32,27 @@
 //! One entry `{"127.0.0.1", guid, hash}` appended to `TokenHashStore`
 //! (`token.go:236`). It lives in process memory, a restart clears it, and its
 //! only other reader is the jdocs server's fallback at
-//! `jdocs/server.go:91-94`. Six `logger.Debug` lines: `token.go:292`,
+//! `jdocs/server.go:91-94`, which walks the store looking for a stored address
+//! equal, ignoring case, to the one the jdocs call came from, and prunes each
+//! entry it matches with `RemoveFromPrimaryStore` (`jdocs/server.go:107`,
+//! `token.go:135-138`). That is the pruner for this store; the similarly
+//! named `RemoveFromSecondStore` (`token.go:130-133`) prunes
+//! `SecondaryTokenStore` and never sees this entry. A robot on this network
+//! is stored under its LAN address, so no jdocs call from it can match the
+//! `127.0.0.1` entry one run leaves behind, and the entry simply sits there
+//! until the process stops. Six `logger.Debug` lines: `token.go:292`,
 //! `token.go:197`, `token.go:198`, `token.go:232`, `token.go:234` and
 //! `token.go:251`. One read of `botSdkInfo.json` at `token.go:59`. No write
-//! to any file, which is what the modification-time assertion below pins.
+//! to any file.
+//!
+//! The modification-time assertion below is what pins the no-write claim, and
+//! it is worth being plain about what that is worth. It is an after-the-fact
+//! check: it reads the metadata of the three files before the call and again
+//! after it, so it catches a write, it does not prevent one. What makes the
+//! write-free arm the arm taken is not the assertion but `botSdkInfo.json`
+//! not naming `127.0.0.1` in any `ip_address`, which is what makes
+//! `GetEsnFromTarget` (`token.go:58-74`) miss. The assertion is the witness,
+//! the absent address is the reason.
 //!
 //! # What this test must never do
 //!
@@ -52,24 +69,68 @@
 //! three segments, not `client_token`, and nothing decoded out of the claims
 //! except the fixed literals this port defines for itself. Every assertion
 //! message describes a length, a count or a shape, so a failure says what was
-//! wrong without saying what the value was. That is why the assertions below
-//! are `assert!` with a written message rather than `assert_eq!`, whose
-//! failure output would print both sides.
+//! wrong without saying what the value was. That is why the live test's
+//! assertions are `assert!` with a written message rather than `assert_eq!`,
+//! whose failure output would print both sides. The helper tests use
+//! `assert_eq!` where it reads better, because every value they compare is
+//! fixed input this file wrote.
+//!
+//! # Why the request sets `refresh_jwt_tokens`
+//!
+//! Not because the Go server reads it. `RefreshToken` (`token.go:291-296`) is
+//! one debug log and `CreateJWT(ctx, false, false)`; the request message is
+//! never looked at, so the field changes nothing about the answer. It is set
+//! because it is what the robot sends: `refreshJwtToken` builds
+//! `pb.RefreshTokenRequest{RefreshJwtTokens: true}`
+//! (`vector-cloud/internal/token/client.go:81-83`). Sending what the robot
+//! sends keeps the one message this test puts on the wire the same shape the
+//! server is handed in production, rather than a shape only this test ever
+//! produces.
+//!
+//! # What identifies the peer
+//!
+//! Nothing but the address. The connector accepts whatever certificate the
+//! server presents (`crates/wirepod-vector/src/tls.rs:74-84` is the verifier
+//! that makes it so) and the Go listener asks for no client certificate
+//! (`initwirepod/startserver.go:184-187` sets `Certificates` and nothing
+//! else), so the only thing saying the answering process is the production
+//! chipper is that it answered TLS on `127.0.0.1:443`.
+//!
+//! That is acceptable here for two reasons. Binding 443 on this machine needs
+//! the Go server stopped first, which is the whole of `RUNBOOK-S1.md`, so a
+//! second listener on that port is not something that can quietly be there.
+//! And a wrong peer cannot make this test pass by accident: it would have to
+//! answer `tokenpb.Token/RefreshToken` with a bundle whose claim keys, key
+//! order, literal values, segment lengths, UUID shape and month arithmetic
+//! all match. What the thin identification leaves open is a false negative on
+//! a machine where something else holds the port, not a false positive.
 //!
 //! # Guards
 //!
-//! Both the live test and the helpers it calls are behind `#[ignore]`, and
-//! the test panics immediately unless `WIREPOD_LIVE_GO=1` is set, so
-//! `cargo test -- --ignored` on a machine with no Go server fails on the
-//! first line instead of hanging on a connect. The RPC itself runs under a
-//! ten second `tokio::time::timeout`.
+//! Only the live test carries `#[ignore]`. The five helper tests at the foot
+//! of the file dial nothing, take fixed input, and run in every ordinary
+//! `cargo test`, which is what keeps the two decoders, the date rule and the
+//! robot's acceptor, including which claims it refuses to do without, from
+//! rotting between deliberate runs.
 //!
-//! A full ignored run of this file makes exactly one RPC, because the robot's
-//! acceptor is a plain function called on the one response rather than a
-//! second test.
+//! The live test panics immediately unless `WIREPOD_LIVE_GO=1` is set, so
+//! `cargo test -- --ignored` on a machine with no Go server fails on the
+//! first line instead of hanging on a connect. The whole of the one call runs
+//! under a single ten second `tokio::time::timeout`, both dials and the RPC
+//! inside it: tonic sets no `connect_timeout` by default, so a ceiling around
+//! the RPC alone would only start once a channel existed and a filtered port
+//! would hang under it rather than fail.
+//!
+//! A full ignored run of this file makes exactly one RPC, and that is
+//! enforced rather than promised in prose. The channel goes to the generated
+//! client wrapped in [`CountedChannel`], which counts every HTTP request
+//! handed to it and separately counts the ones naming
+//! `/tokenpb.Token/RefreshToken`; both counts are asserted to be one before
+//! the response is handed back. The robot's acceptor is a plain function run
+//! over that one response rather than a second test.
 //!
 //! Run it deliberately, and with `--nocapture`, because the skip lines and
-//! the ALPN outcome go to stderr:
+//! the dial outcome go to stderr:
 //!
 //! ```text
 //! cargo test -p wirepod-vector --test live_token -- --ignored --nocapture
@@ -90,20 +151,35 @@
 //! `tonic::transport::Error` does not distinguish a handshake alert from an
 //! unreachable port, so a server that is simply down is retried once and then
 //! reported as unreachable.
+//!
+//! What the stderr line can say about that is narrower than it looks.
+//! [`InsecureTlsConnector`] never reads `alpn_protocol` back off the finished
+//! connection, and the Go listener names no `NextProtos` at all, so nothing
+//! in this test observes which protocol, if any, was selected. A first dial
+//! that succeeds is evidence of exactly one thing: the first dial succeeded.
+//! The line says that and no more. Turning it into a real ALPN observation
+//! would mean reading the negotiated protocol out of the rustls connection,
+//! which is a change to `tls.rs` rather than to this file.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime};
 
-use tonic::transport::Endpoint;
+use tonic::body::BoxBody;
+use tonic::codegen::{Service, http};
+use tonic::transport::{Channel, Endpoint};
 use wirepod_core::paths::{DataDir, sdk_ini_dir};
 use wirepod_core::store::sdk_ini::sdk_config_path;
-use wirepod_core::timefmt::rfc3339_nano;
+use wirepod_core::timefmt::{
+    CivilDate, add_months, civil_from_days, days_from_civil, rfc3339_nano,
+};
 use wirepod_core::token::jwt::{
     ALG, DEFAULT_REQUESTOR_ID, HEADER, SIGNATURE_LEN, TOKEN_TYPE, USER_ID, encode_segment,
 };
-use wirepod_core::wallclock::{SystemWallClock, WallTime};
+use wirepod_core::wallclock::{FixedWallClock, SystemWallClock, WallTime};
 use wirepod_core::{Claims, GUID_B64_LEN, Requestor, generate_token_id, issue_token};
 use wirepod_proto::tokenpb::RefreshTokenRequest;
 use wirepod_proto::tokenpb::token_client::TokenClient;
@@ -119,8 +195,22 @@ const LIVE_GATE: &str = "WIREPOD_LIVE_GO";
 /// The one target this file is ever allowed to dial.
 const TARGET: &str = "https://127.0.0.1:443";
 
-/// The ceiling the one RPC runs under.
-const RPC_CEILING: Duration = Duration::from_secs(10);
+/// The one gRPC method path this file is ever allowed to put on the wire.
+const RPC_PATH: &str = "/tokenpb.Token/RefreshToken";
+
+/// The ceiling the whole of the one call runs under, both dials and the RPC.
+///
+/// It covers the dials rather than the RPC alone because `Endpoint` carries no
+/// `connect_timeout` unless one is set, so a ceiling wrapped around the call
+/// would start only once a channel existed. A port that drops packets rather
+/// than refusing them would sit in the connect for as long as the operating
+/// system's TCP retry schedule allows, which on Windows is minutes, and no
+/// clock in this file would be running.
+const LIVE_CEILING: Duration = Duration::from_secs(10);
+
+/// Seconds in a day, for turning a civil date into the instant a fixed clock
+/// is stopped at. `wirepod-core` keeps its own copy of this crate-private.
+const SECS_PER_DAY: i64 = 86_400;
 
 /// The claim keys, in the byte order `encoding/json`'s map encoder writes
 /// them, which is the order [`Claims`] declares its fields in.
@@ -270,10 +360,17 @@ impl Member {
 /// A cursor over JSON text.
 ///
 /// This is deliberately small: it walks one object, decodes strings, and skips
-/// past every other value without interpreting it. `wirepod-vector` depends on
-/// neither `serde_json` nor `base64` and this commit is not allowed to add a
-/// dependency to its manifest, so both of this file's decoders are written out
-/// rather than pulled in.
+/// past every other value without interpreting it.
+///
+/// `wirepod-vector` depends on neither `serde_json` nor `base64`, and writing
+/// both of this file's decoders out by hand was a choice rather than something
+/// the phase gate forced. Both crates are already in `Cargo.lock` at versions
+/// the workspace resolves, so naming either one would not have moved the
+/// `(name, version, checksum)` set that gate compares. They are written out
+/// because this is the file that decides whether the live server's bytes are
+/// the bytes the port produces, and a disagreement about those bytes should
+/// not be able to hide inside a decoder neither the port nor the Go server
+/// uses.
 struct Json<'a> {
     src: &'a [u8],
     at: usize,
@@ -472,12 +569,36 @@ fn object_members(text: &[u8]) -> Result<Vec<Member>, &'static str> {
     }
 }
 
+/// One named member, if the object has it.
+fn find<'m>(members: &'m [Member], key: &str) -> Option<&'m Member> {
+    members.iter().find(|candidate| candidate.key == key)
+}
+
 /// One named member, or a panic naming the key this file was looking for.
 fn member<'m>(members: &'m [Member], key: &str) -> &'m Member {
-    members
-        .iter()
-        .find(|candidate| candidate.key == key)
-        .unwrap_or_else(|| panic!("the object has no {key} member"))
+    find(members, key).unwrap_or_else(|| panic!("the object has no {key} member"))
+}
+
+/// The members written back out as a JSON object, in the order given.
+///
+/// Only ever called on a payload this port issued, whose keys are the seven
+/// ASCII names in [`CLAIM_ORDER`], so each key is written between quotes with
+/// no escaping and each value is the raw text the scanner spanned. That is
+/// enough to rebuild a payload with one member left out, which is how the
+/// acceptor's required-claim set is pinned.
+fn render_object(members: &[&Member]) -> String {
+    let mut out = String::from("{");
+    for (index, one) in members.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push('"');
+        out.push_str(&one.key);
+        out.push_str("\":");
+        out.push_str(&one.value);
+    }
+    out.push('}');
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -511,6 +632,23 @@ struct CalendarDate {
     day: u32,
 }
 
+/// Whether a calendar date is one the Gregorian calendar actually has.
+///
+/// [`days_from_civil`] counts an overflowing day forward rather than refusing
+/// it, so 30 February 2023 has a day number and [`civil_from_days`] turns that
+/// number back into 2 March. A date survives the round trip unchanged exactly
+/// when it is real, which is the same test as Go's `day > daysIn(month, year)`
+/// (`time/format.go:1381-1384`, and `time/format_rfc3339.go:109`) without a
+/// second month-length table.
+fn is_a_real_date(date: CalendarDate) -> bool {
+    civil_from_days(days_from_civil(i64::from(date.year), date.month, date.day))
+        == CivilDate {
+            year: i64::from(date.year),
+            month: date.month,
+            day: date.day,
+        }
+}
+
 /// Parses the shape Go's `time.RFC3339` layout accepts and returns the
 /// calendar date.
 ///
@@ -520,6 +658,27 @@ struct CalendarDate {
 /// The zone is either the literal `Z` or a sign with `HH:MM`. This is the
 /// check the robot performs on both claims
 /// (`vector-cloud/internal/token/identity/token.go:126-137`).
+///
+/// # The ranges, and where they come from
+///
+/// `ParseInLocation` with this layout runs `parseRFC3339`
+/// (`time/format.go:1038-1046`), and that fast path range-checks every field
+/// as it reads it (`time/format_rfc3339.go:107-112`, `:134-135`): year 0
+/// through 9999, month 1 through 12, day 1 through the length of that month in
+/// that year, hour 0 through 23, minute and second 0 through 59, zone hour 0
+/// through 23 and zone minute 0 through 59. A value the fast path refuses
+/// falls through to the general parser, which repeats all of it
+/// (`time/format.go:1117-1120` for the month, `:1144-1147` for the hour,
+/// `:1152-1155` for the minute, `:1157-1164` for the second,
+/// `:1381-1384` for the day) with one difference: the general parser bounds
+/// the zone with `>` rather than `>=` on purpose, to let through the `+24:00`
+/// and `:60` forms people write (`time/format.go:1267-1277`). The union of
+/// the two paths is therefore a zone hour of at most 24 and a zone minute of
+/// at most 60, and that is what this checks, so that this function accepts
+/// exactly the set the robot accepts rather than a subset of it.
+///
+/// Without the ranges the shape alone would take a month of 13, a day of 99,
+/// an hour of 99 or a zone of `+99:99`, all of which the robot refuses.
 fn parse_rfc3339_date(text: &str) -> Result<CalendarDate, &'static str> {
     let bytes = text.as_bytes();
     if bytes.len() < 20 {
@@ -566,6 +725,14 @@ fn parse_rfc3339_date(text: &str) -> Result<CalendarDate, &'static str> {
                     return Err("a timestamp's numeric zone has a non-digit in it");
                 }
             }
+            let zone_hour: u32 = text[at + 1..at + 3].parse().expect("two validated digits");
+            let zone_minute: u32 = text[at + 4..at + 6].parse().expect("two validated digits");
+            if zone_hour > 24 {
+                return Err("a timestamp's numeric zone names an hour past 24");
+            }
+            if zone_minute > 60 {
+                return Err("a timestamp's numeric zone names a minute past 60");
+            }
             at += 6;
         }
         _ => return Err("a timestamp carries neither Z nor a signed numeric zone"),
@@ -574,28 +741,80 @@ fn parse_rfc3339_date(text: &str) -> Result<CalendarDate, &'static str> {
         return Err("a timestamp carries trailing bytes after its zone");
     }
 
-    Ok(CalendarDate {
+    let hour: u32 = text[11..13].parse().expect("two validated digits");
+    let minute: u32 = text[14..16].parse().expect("two validated digits");
+    let second: u32 = text[17..19].parse().expect("two validated digits");
+    if hour > 23 {
+        return Err("a timestamp names an hour past 23");
+    }
+    if minute > 59 {
+        return Err("a timestamp names a minute past 59");
+    }
+    if second > 59 {
+        return Err("a timestamp names a second past 59");
+    }
+
+    let date = CalendarDate {
         year: text[0..4].parse().expect("four validated digits"),
         month: text[5..7].parse().expect("two validated digits"),
         day: text[8..10].parse().expect("two validated digits"),
-    })
+    };
+    if !(1..=12).contains(&date.month) {
+        return Err("a timestamp names a month outside 1 through 12");
+    }
+    if date.day == 0 {
+        return Err("a timestamp names a day of zero");
+    }
+    if !is_a_real_date(date) {
+        return Err("a timestamp names a day that month of that year does not have");
+    }
+    Ok(date)
+}
+
+/// The calendar date Go's `AddDate(0, 1, 0)` lands on from `date`
+/// (`token.go:196`).
+///
+/// `AddDate` adds one to the month and hands the result to `time.Date`, which
+/// does not clamp the day: it counts it forward linearly, so 31 January
+/// becomes 31 February becomes 3 March in a common year and 2 March in a leap
+/// one. [`days_from_civil`] counts the day the same way, and says so in its
+/// own documentation (`crates/wirepod-core/src/timefmt.rs:55-59`), so the
+/// round trip through it and [`civil_from_days`] is that normalisation
+/// exactly.
+///
+/// The port's [`add_months`] (`crates/wirepod-core/src/timefmt.rs:282-296`)
+/// takes the same pair of steps on the instant, which is why the helper test
+/// below can assert the two agree at the four month ends where they could
+/// disagree.
+fn one_calendar_month_later(date: CalendarDate) -> CalendarDate {
+    let (year, month) = if date.month == 12 {
+        (i64::from(date.year) + 1, 1)
+    } else {
+        (i64::from(date.year), date.month + 1)
+    };
+    let rolled = civil_from_days(days_from_civil(year, month, date.day));
+    CalendarDate {
+        year: i32::try_from(rolled.year).expect("a year inside the RFC 3339 range"),
+        month: rolled.month,
+        day: rolled.day,
+    }
 }
 
 /// Whether `expires` is the calendar date one month after `iat`, which is what
 /// Go's `AddDate(0, 1, 0)` produces (`token.go:196`).
 ///
-/// A day of month that does not exist in the following month is not treated as
-/// a match. Go would normalise it forward, so a token issued on the 31st of a
-/// month with a 30-day successor legitimately lands on the 1st; this returns
-/// false there and the caller's message says so, because the alternative is an
-/// assertion that cannot tell that case from a broken one.
+/// A day of month the following month does not have is a match when `expires`
+/// carries the rolled-forward date, because that is the date Go writes. An
+/// earlier form of this required the day of month to be preserved, which would
+/// have reported a parity break on the four issue dates of each year where
+/// Go legitimately rolls the day forward.
+///
+/// The two claims come from two separate `time.Now()` calls one line apart
+/// (`token.go:195-196`), so a call that straddles local midnight would read
+/// `iat` on one day and `expires` from the next. That window is one instant a
+/// day and nothing here tries to widen the rule to cover it.
 fn is_one_calendar_month_later(iat: CalendarDate, expires: CalendarDate) -> bool {
-    let (year, month) = if iat.month == 12 {
-        (iat.year + 1, 1)
-    } else {
-        (iat.year, iat.month + 1)
-    };
-    expires.year == year && expires.month == month && expires.day == iat.day
+    expires == one_calendar_month_later(iat)
 }
 
 // ---------------------------------------------------------------------------
@@ -620,40 +839,59 @@ fn is_one_calendar_month_later(iat: CalendarDate, expires: CalendarDate) -> bool
 ///
 /// This is a plain function rather than a second `#[tokio::test]` so that one
 /// ignored run of this file makes one RPC.
-fn the_live_token_is_one_the_robot_parser_would_accept(token: &str) {
+///
+/// It answers with a `Result` rather than an assertion so that the helper test
+/// below can pin what it *refuses*. An acceptor that only ever panics can be
+/// driven forwards, over a token that should pass, but never backwards, over
+/// one that should not, and an unpinned required-claim set is one a later edit
+/// can quietly shrink. Every `Err` here describes a key name this file
+/// declares, a count, or a parse reason; none of them carries a value out of
+/// the token.
+fn the_robot_parser_would_accept(token: &str) -> Result<(), String> {
     let segments: Vec<&str> = token.split('.').collect();
-    assert!(
-        segments.len() == 3,
-        "the robot's parser wants three dot-separated segments and this token has {}",
-        segments.len()
-    );
+    if segments.len() != 3 {
+        return Err(format!(
+            "the robot's parser wants three dot-separated segments and this token has {}",
+            segments.len()
+        ));
+    }
 
-    let header = decode_raw_url(segments[0]).expect("the header segment is RawURL base64");
-    let header_members = object_members(&header).expect("the header segment is a JSON object");
-    let alg = member(&header_members, "alg")
+    let header = decode_raw_url(segments[0])
+        .map_err(|reason| format!("the header segment is not RawURL base64: {reason}"))?;
+    let header_members = object_members(&header)
+        .map_err(|reason| format!("the header segment is not a JSON object: {reason}"))?;
+    let alg = find(&header_members, "alg")
+        .ok_or_else(|| "the header has no alg member".to_owned())?
         .string_value()
-        .expect("the header's alg member is a JSON string");
-    assert!(
-        REGISTERED_ALGS.contains(&alg.as_str()),
-        "the header names an alg golang-jwt v3.2.2 does not register, which is the \
-         unverifiable error at parser.go:140-141"
-    );
+        .map_err(|_| "the header's alg member is not a JSON string".to_owned())?;
+    if !REGISTERED_ALGS.contains(&alg.as_str()) {
+        return Err(
+            "the header names an alg golang-jwt v3.2.2 does not register, which is \
+                    the unverifiable error at parser.go:140-141"
+                .to_owned(),
+        );
+    }
 
-    let payload = decode_raw_url(segments[1]).expect("the claim segment is RawURL base64");
-    let members = object_members(&payload).expect("the claim segment is a JSON object");
+    let payload = decode_raw_url(segments[1])
+        .map_err(|reason| format!("the claim segment is not RawURL base64: {reason}"))?;
+    let members = object_members(&payload)
+        .map_err(|reason| format!("the claim segment is not a JSON object: {reason}"))?;
     for key in ROBOT_REQUIRED_CLAIMS {
-        member(&members, key)
+        find(&members, key)
+            .ok_or_else(|| format!("the claims carry no {key} member"))?
             .string_value()
-            .unwrap_or_else(|_| panic!("the {key} claim is not a JSON string"));
+            .map_err(|_| format!("the {key} claim is not a JSON string"))?;
     }
 
     for key in ["iat", "expires"] {
-        let stamp = member(&members, key)
+        let stamp = find(&members, key)
+            .ok_or_else(|| format!("the claims carry no {key} member"))?
             .string_value()
-            .expect("the claim is a JSON string");
+            .map_err(|_| format!("the {key} claim is not a JSON string"))?;
         parse_rfc3339_date(&stamp)
-            .unwrap_or_else(|reason| panic!("the {key} claim is not RFC 3339: {reason}"));
+            .map_err(|reason| format!("the {key} claim is not RFC 3339: {reason}"))?;
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -666,6 +904,20 @@ fn home_dir() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
+}
+
+/// The last component of a path, which is all this file ever prints of one.
+///
+/// All three watched paths are built from `%APPDATA%` or from the home
+/// directory, so printing one whole would put the operator's account name in
+/// the test output and from there into whatever captured it. The bare file
+/// name says which of the three a line is about, which is the only thing the
+/// line needs to say.
+fn shown_name(path: &Path) -> String {
+    path.file_name()
+        .unwrap_or(path.as_os_str())
+        .to_string_lossy()
+        .into_owned()
 }
 
 /// The files the disk-writing arm of `CreateJWT` would rewrite, as many of the
@@ -706,7 +958,7 @@ fn watched_files() -> Vec<PathBuf> {
             if !present {
                 eprintln!(
                     "SKIP: {} is missing, so its mtime is not watched",
-                    path.display()
+                    shown_name(path)
                 );
             }
             present
@@ -721,9 +973,9 @@ fn modification_times(paths: &[PathBuf]) -> Vec<SystemTime> {
         .iter()
         .map(|path| {
             fs::metadata(path)
-                .unwrap_or_else(|_| panic!("{} has readable metadata", path.display()))
+                .unwrap_or_else(|_| panic!("{} has readable metadata", shown_name(path)))
                 .modified()
-                .unwrap_or_else(|_| panic!("{} reports a modification time", path.display()))
+                .unwrap_or_else(|_| panic!("{} reports a modification time", shown_name(path)))
         })
         .collect()
 }
@@ -738,6 +990,55 @@ struct LiveBundle {
     client_token: String,
 }
 
+/// What [`CountedChannel`] saw go past it.
+#[derive(Default)]
+struct RequestTally {
+    /// Every HTTP request the generated client handed the channel.
+    all: AtomicUsize,
+    /// The subset of those naming [`RPC_PATH`].
+    refresh_token: AtomicUsize,
+}
+
+/// A [`Channel`] that counts the requests put through it.
+///
+/// The one-RPC invariant is the thing that makes this test safe to point at a
+/// production process, and a comment saying so is not a guard. This is: a
+/// gRPC unary call is one HTTP request, so counting the requests the generated
+/// client hands the transport counts the RPCs, and recording which of them
+/// named [`RPC_PATH`] separates "one call" from "one call, to the method this
+/// file is allowed to call".
+///
+/// tonic's `GrpcService` is blanket-implemented for any
+/// `tower_service::Service` over `http::Request`
+/// (`tonic-0.12.3/src/client/service.rs:31-37`), which is what lets a wrapper
+/// stand where `TokenClient::new` expects a `Channel`. `Response`, `Error`
+/// and `Future` are borrowed from `Channel`'s own implementation
+/// (`tonic-0.12.3/src/transport/channel/mod.rs:201-215`) rather than named,
+/// so nothing here depends on which body type tonic happens to use.
+#[derive(Clone)]
+struct CountedChannel {
+    inner: Channel,
+    tally: Arc<RequestTally>,
+}
+
+impl Service<http::Request<BoxBody>> for CountedChannel {
+    type Response = <Channel as Service<http::Request<BoxBody>>>::Response;
+    type Error = <Channel as Service<http::Request<BoxBody>>>::Error;
+    type Future = <Channel as Service<http::Request<BoxBody>>>::Future;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: http::Request<BoxBody>) -> Self::Future {
+        self.tally.all.fetch_add(1, Ordering::SeqCst);
+        if request.uri().path() == RPC_PATH {
+            self.tally.refresh_token.fetch_add(1, Ordering::SeqCst);
+        }
+        self.inner.call(request)
+    }
+}
+
 /// Opens one TLS channel to the live server and makes exactly one
 /// `RefreshToken` call over it.
 ///
@@ -745,10 +1046,17 @@ struct LiveBundle {
 /// `factory.rs:144-148` build a robot's: `Endpoint::from_shared` then
 /// `connect_with_connector` over
 /// [`InsecureTlsConnector`], which is what lets the port dial TLS without
-/// tonic's own `tls` feature. The resulting `Channel` goes straight to the
-/// generated token client rather than into a `TonicRobotConn`, because the
-/// robot connection attaches an SDK bearer credential this server neither
-/// wants nor reads.
+/// tonic's own `tls` feature. The resulting `Channel` goes to the generated
+/// token client wrapped in [`CountedChannel`] rather than into a
+/// `TonicRobotConn`, because the robot connection attaches an SDK bearer
+/// credential this server neither wants nor reads, and because the wrapper is
+/// what turns the one-RPC invariant into an assertion.
+///
+/// The caller runs the whole of this function under [`LIVE_CEILING`], both
+/// dials included. Nothing inside it carries a deadline of its own: `Endpoint`
+/// has no `connect_timeout` unless one is set, so a ceiling placed around the
+/// call alone would start only once a channel existed and would leave a
+/// filtered port free to hang underneath it.
 async fn one_refresh_token() -> LiveBundle {
     let channel = match Endpoint::from_shared(TARGET.to_owned())
         .expect("the live target is a valid URI")
@@ -756,11 +1064,14 @@ async fn one_refresh_token() -> LiveBundle {
         .await
     {
         Ok(channel) => {
-            eprintln!("ALPN: the h2 offer was accepted, so no retry was needed");
+            // Not "the h2 offer was accepted": nothing here reads the
+            // negotiated protocol back, so a first dial that worked is
+            // evidence of a first dial that worked and of nothing else.
+            eprintln!("DIAL: the first dial succeeded, so no retry was needed");
             channel
         }
         Err(_) => {
-            eprintln!("ALPN: the first dial failed, retrying once with an empty ALPN offer");
+            eprintln!("DIAL: the first dial failed, retrying once with an empty ALPN offer");
             let mut config = insecure_client_config();
             config.alpn_protocols.clear();
             Endpoint::from_shared(TARGET.to_owned())
@@ -771,22 +1082,40 @@ async fn one_refresh_token() -> LiveBundle {
         }
     };
 
+    let tally = Arc::new(RequestTally::default());
+    let counted = CountedChannel {
+        inner: channel,
+        tally: Arc::clone(&tally),
+    };
+
+    // `refresh_jwt_tokens` is what the robot sets and the Go handler never
+    // reads; see the module documentation for why it is set anyway.
     let request = RefreshTokenRequest {
         refresh_jwt_tokens: true,
         ..Default::default()
     };
-    let response = tokio::time::timeout(
-        RPC_CEILING,
-        TokenClient::new(channel).refresh_token(request),
-    )
-    .await
-    .expect("the live RefreshToken call answered within the ceiling")
-    .unwrap_or_else(|status| {
-        panic!(
-            "the live RefreshToken call failed with gRPC code {}",
-            status.code()
-        )
-    });
+    let response = TokenClient::new(counted)
+        .refresh_token(request)
+        .await
+        .unwrap_or_else(|status| {
+            panic!(
+                "the live RefreshToken call failed with gRPC code {}",
+                status.code()
+            )
+        });
+
+    let all = tally.all.load(Ordering::SeqCst);
+    let refreshes = tally.refresh_token.load(Ordering::SeqCst);
+    assert!(
+        all == 1,
+        "this run put {all} requests on the live connection, and the whole of the argument \
+         that it is safe to point at a production process rests on there being one"
+    );
+    assert!(
+        refreshes == 1,
+        "{refreshes} of this run's {all} live requests named the one method this file is \
+         allowed to call"
+    );
 
     let data = response
         .into_inner()
@@ -811,7 +1140,11 @@ async fn a_live_refresh_token_returns_the_bundle_this_port_would_build() {
     let watched = watched_files();
     let before = modification_times(&watched);
 
-    let live = one_refresh_token().await;
+    // The ceiling covers both dials and the call, because neither endpoint
+    // above carries a connect timeout of its own.
+    let live = tokio::time::timeout(LIVE_CEILING, one_refresh_token())
+        .await
+        .expect("the live dial and RefreshToken call finished inside the ceiling");
 
     // --- the three segments
     let segments: Vec<&str> = live.token.split('.').collect();
@@ -884,9 +1217,8 @@ async fn a_live_refresh_token_returns_the_bundle_this_port_would_build() {
     .unwrap_or_else(|reason| panic!("the live expires claim is not RFC 3339: {reason}"));
     assert!(
         is_one_calendar_month_later(iat, expires),
-        "the live expires date is not the same day of the month one month after the live iat \
-         date; a token issued on a day number the next month does not have reaches here too, \
-         because Go normalises that forward"
+        "the live expires date is not the date AddDate(0, 1, 0) reaches from the live iat \
+         date, counting an overflowing day of the month forward the way time.Date does"
     );
 
     // --- segment three
@@ -929,7 +1261,9 @@ async fn a_live_refresh_token_returns_the_bundle_this_port_would_build() {
     );
 
     // --- the robot would take it
-    the_live_token_is_one_the_robot_parser_would_accept(&live.token);
+    the_robot_parser_would_accept(&live.token).unwrap_or_else(|reason| {
+        panic!("the robot's parser would refuse the live token: {reason}")
+    });
 
     // --- and the port builds the same shape
     let ours = issue_token(&Claims::new(
@@ -1054,29 +1388,145 @@ fn the_decoders_agree_with_the_ports_own_encoder_and_formatter() {
         (western_date.year, western_date.month, western_date.day),
         (1969, 12, 31)
     );
-    // And the shapes it must refuse.
+    // And the shapes it must refuse. The zone is the interesting half: a
+    // missing zone on a bare instant is caught by the length alone, so the
+    // fractional form below is the one that pins the zone arm, because it is
+    // long enough to reach it.
     assert!(parse_rfc3339_date("1970-01-01T00:00:00").is_err());
+    assert!(parse_rfc3339_date("1970-01-01T00:00:00.5").is_err());
+    assert!(parse_rfc3339_date("1970-01-01T00:00:00.500000000").is_err());
     assert!(parse_rfc3339_date("1970-01-01 00:00:00Z").is_err());
     assert!(parse_rfc3339_date("1970-01-01T00:00:00.Z").is_err());
     assert!(parse_rfc3339_date("1970-01-01T00:00:00-0500").is_err());
     assert!(parse_rfc3339_date("1970-01-01T00:00:00Zextra").is_err());
 
+    // The ranges, which the shape alone does not carry. Go range-checks every
+    // one of these on both the fast path and the fallback; see
+    // `parse_rfc3339_date` for where each check lives.
+    assert!(parse_rfc3339_date("1970-13-01T00:00:00Z").is_err());
+    assert!(parse_rfc3339_date("1970-00-01T00:00:00Z").is_err());
+    assert!(parse_rfc3339_date("1970-01-99T00:00:00Z").is_err());
+    assert!(parse_rfc3339_date("1970-01-00T00:00:00Z").is_err());
+    assert!(parse_rfc3339_date("2023-02-29T00:00:00Z").is_err());
+    assert!(parse_rfc3339_date("1970-01-01T99:00:00Z").is_err());
+    assert!(parse_rfc3339_date("1970-01-01T24:00:00Z").is_err());
+    assert!(parse_rfc3339_date("1970-01-01T00:60:00Z").is_err());
+    assert!(parse_rfc3339_date("1970-01-01T00:00:60Z").is_err());
+    assert!(parse_rfc3339_date("1970-01-01T00:00:00+99:99").is_err());
+    assert!(parse_rfc3339_date("1970-01-01T00:00:00+25:00").is_err());
+    assert!(parse_rfc3339_date("1970-01-01T00:00:00+00:61").is_err());
+    // 29 February of a leap year is a real date, and the two zone forms Go's
+    // general parser lets through on purpose with `>` rather than `>=`
+    // (`time/format.go:1267-1277`) are accepted here for the same reason: this
+    // must not refuse what the robot takes.
+    assert!(parse_rfc3339_date("2024-02-29T23:59:59Z").is_ok());
+    assert!(parse_rfc3339_date("1970-01-01T00:00:00+24:00").is_ok());
+    assert!(parse_rfc3339_date("1970-01-01T00:00:00+00:60").is_ok());
+
     // The month rule, over dates the same formatter produced. 31 days after
     // the epoch is 1 February, 334 days is 1 December and 365 days is
     // 1 January of the next year, none of them leap-affected.
-    let day = 86_400i64;
-    let february = parse_rfc3339_date(&rfc3339_nano(WallTime::new(31 * day, 0), 0))
+    let february = parse_rfc3339_date(&rfc3339_nano(WallTime::new(31 * SECS_PER_DAY, 0), 0))
         .expect("a formatted instant parses");
-    let december = parse_rfc3339_date(&rfc3339_nano(WallTime::new(334 * day, 0), 0))
+    let december = parse_rfc3339_date(&rfc3339_nano(WallTime::new(334 * SECS_PER_DAY, 0), 0))
         .expect("a formatted instant parses");
-    let next_january = parse_rfc3339_date(&rfc3339_nano(WallTime::new(365 * day, 0), 0))
+    let next_january = parse_rfc3339_date(&rfc3339_nano(WallTime::new(365 * SECS_PER_DAY, 0), 0))
         .expect("a formatted instant parses");
-    let march = parse_rfc3339_date(&rfc3339_nano(WallTime::new(59 * day, 0), 0))
+    let march = parse_rfc3339_date(&rfc3339_nano(WallTime::new(59 * SECS_PER_DAY, 0), 0))
         .expect("a formatted instant parses");
     assert!(is_one_calendar_month_later(epoch_date, february));
     assert!(is_one_calendar_month_later(december, next_january));
     assert!(!is_one_calendar_month_later(epoch_date, march));
     assert!(!is_one_calendar_month_later(epoch_date, epoch_date));
+}
+
+/// The month rule rolls an overflowing day of the month forward, and lands
+/// where the port's own `add_months` lands.
+///
+/// This is the rule the live test uses to decide whether `expires` is a month
+/// after `iat`, and the four dates a year where it could be wrong are the ones
+/// Go normalises: 29, 30 and 31 January, and the 31st of March, May, August
+/// and October. An earlier form of the rule required the day of the month to
+/// be preserved, so a deliberate run on any of those days would have reported
+/// a parity break the port does not have.
+///
+/// Every pair below is asserted twice: once against the rule itself, and once
+/// against [`add_months`] driven at the same instant through a
+/// [`FixedWallClock`] in UTC, so the rule cannot drift away from the arithmetic
+/// the port actually performs. The fixed clock also makes the two `time.Now()`
+/// calls `Claims::new` makes read the same instant, which is what lets the
+/// third assertion put a whole issued claim set through the rule.
+#[test]
+fn the_month_rule_rolls_an_overflowing_day_forward_the_way_add_date_does() {
+    // Every pair Go's `AddDate(0, 1, 0)` reaches by counting the day forward,
+    // plus two that need no normalisation at all.
+    for (from, to) in [
+        // 31 January in a common year: February has 28 days, so 31 February
+        // is 3 March.
+        ((2027, 1, 31), (2027, 3, 3)),
+        // 31 January in a leap year: February has 29, so it is 2 March.
+        ((2028, 1, 31), (2028, 3, 2)),
+        // 30 and 29 January, the other two January days that overflow.
+        ((2027, 1, 30), (2027, 3, 2)),
+        ((2027, 1, 29), (2027, 3, 1)),
+        // 31 March, into a 30-day April.
+        ((2026, 3, 31), (2026, 5, 1)),
+        // The three other 31sts with a 30-day successor.
+        ((2026, 5, 31), (2026, 7, 1)),
+        ((2026, 8, 31), (2026, 10, 1)),
+        ((2026, 10, 31), (2026, 12, 1)),
+        // 30 November, which December has, so nothing rolls.
+        ((2026, 11, 30), (2026, 12, 30)),
+        // 31 December, which January has, and which carries the year.
+        ((2026, 12, 31), (2027, 1, 31)),
+    ] {
+        let (year, month, day) = from;
+        let issued = CalendarDate { year, month, day };
+        let expected = CalendarDate {
+            year: to.0,
+            month: to.1,
+            day: to.2,
+        };
+
+        assert!(
+            is_one_calendar_month_later(issued, expected),
+            "the rule refused the date AddDate reaches from {year}-{month:02}-{day:02}"
+        );
+        assert!(
+            !is_one_calendar_month_later(issued, issued),
+            "the rule accepted {year}-{month:02}-{day:02} as a month after itself"
+        );
+
+        // The port's own arithmetic, at midnight UTC on the same day.
+        let at = WallTime::new(
+            days_from_civil(i64::from(year), month, day) * SECS_PER_DAY,
+            0,
+        );
+        let clock = FixedWallClock::new(at, 0);
+        let rolled = parse_rfc3339_date(&rfc3339_nano(add_months(at, &clock), 0))
+            .expect("add_months formats an instant this parses");
+        assert_eq!(
+            (rolled.year, rolled.month, rolled.day),
+            to,
+            "add_months landed somewhere other than the rule's answer for \
+             {year}-{month:02}-{day:02}"
+        );
+
+        // And a whole claim set issued at that instant satisfies the rule,
+        // which is the assertion the live test makes over the server's.
+        let claims = Claims::new(
+            &Requestor::Unknown,
+            generate_token_id().expect("the OS random source answers"),
+            &clock,
+        );
+        let claim_iat = parse_rfc3339_date(&claims.iat).expect("the iat claim parses");
+        let claim_expires = parse_rfc3339_date(&claims.expires).expect("the expires claim parses");
+        assert!(
+            is_one_calendar_month_later(claim_iat, claim_expires),
+            "a claim set issued at {year}-{month:02}-{day:02} does not satisfy the rule the \
+             live test applies to the server's"
+        );
+    }
 }
 
 /// The scanner and the robot's acceptor, driven over a token this port issues.
@@ -1120,7 +1570,71 @@ fn the_ports_own_token_passes_the_scanner_and_the_robots_acceptor() {
             .expect("a string")
     ));
 
-    the_live_token_is_one_the_robot_parser_would_accept(&token);
+    the_robot_parser_would_accept(&token).expect("the port's own token passes the acceptor");
+}
+
+/// The acceptor refuses a payload missing any one of the robot's six required
+/// claims, and takes one missing `permissions`.
+///
+/// Without this the required set is unpinned: dropping a name from
+/// [`ROBOT_REQUIRED_CLAIMS`] leaves every other test in this file green,
+/// because the port's own token carries all seven claims and nothing else ever
+/// hands the acceptor a payload that is short one. The loop is driven by
+/// [`CLAIM_ORDER`], the seven keys the port writes, rather than by
+/// [`ROBOT_REQUIRED_CLAIMS`] itself, so that shrinking the required set makes
+/// this test fail rather than quietly test less.
+///
+/// The split between the six and the one is the robot's:
+/// `FromJwtToken` returns `errorMissingClaim` for each of the six
+/// (`vector-cloud/internal/token/identity/token.go:101-137`) and reads
+/// `permissions` only when it is present and is an object (`token.go:153-156`),
+/// so a payload with no `permissions` member at all parses.
+#[test]
+fn the_acceptor_needs_every_one_of_the_robots_six_claims() {
+    let token = issue_token(&Claims::new(
+        &Requestor::Unknown,
+        generate_token_id().expect("the OS random source answers"),
+        &SystemWallClock::new(),
+    ))
+    .expect("the OS random source answers");
+    let segments: Vec<&str> = token.split('.').collect();
+    let payload = decode_raw_url(segments[1]).expect("the claim segment decodes");
+    let members = object_members(&payload).expect("the claim segment is an object");
+    let keys: Vec<&str> = members.iter().map(|one| one.key.as_str()).collect();
+    assert_eq!(keys, CLAIM_ORDER);
+
+    /// The token rebuilt with one claim dropped, or with none.
+    fn rebuilt(segments: &[&str], members: &[Member], dropped: Option<&str>) -> String {
+        let kept: Vec<&Member> = members
+            .iter()
+            .filter(|one| Some(one.key.as_str()) != dropped)
+            .collect();
+        format!(
+            "{}.{}.{}",
+            segments[0],
+            encode_segment(render_object(&kept).as_bytes()),
+            segments[2]
+        )
+    }
+
+    // The renderer round trip first: a rejection below would otherwise only
+    // prove that rebuilding a payload breaks it.
+    the_robot_parser_would_accept(&rebuilt(&segments, &members, None))
+        .expect("a payload rebuilt with nothing dropped still passes");
+
+    for key in CLAIM_ORDER {
+        let verdict = the_robot_parser_would_accept(&rebuilt(&segments, &members, Some(key)));
+        if key == "permissions" {
+            verdict.unwrap_or_else(|reason| {
+                panic!("the acceptor refused a payload with no permissions claim: {reason}")
+            });
+        } else {
+            assert!(
+                verdict.is_err(),
+                "the acceptor took a payload with no {key} claim, which the robot requires"
+            );
+        }
+    }
 }
 
 /// The scanner reads the shapes a claim payload can actually carry.
