@@ -8,7 +8,10 @@ pub mod jdocs;
 pub mod sdk_ini;
 pub mod session_certs;
 
-pub use crate::store::bot_info::{BotInfo, BotInfoRobot, BotInfoWire, RobotWire};
+pub use crate::store::bot_info::{
+    BOT_INFO_FILE_MODE, BotInfo, BotInfoRobot, BotInfoWire, GLOBAL_GUID, RobotWire, bot_info_gate,
+    marshal_bot_info, read_bot_info, write_bot_info,
+};
 pub use crate::store::bot_status::{BotStatus, BotStatusKind, PingerState};
 pub use crate::store::jdocs::{
     AddOutcome, BotJdoc, JDOCS_FILE_MODE, Jdoc, JdocsDecodeError, JdocsLoadOutcome, JdocsStore,

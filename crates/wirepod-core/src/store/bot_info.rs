@@ -1,12 +1,29 @@
 //! The bot-info file: the list of authenticated robots and their GUIDs.
 
 use std::collections::BTreeMap;
+use std::io;
+use std::path::PathBuf;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
+use serde_json::value::RawValue;
 
 use crate::esn::Esn;
+use crate::gojson::{
+    Decoded, Extra, Faults, GoObject, go_marshal, store_bool, store_list, store_string,
+};
+use crate::paths::DataDir;
+use crate::persist::WriteGate;
 use crate::robot::conn::ConnTarget;
+use crate::token::stores::host_of;
+
+/// `vars.BotInfo.GlobalGUID` as `StoreBotInfo` sets it on every call
+/// (`botInfoStorer.go:135`).
+pub const GLOBAL_GUID: &str = "tni1TRsTRTaNSapjo0Y+Sw==";
+
+/// The mode every `os.WriteFile` of this file passes (`botInfoStorer.go:152`,
+/// `jdocs/server.go:52`, `:77`, `token/token.go:95`).
+pub const BOT_INFO_FILE_MODE: u32 = 0o644;
 
 /// The on-disk `botSdkInfo.json`, which Go holds in memory as
 /// `vars.BotInfo` of type `vars.RobotInfoStore` (`vars.go:89-98`).
@@ -27,7 +44,7 @@ use crate::robot::conn::ConnTarget;
 /// `serde_json`'s object map is a `BTreeMap` without the `preserve_order`
 /// feature. That is a recorded deviation; it never reaches the wire, because
 /// `/api-sdk/get_sdk_info` serialises [`BotInfoWire`] instead.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct BotInfo {
     /// The GUID used for any robot whose own GUID is empty.
     #[serde(default)]
@@ -44,7 +61,7 @@ pub struct BotInfo {
 ///
 /// The field order is Go's declaration order (`vars.go:90-97`), which is also
 /// its marshal order and therefore part of the `get_sdk_info` contract.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct BotInfoRobot {
     /// The robot's serial, in whatever case the file stores it.
     #[serde(default)]
@@ -64,7 +81,114 @@ pub struct BotInfoRobot {
     pub extra: BTreeMap<String, Value>,
 }
 
+impl GoObject for BotInfoRobot {
+    const TAGS: &'static [&'static str] = &["esn", "ip_address", "guid", "activated"];
+    const PREFIX: &'static str = "robots.";
+    const GO_TYPE: &'static str = "struct";
+
+    fn store(
+        &mut self,
+        tag: &'static str,
+        raw: &RawValue,
+        faults: &mut Faults,
+    ) -> serde_json::Result<()> {
+        match tag {
+            "esn" => store_string(&mut self.esn, raw, Self::PREFIX, tag, faults),
+            "ip_address" => store_string(&mut self.ip_address, raw, Self::PREFIX, tag, faults),
+            "guid" => store_string(&mut self.guid, raw, Self::PREFIX, tag, faults),
+            "activated" => store_bool(&mut self.activated, raw, Self::PREFIX, tag, faults),
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn unknown(&mut self) -> &mut Extra {
+        &mut self.extra
+    }
+}
+
+impl<'de> Deserialize<'de> for BotInfoRobot {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Decoded::<Self>::deserialize(deserializer)?.value)
+    }
+}
+
+impl GoObject for BotInfo {
+    const TAGS: &'static [&'static str] = &["global_guid", "robots"];
+    const PREFIX: &'static str = "";
+    const GO_TYPE: &'static str = "RobotInfoStore";
+
+    fn store(
+        &mut self,
+        tag: &'static str,
+        raw: &RawValue,
+        faults: &mut Faults,
+    ) -> serde_json::Result<()> {
+        match tag {
+            "global_guid" => {
+                store_string(&mut self.global_guid, raw, Self::PREFIX, tag, faults);
+                Ok(())
+            }
+            "robots" => store_list(&mut self.robots, raw, Self::PREFIX, tag, "[]struct", faults),
+            _ => Ok(()),
+        }
+    }
+
+    fn unknown(&mut self) -> &mut Extra {
+        &mut self.extra
+    }
+}
+
+impl<'de> Deserialize<'de> for BotInfo {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Decoded::<Self>::deserialize(deserializer)?.value)
+    }
+}
+
 impl BotInfo {
+    /// Go's `IsBotInInfo` (`botInfoStorer.go:19-26`).
+    pub fn is_bot_in_info(&self, esn: &str) -> bool {
+        self.robots
+            .iter()
+            .any(|robot| esn == robot.esn.trim().to_ascii_lowercase())
+    }
+
+    /// Go's `StoreBotInfo` (`botInfoStorer.go:130-153`) without the write.
+    ///
+    /// `false` is where Go indexes `strings.Split(thing, ":")[1]` on a `thing`
+    /// carrying no colon and takes the process down; nothing is changed and the
+    /// caller writes nothing.
+    pub fn store_bot_info(&mut self, peer_addr: &str, thing: &str) -> bool {
+        let ip_addr = host_of(peer_addr).trim();
+        let Some(bot_esn) = thing.split(':').nth(1) else {
+            tracing::debug!(
+                comp = "",
+                "thing {thing} carries no colon, not storing bot info"
+            );
+            return false;
+        };
+        let bot_esn = bot_esn.trim();
+        self.global_guid = GLOBAL_GUID.to_owned();
+        let mut append_new = true;
+        for robot in self.robots.iter_mut() {
+            if robot.esn == bot_esn {
+                append_new = false;
+                robot.ip_address = ip_addr.to_owned();
+            }
+        }
+        if append_new {
+            tracing::debug!(comp = "", "Adding {bot_esn} to bot info store");
+            self.robots.push(BotInfoRobot {
+                esn: bot_esn.to_owned(),
+                ip_address: ip_addr.to_owned(),
+                guid: String::new(),
+                activated: false,
+                extra: Extra::new(),
+            });
+        }
+        true
+    }
+
     /// Resolves a serial into the address and token needed to dial the robot,
     /// reproducing Go's scan in `newRobot` (`robot.go:333-346`).
     ///
@@ -150,5 +274,51 @@ impl<'a> From<&'a BotInfoRobot> for RobotWire<'a> {
             guid: &robot.guid,
             activated: robot.activated,
         }
+    }
+}
+
+/// Go's `json.Marshal(vars.BotInfo)` (`botInfoStorer.go:151`).
+///
+/// # Panics
+///
+/// Never: every field is a string, a bool or a list of them, and a
+/// [`serde_json::Value`] in an [`Extra`] map cannot hold a NaN.
+pub fn marshal_bot_info(info: &BotInfo) -> Vec<u8> {
+    go_marshal(info).expect("a bot-info file holds nothing unserialisable")
+}
+
+/// The gate every write of `botSdkInfo.json` goes through.
+pub fn bot_info_gate(dir: &DataDir) -> WriteGate {
+    WriteGate::new(dir.bot_info_path(), BOT_INFO_FILE_MODE)
+}
+
+/// `os.WriteFile(vars.BotInfoPath, json.Marshal(vars.BotInfo), 0644)`, which is
+/// the tail of `StoreBotInfo` and of the three other writers.
+///
+/// # Errors
+///
+/// Whatever the write reports. Go discards it.
+pub async fn write_bot_info(dir: &DataDir, info: &BotInfo) -> io::Result<()> {
+    let bytes = marshal_bot_info(info);
+    bot_info_gate(dir).write(move || bytes).await
+}
+
+/// `os.ReadFile(vars.BotInfoPath)` followed by `json.Unmarshal`
+/// (`token/token.go:59-67`), which reads the file rather than the in-memory
+/// copy.
+///
+/// # Errors
+///
+/// The read's, and a decode fault as an [`io::Error`] where Go returns the
+/// `json.Unmarshal` error.
+pub async fn read_bot_info(dir: &DataDir) -> io::Result<BotInfo> {
+    let path = PathBuf::from(dir.bot_info_path());
+    let bytes = tokio::task::spawn_blocking(move || std::fs::read(path))
+        .await
+        .map_err(io::Error::other)??;
+    let decoded: Decoded<BotInfo> = serde_json::from_slice(&bytes).map_err(io::Error::other)?;
+    match decoded.fault {
+        Some(fault) => Err(io::Error::other(fault)),
+        None => Ok(decoded.value),
     }
 }

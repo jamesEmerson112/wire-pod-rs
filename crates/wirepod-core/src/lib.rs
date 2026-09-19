@@ -71,15 +71,15 @@ pub use crate::robot::{
 };
 pub use crate::state::{AppState, AppStateBuilder, Paths, WallLogClock};
 pub use crate::store::{
-    AddOutcome, BotInfo, BotInfoRobot, BotInfoWire, BotJdoc, BotStatus, BotStatusKind,
-    DEFAULT_SECTION, IniEdit, IniError, IniFile, IniKey, IniSection, JDOCS_FILE_MODE, Jdoc,
-    JdocsDecodeError, JdocsLoadOutcome, JdocsStore, LINE_BREAK, LoadedJdocs, LoadedSessionCerts,
-    PLACEHOLDER_NAME, PingerState, ReadSessionCertsOutcome, RecurringInfo, RecurringInfoLoad,
-    RobotWire, SDK_CERT_FILE_MODE, SDK_CONFIG_FILE, SDK_INI_DIR_MODE, SDK_INI_FILE_MODE,
-    SESSION_CERT_FILE_MODE, SdkIniStore, SecondaryOutcome, SessionCertStore, cert_file_path,
-    cert_value, certificate_der, issuer_common_name, marshal_jdocs, parse_jdocs,
-    read_session_certs, sdk_config_path, session_cert_gate, session_cert_read_path,
-    write_session_cert,
+    AddOutcome, BOT_INFO_FILE_MODE, BotInfo, BotInfoRobot, BotInfoWire, BotJdoc, BotStatus,
+    BotStatusKind, DEFAULT_SECTION, GLOBAL_GUID, IniEdit, IniError, IniFile, IniKey, IniSection,
+    JDOCS_FILE_MODE, Jdoc, JdocsDecodeError, JdocsLoadOutcome, JdocsStore, LINE_BREAK, LoadedJdocs,
+    LoadedSessionCerts, PLACEHOLDER_NAME, PingerState, ReadSessionCertsOutcome, RecurringInfo,
+    RecurringInfoLoad, RobotWire, SDK_CERT_FILE_MODE, SDK_CONFIG_FILE, SDK_INI_DIR_MODE,
+    SDK_INI_FILE_MODE, SESSION_CERT_FILE_MODE, SdkIniStore, SecondaryOutcome, SessionCertStore,
+    bot_info_gate, cert_file_path, cert_value, certificate_der, issuer_common_name,
+    marshal_bot_info, marshal_jdocs, parse_jdocs, read_bot_info, read_session_certs,
+    sdk_config_path, session_cert_gate, session_cert_read_path, write_bot_info, write_session_cert,
 };
 pub use crate::timings::Timings;
 pub use crate::token::{

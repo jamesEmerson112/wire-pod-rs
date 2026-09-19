@@ -4,7 +4,10 @@
 use std::fs;
 use std::path::PathBuf;
 
-use wirepod_core::{BotInfo, BotInfoWire, Esn};
+use wirepod_core::paths::DataDir;
+use wirepod_core::{
+    BotInfo, BotInfoWire, Esn, GLOBAL_GUID, marshal_bot_info, read_bot_info, write_bot_info,
+};
 
 /// Two robots, in the byte-exact shape Go's `json.Marshal` writes.
 const TWO_ROBOTS: &str = concat!(
@@ -122,6 +125,58 @@ fn resolve_answers_none_for_an_unknown_serial() {
 
     assert_eq!(info.resolve(&Esn::new("00000000")), None);
     assert_eq!(info.resolve(&Esn::new("")), None);
+}
+
+#[test]
+fn storing_a_bot_appends_once_and_then_only_moves_its_address() {
+    let mut info = BotInfo::default();
+
+    assert!(info.store_bot_info("192.168.8.203:52301", "vic:00303f28"));
+    assert_eq!(info.global_guid, GLOBAL_GUID);
+    assert_eq!(info.robots.len(), 1);
+    assert_eq!(info.robots[0].esn, "00303f28");
+    assert_eq!(info.robots[0].ip_address, "192.168.8.203");
+    assert_eq!(info.robots[0].guid, "");
+    assert!(!info.robots[0].activated);
+    assert!(info.is_bot_in_info("00303f28"));
+    assert!(!info.is_bot_in_info("00e20100"));
+
+    assert!(info.store_bot_info("192.168.8.9:443", "vic:00303f28"));
+    assert_eq!(info.robots.len(), 1);
+    assert_eq!(info.robots[0].ip_address, "192.168.8.9");
+
+    // Where Go indexes `strings.Split(thing, ":")[1]` on a `thing` with no
+    // colon and dies.
+    let before = info.clone();
+    assert!(!info.store_bot_info("192.168.8.9:443", "00303f28"));
+    assert_eq!(info, before);
+}
+
+#[tokio::test]
+async fn the_written_file_is_gos_bytes_and_reads_back() {
+    let mut info = BotInfo::default();
+    info.store_bot_info("192.168.8.203:52301", "vic:00303f28");
+
+    let root = temp_path("bot_info_write");
+    fs::create_dir_all(root.join("jdocs")).expect("create the jdocs directory");
+    let dir = DataDir::rooted(&root);
+    write_bot_info(&dir, &info).await.expect("write the file");
+
+    let on_disk = fs::read(root.join("jdocs").join("botSdkInfo.json")).expect("read the file");
+    assert_eq!(on_disk, marshal_bot_info(&info));
+    assert_eq!(
+        String::from_utf8(on_disk).expect("utf-8"),
+        format!(
+            concat!(
+                r#"{{"global_guid":"{}","robots":[{{"esn":"00303f28","#,
+                r#""ip_address":"192.168.8.203","guid":"","activated":false}}]}}"#
+            ),
+            GLOBAL_GUID
+        )
+    );
+    assert_eq!(read_bot_info(&dir).await.expect("read it back"), info);
+
+    fs::remove_dir_all(&root).expect("remove the temporary directory");
 }
 
 #[test]
