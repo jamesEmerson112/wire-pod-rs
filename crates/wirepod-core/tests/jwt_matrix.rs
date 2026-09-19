@@ -4,10 +4,18 @@
 //! `crates/wirepod-core/tests/jwt.rs` drives one recorded claim set and pins
 //! the header, the key order and the two base64url segments. This file drives
 //! what that one holds fixed: the `claims_matrix` section runs
-//! `CreateJWT`'s claim build (`token.go:254-265`) over fourteen instants, five
-//! requestor ids and three token ids, in a zone with real daylight saving
+//! `CreateJWT`'s claim build (`token.go:254-265`) over fifteen instants, five
+//! requestor ids and three token ids, in two zones with real daylight saving
 //! transitions and in UTC, and every payload and signing input below was
 //! printed by `github.com/golang-jwt/jwt` v3.2.2 rather than written here.
+//!
+//! The two real zones are there for opposite reasons. `America/Los_Angeles`
+//! is west of Greenwich and covers the offsets `expires` carries either side
+//! of a transition and the two wall times a transition makes impossible or
+//! ambiguous. `Europe/Paris` is east of it, and the single case that runs
+//! there is what fixes the order of the two zone lookups
+//! [`wirepod_core::timefmt::add_months`] makes; no zone at a negative offset
+//! can separate them.
 //!
 //! The `jws` section is what the port cannot reproduce and does not try to.
 //! Go signs with a throwaway 1024-bit RSA key (`token.go:266-267`) whose
@@ -63,14 +71,15 @@ const CEILING: Duration = Duration::from_secs(30);
 // ---------------------------------------------------------------------------
 
 /// How many whole claim builds the `claims_matrix` section holds.
-const MATRIX_CASES: usize = 14;
+const MATRIX_CASES: usize = 15;
 
-/// The two zone names: the one with transitions and the one at offset zero.
-const MATRIX_CONSTS: usize = 2;
+/// The three zone names: the two with transitions and the one at offset zero.
+const MATRIX_CONSTS: usize = 3;
 
-/// The transition edges the section records, which are the ones
-/// `addmonth_local` records and are what the zone below is rebuilt from.
-const MATRIX_OFFSETS: usize = 6;
+/// The transition edges the section records: the six `addmonth_local` records
+/// for `America/Los_Angeles`, and `Europe/Paris`'s two 2026 transitions. Both
+/// step tables below are rebuilt from these and from nothing else.
+const MATRIX_OFFSETS: usize = 10;
 
 /// The `requestor_id` values, recorded as hex of their UTF-8 bytes.
 const MATRIX_REQUESTORS: usize = 5;
@@ -85,7 +94,7 @@ const MATRIX_LINES_PER_CASE: usize = 5;
 
 /// Every line of the section, fixtures and cases together. Stated separately
 /// from the parts so that the identity between them is itself an assertion.
-const MATRIX_LINES: usize = 86;
+const MATRIX_LINES: usize = 96;
 
 /// Every line of the `jws` section.
 const JWS_LINES: usize = 10;
@@ -345,13 +354,13 @@ fn parse_rfc3339(text: &str) -> (WallTime, i32) {
 /// A zone rebuilt from the offsets the `claims_matrix` section recorded, and
 /// from nothing else.
 ///
-/// Copied from `tests/timefmt.rs`. The probe recorded six offsets around three
-/// `America/Los_Angeles` transitions, at the last second of one offset and the
-/// first second of the next, which is enough to rebuild the step function over
-/// the span the cases cover: a transition is derived wherever two consecutive
-/// samples disagree. Six samples rather than the four a single `AddDate` would
-/// need, because a whole claim build asks the zone for an offset at five
-/// instants, not three.
+/// Copied from `tests/timefmt.rs`. The probe recorded each transition as a
+/// pair, the last second of one offset and the first second of the next, which
+/// is enough to rebuild the step function over the span the cases cover: a
+/// transition is derived wherever two consecutive samples disagree. Six
+/// samples for `America/Los_Angeles` rather than the four a single `AddDate`
+/// would need, because a whole claim build asks the zone for an offset at five
+/// instants, not three, and four for `Europe/Paris`, its two 2026 transitions.
 struct RecordedZone {
     /// The offset before the first recorded transition.
     base: i32,
@@ -437,9 +446,13 @@ struct MatrixCase {
     payload: String,
 }
 
-/// The zone and every case of the `claims_matrix` section, resolved against
+/// The zones and every case of the `claims_matrix` section, resolved against
 /// its own fixtures.
-fn matrix() -> (RecordedZone, Vec<MatrixCase>) {
+///
+/// The offset lines carry the zone they belong to, so the step tables are
+/// built per zone rather than from one pooled list: mixing two zones' samples
+/// into one table would derive transitions that neither zone has.
+fn matrix() -> (BTreeMap<&'static str, RecordedZone>, Vec<MatrixCase>) {
     let cases = recorded_cases();
     let lines = section(&cases, "claims_matrix");
 
@@ -449,8 +462,9 @@ fn matrix() -> (RecordedZone, Vec<MatrixCase>) {
         .expect("the section records no zone name");
     assert_eq!(
         zone_name.output, "America/Los_Angeles",
-        "line {}: the fake below is rebuilt from this zone's recorded offsets, \
-         so a probe that switches zones has to be re-read rather than re-run",
+        "line {}: the fakes below are rebuilt from this zone's recorded \
+         offsets, so a probe that switches zones has to be re-read rather than \
+         re-run",
         zone_name.number
     );
     let zone_utc = lines
@@ -458,14 +472,43 @@ fn matrix() -> (RecordedZone, Vec<MatrixCase>) {
         .find(|case| case.kind() == "const" && case.get("name") == "zone_utc")
         .expect("the section records no zero-offset zone name");
     assert_eq!(zone_utc.output, "UTC", "line {}", zone_utc.number);
-
-    let samples: Vec<(i64, i32)> = lines
+    let zone_paris = lines
         .iter()
-        .filter(|case| case.kind() == "offset")
-        .map(|case| (case.num("unix"), case.output_num()))
-        .collect();
-    let zone = RecordedZone::from_samples(&samples);
+        .find(|case| case.kind() == "const" && case.get("name") == "zone_paris")
+        .expect("the section records no zone east of Greenwich");
+    assert_eq!(
+        zone_paris.output, "Europe/Paris",
+        "line {}: the case that fixes the order of add_months's two zone \
+         lookups runs in this zone, and only a zone at a positive offset can \
+         fix it",
+        zone_paris.number
+    );
+
+    let mut samples: BTreeMap<&'static str, Vec<(i64, i32)>> = BTreeMap::new();
     for case in lines.iter().filter(|case| case.kind() == "offset") {
+        samples
+            .entry(case.get("zone"))
+            .or_default()
+            .push((case.num("unix"), case.output_num()));
+    }
+    let zones: BTreeMap<&'static str, RecordedZone> = samples
+        .into_iter()
+        .map(|(name, drawn)| (name, RecordedZone::from_samples(&drawn)))
+        .collect();
+    assert_eq!(
+        zones.keys().copied().collect::<Vec<&str>>(),
+        vec!["America/Los_Angeles", "Europe/Paris"],
+        "the section no longer records offsets for exactly the two zones this \
+         file rebuilds"
+    );
+    for case in lines.iter().filter(|case| case.kind() == "offset") {
+        let zone = zones.get(case.get("zone")).unwrap_or_else(|| {
+            panic!(
+                "line {}: no step table was built for {}",
+                case.number,
+                case.get("zone")
+            )
+        });
         assert_eq!(
             zone.offset_at(case.num("unix")),
             case.output_num::<i32>(),
@@ -550,12 +593,15 @@ fn matrix() -> (RecordedZone, Vec<MatrixCase>) {
         MATRIX_CASES,
         "the section no longer holds the cases this file covers"
     );
-    (zone, resolved)
+    (zones, resolved)
 }
 
-/// The clock one case runs on: the step table for the zone with transitions,
-/// and a constant zero for the two cases the probe ran in UTC.
-fn clock_for<'a>(case: &MatrixCase, zone: &'a RecordedZone) -> Box<dyn WallClock + 'a> {
+/// The clock one case runs on: the step table for the zone the case names, and
+/// a constant zero for the two cases the probe ran in UTC.
+fn clock_for<'a>(
+    case: &MatrixCase,
+    zones: &'a BTreeMap<&'static str, RecordedZone>,
+) -> Box<dyn WallClock + 'a> {
     if case.zone == "UTC" {
         assert_eq!(
             case.offset, 0,
@@ -564,6 +610,12 @@ fn clock_for<'a>(case: &MatrixCase, zone: &'a RecordedZone) -> Box<dyn WallClock
         );
         Box::new(FixedWallClock::new(case.instant, 0))
     } else {
+        let zone = zones.get(case.zone).unwrap_or_else(|| {
+            panic!(
+                "line {}: the section records no offsets for {}",
+                case.number, case.zone
+            )
+        });
         Box::new(MatrixClock {
             now: case.instant,
             zone,
@@ -572,8 +624,8 @@ fn clock_for<'a>(case: &MatrixCase, zone: &'a RecordedZone) -> Box<dyn WallClock
 }
 
 /// The claim set one case describes, built the way the token server builds it.
-fn claims_for(case: &MatrixCase, zone: &RecordedZone) -> Claims {
-    let clock = clock_for(case, zone);
+fn claims_for(case: &MatrixCase, zones: &BTreeMap<&'static str, RecordedZone>) -> Claims {
+    let clock = clock_for(case, zones);
     Claims::new(&case.requestor, case.token_id.clone(), &*clock)
 }
 
@@ -626,7 +678,7 @@ fn the_claims_matrix_section_is_exactly_the_cases_this_file_covers() {
         "the kinds in the claims_matrix section are not the ones this file reads"
     );
 
-    // The five per-case kinds have to name the same fourteen cases, or a case
+    // The five per-case kinds have to name the same fifteen cases, or a case
     // could be driven against another case's expires.
     let names: Vec<BTreeSet<&str>> = ["payload", "expires", "exp_unix", "exp_off", "signing_input"]
         .into_iter()
@@ -658,13 +710,21 @@ fn the_claims_matrix_section_is_exactly_the_cases_this_file_covers() {
 /// Every case's whole payload, byte for byte, out of [`Claims::new`] and
 /// [`marshal_claims`] rather than out of anything written here.
 ///
-/// This is the test the zone matters to. Four cases sit on or across a
+/// This is the test the zones matter to. Five cases sit on or across a
 /// daylight saving transition, so an implementation that resolved one offset
 /// for both claims, or that carried the input's offset into the result, writes
 /// a different `expires` and fails here.
+///
+/// `paris_fall_back` is the one that fixes something none of the others can.
+/// [`wirepod_core::timefmt::add_months`] looks the zone up twice, and the
+/// recording cannot say on its own where the first lookup happens. In that
+/// case it has to happen at the target wall time: taking it at the input
+/// instant a month earlier resolves `expires` to 1792886400 at `+02:00`
+/// instead of the recorded 1792890000 at `+01:00`, and this test is what
+/// says so.
 #[test]
 fn every_matrix_case_builds_the_recorded_payload() {
-    let (zone, cases) = matrix();
+    let (zones, cases) = matrix();
     for case in &cases {
         // The instant first, so a wrong reading of the recording fails as
         // itself rather than as a wrong claim.
@@ -676,7 +736,7 @@ fn every_matrix_case_builds_the_recorded_payload() {
             case.name
         );
 
-        let claims = claims_for(case, &zone);
+        let claims = claims_for(case, &zones);
         assert_eq!(
             claims.iat, case.iat,
             "line {}: {}: the iat claim",
@@ -703,12 +763,12 @@ fn every_matrix_case_builds_the_recorded_payload() {
 /// and `_`.
 #[test]
 fn every_matrix_case_builds_the_recorded_signing_input() {
-    let (zone, cases) = matrix();
+    let (zones, cases) = matrix();
     let recorded = recorded_cases();
     let inputs = by_case(&section(&recorded, "claims_matrix"), "signing_input");
 
     for case in &cases {
-        let claims = claims_for(case, &zone);
+        let claims = claims_for(case, &zones);
         let payload = marshal_claims(&claims);
         let expected = inputs
             .get(case.name)
@@ -761,7 +821,7 @@ fn every_matrix_case_builds_the_recorded_signing_input() {
 /// string compare and fails here.
 #[test]
 fn the_expires_claim_lands_on_the_recorded_instant_and_offset() {
-    let (zone, cases) = matrix();
+    let (zones, cases) = matrix();
     let recorded = recorded_cases();
     let lines = section(&recorded, "claims_matrix");
     let expires = by_case(&lines, "expires");
@@ -769,7 +829,7 @@ fn the_expires_claim_lands_on_the_recorded_instant_and_offset() {
     let exp_off = by_case(&lines, "exp_off");
 
     for case in &cases {
-        let claims = claims_for(case, &zone);
+        let claims = claims_for(case, &zones);
         let recorded_string = &expires[case.name].output;
         assert_eq!(
             &claims.expires, recorded_string,
@@ -811,10 +871,10 @@ fn the_expires_claim_lands_on_the_recorded_instant_and_offset() {
 /// as a byte diff against the Go server's tokens.
 #[test]
 fn a_claim_set_at_offset_zero_writes_z_rather_than_plus_zero() {
-    let (zone, cases) = matrix();
+    let (zones, cases) = matrix();
     let mut checked = 0usize;
     for case in cases.iter().filter(|case| case.zone == "UTC") {
-        let claims = claims_for(case, &zone);
+        let claims = claims_for(case, &zones);
         for (name, value) in [("iat", &claims.iat), ("expires", &claims.expires)] {
             assert!(
                 value.ends_with('Z'),
@@ -845,7 +905,7 @@ fn a_claim_set_at_offset_zero_writes_z_rather_than_plus_zero() {
 /// `tests/jwt.rs` asserts the order with a substring walk over one payload,
 /// which cannot see an eighth key and cannot tell a key from a value that
 /// happens to spell one. This parses the payload instead, so the key *set* is
-/// an assertion, and then walks the needles over all fourteen.
+/// an assertion, and then walks the needles over all fifteen.
 #[test]
 fn the_payload_holds_exactly_the_seven_recorded_keys_in_order() {
     let recorded = recorded_cases();
@@ -862,9 +922,9 @@ fn the_payload_holds_exactly_the_seven_recorded_keys_in_order() {
     );
     let expected: BTreeSet<&str> = keys.iter().copied().collect();
 
-    let (zone, cases) = matrix();
+    let (zones, cases) = matrix();
     for case in &cases {
-        let claims = claims_for(case, &zone);
+        let claims = claims_for(case, &zones);
         let payload = String::from_utf8(marshal_claims(&claims)).expect("the payload is UTF-8");
 
         let parsed: Value = serde_json::from_str(&payload)
@@ -903,15 +963,16 @@ fn the_payload_holds_exactly_the_seven_recorded_keys_in_order() {
 /// (`vector-cloud/internal/token/identity/identity.go:191-193`), so a claim set
 /// whose gap were zero or negative would put the refresh time in the past on
 /// arrival and the robot would ask again forever. One calendar month is never
-/// less than twenty-eight days, and the two cases whose target wall time does
-/// not exist or happens twice are the ones where that could conceivably slip.
+/// less than twenty-eight days, and the three cases whose target wall time
+/// does not exist or happens twice are the ones where that could conceivably
+/// slip.
 #[test]
 fn expires_is_always_after_iat() {
-    let (zone, cases) = matrix();
+    let (zones, cases) = matrix();
     // Three hours, the refresh lead `identity.go:192` subtracts.
     const REFRESH_LEAD: i64 = 3 * 3600;
     for case in &cases {
-        let claims = claims_for(case, &zone);
+        let claims = claims_for(case, &zones);
         let (issued, _) = parse_rfc3339(&claims.iat);
         let (expiry, _) = parse_rfc3339(&claims.expires);
         let gap = expiry.unix_secs - issued.unix_secs;
@@ -927,6 +988,9 @@ fn expires_is_always_after_iat() {
             case.name
         );
     }
+    // Without this the test would pass on an empty case list, which is what a
+    // recording the parser stopped recognising would produce.
+    assert_eq!(cases.len(), MATRIX_CASES);
 }
 
 // ---------------------------------------------------------------------------
@@ -1010,7 +1074,7 @@ impl Drop for TempDir {
 /// are separated by the whole GUID draw.
 #[tokio::test]
 async fn write_token_hash_reads_the_clock_exactly_once() {
-    let (_zone, cases) = matrix();
+    let (_zones, cases) = matrix();
     let case = cases
         .iter()
         .find(|case| case.name == "control_lower")
@@ -1124,8 +1188,8 @@ fn the_jws_section_matches_this_ports_assembly() {
         "the hard-coded header is not the one jwt.NewWithClaims writes"
     );
 
-    let (zone, cases) = matrix();
-    let claims = claims_for(&cases[0], &zone);
+    let (zones, cases) = matrix();
+    let claims = claims_for(&cases[0], &zones);
     let payload = marshal_claims(&claims);
     let signature = random_signature().expect("the OS random source refused");
     let token = encode(HEADER, &payload, &signature);

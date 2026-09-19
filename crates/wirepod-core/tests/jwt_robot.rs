@@ -8,7 +8,7 @@
 //! (`vector-cloud/internal/token/identity/identity.go:158`) and then reads the
 //! claims with `FromJwtToken`
 //! (`vector-cloud/internal/token/identity/token.go:96-161`). The
-//! `robot_parse` section of the probe runs that pair over thirty-one crafted
+//! `robot_parse` section of the probe runs that pair over thirty-five crafted
 //! tokens and records what it answers; [`accept`] below is the same pair in
 //! Rust, and [`the_acceptor_agrees_with_every_recorded_verdict`] is what holds
 //! the two together.
@@ -29,6 +29,50 @@
 //! outright, while the older dgrijalva build re-pads the segment before
 //! decoding and may accept it. Nothing this port writes is padded, so the
 //! difference is unreachable from a token wire-pod issues.
+//!
+//! # Where this acceptor is not the robot
+//!
+//! [`accept`] is a model of the robot's reader, not a translation of it, and
+//! it is deliberately narrower in six places. Every one of them refuses
+//! something the robot would have taken, none of them takes something the
+//! robot would have refused, and nothing this port writes reaches any of them.
+//! They are listed here so the next reader finds them as decisions rather than
+//! as bugs. All six are candidate numbered deviations for the docs commit.
+//!
+//! The first is base64 strictness, and it is the same difference the token
+//! hash decoder records (`token/hash.rs`, `TokenHashError::Decode`). Go's
+//! `base64` only checks the bits left over in the last group when the encoding
+//! is `Strict()`, and `DecodeSegment` uses the plain `RawURLEncoding`
+//! (`base64.go:394-396` and `:401-403` are the checks and the `enc.strict`
+//! guard on them), so Go decodes `QR` to `[65]` and `eyC` to `[123 32]` while
+//! [`decode_segment`] refuses both. A segment Go's own encoder wrote never
+//! leaves those bits set, so nothing on the wire is affected.
+//!
+//! The next four are the two JSON readers `parser.go` uses. The payload goes
+//! through `json.NewDecoder(..).Decode` (`parser.go:123-136`), which reads one
+//! JSON value and leaves whatever follows it unread, and the header through
+//! `json.Unmarshal` (`parser.go:112`); decoding a JSON `null` into a map is a
+//! no-op in both rather than an error. This file reads each segment as one
+//! whole `serde_json::Value` and requires an object, so four recorded cases
+//! part company, each one listed in [`DISCLOSED_DIVERGENCES`] and asserted
+//! there:
+//!
+//! | case | the robot | this acceptor |
+//! |---|---|---|
+//! | `payload_null` | `missing claim token_id` | `claims not object` |
+//! | `payload_trailing_bytes` | `ok` | `claims not object` |
+//! | `payload_second_value` | `ok` | `claims not object` |
+//! | `header_null` | `signing method (alg) is unspecified.` | `header not json` |
+//!
+//! The sixth is `time.ParseInLocation`'s fallback. [`parses_as_rfc3339`]
+//! models Go's `parseRFC3339` fast path only, and Go falls back to its general
+//! parser when that path fails, which reaches three spellings this file
+//! refuses: a one-digit hour (`2026-09-09T2:34:56Z`), a zone field in the
+//! general parser's wider range (`+24:00` and `+23:60` are accepted, `+30:00`
+//! and `+23:99` are not), and a comma in place of the decimal point
+//! (`2026-09-09T12:34:56,5Z`). [`rfc3339_nano`] cannot write any of the three:
+//! it always pads the hour to two digits, always writes an offset out of a
+//! real zone, and always writes a `.`.
 //!
 //! # What the verdicts are
 //!
@@ -58,14 +102,14 @@ const EXPECTED: &str =
     include_str!("../../../docs/phases/P1-robot-connect-auth/go-probe/expected.txt");
 
 /// How many crafted tokens the `robot_parse` section runs.
-const ROBOT_VERDICTS: usize = 31;
+const ROBOT_VERDICTS: usize = 35;
 
 /// How many constants it records: the required claims, the optional one, the
 /// parse layout and the two module paths.
 const ROBOT_CONSTS: usize = 5;
 
 /// Every line of the section.
-const ROBOT_LINES: usize = 36;
+const ROBOT_LINES: usize = 40;
 
 /// How many random claim sets [`every_issued_token_is_one_the_robot_accepts`]
 /// draws on top of the recorded ones.
@@ -265,9 +309,11 @@ impl Verdict {
 // ---------------------------------------------------------------------------
 
 /// The claims `FromJwtToken` requires, in the order it reads them
-/// (`identity/token.go:103`, `:108`, `:113`, `:118`, `:123`, `:131`). Every one
+/// (`identity/token.go:101`, `:106`, `:111`, `:116`, `:121`, `:131`). Every one
 /// is read with a type assertion to `string`, so a claim that is present but is
-/// a number, an object or null fails exactly the way a missing one does.
+/// a number, an object or null fails exactly the way a missing one does. The
+/// six lines cited are the assertions themselves; each one's
+/// `errorMissingClaim` sits two lines below it.
 const REQUIRED_CLAIMS: [&str; 6] = [
     "token_id",
     "token_type",
@@ -292,8 +338,17 @@ const REGISTERED_ALGS: [&str; 14] = [
 /// Written out rather than taken from the `base64` crate so that the padding
 /// rule is this file's assertion and not a crate configuration flag: the URL
 /// alphabet, no padding accepted, a trailing group of one character rejected,
-/// and the leftover bits of the last group required to be zero, all of which
-/// is what Go's decoder does.
+/// and the leftover bits of the last group required to be zero.
+///
+/// The first three are what Go's decoder does. The fourth is deliberately
+/// stricter than Go, in the safe direction: `RawURLEncoding` is not
+/// `Strict()`, and the checks that would reject non-zero leftover bits are
+/// guarded by `enc.strict` (Go's `encoding/base64/base64.go:394-396` and
+/// `:401-403`), so Go decodes `QR` to `[65]` and `eyC` to `[123 32]` where
+/// this refuses both. Refusing them can only turn a token the robot would have
+/// read into one this acceptor does not, never the reverse, and Go's own
+/// encoder never writes a segment with those bits set, so no token this server
+/// issues can reach the difference. It is disclosed in the module doc above.
 fn decode_segment(text: &str) -> Option<Vec<u8>> {
     let mut out = Vec::with_capacity(text.len() * 3 / 4);
     let mut accumulator: u32 = 0;
@@ -317,7 +372,9 @@ fn decode_segment(text: &str) -> Option<Vec<u8>> {
         }
     }
     // Six leftover bits mean a trailing group of one character, which no input
-    // can produce, and the leftover bits of a well-formed group are zero.
+    // can produce and which Go refuses too. The second half of the test is the
+    // stricter one: the leftover bits of a well-formed group are zero, and Go
+    // only checks that under `Strict()`. See the doc comment above.
     if bits >= 6 || accumulator & ((1u32 << bits) - 1) != 0 {
         return None;
     }
@@ -341,12 +398,24 @@ fn days_in_month(year: i64, month: u32) -> u32 {
 /// This is Go's `parseRFC3339` fast path, which is the one that runs for the
 /// `time.RFC3339` layout: `YYYY-MM-DDTHH:MM:SS`, an optional `.` and at least
 /// one fraction digit, then either `Z` or a signed `HH:MM`, with every field
-/// range-checked and the day checked against the month. Go falls back to its
-/// general parser when that path fails, and the fallback is not modelled here;
-/// nothing the fallback would additionally accept is a shape this port writes,
-/// and the thirty-one recorded verdicts are what decide the question either
-/// way.
+/// range-checked and the day checked against the month.
+///
+/// Go falls back to its general parser when that path fails, and the fallback
+/// is not modelled here, so three spellings the robot takes are refused: a
+/// one-digit hour (`2026-09-09T2:34:56Z`), a zone in the general parser's
+/// wider range (`+24:00` and `+23:60` accepted, `+30:00` and `+23:99` not),
+/// and a comma for the decimal point (`2026-09-09T12:34:56,5Z`). None is a
+/// shape [`rfc3339_nano`] can write, all three are refusals rather than
+/// acceptances, and the module doc lists them with the other five differences.
 fn parses_as_rfc3339(text: &str) -> bool {
+    // Every byte Go's `time.RFC3339` layout can match is ASCII, so a timestamp
+    // carrying a multibyte character cannot parse under either parser. Saying
+    // so here is also what keeps the byte-index slicing below from splitting a
+    // character: without it, a two-byte character starting at byte eighteen
+    // makes `&text[17..19]` panic on a boundary that is not one.
+    if !text.is_ascii() {
+        return false;
+    }
     let bytes = text.as_bytes();
     if bytes.len() < "2006-01-02T15:04:05".len() {
         return false;
@@ -535,7 +604,7 @@ fn assemble(header: &[u8], claims: &[u8]) -> String {
     )
 }
 
-/// The thirty-one crafted tokens, rebuilt here exactly as the probe builds
+/// The thirty-five crafted tokens, rebuilt here exactly as the probe builds
 /// them, keyed by the case name the recording gives each.
 fn crafted_tokens() -> BTreeMap<&'static str, String> {
     let valid_payload = payload(|_| {});
@@ -656,10 +725,41 @@ fn crafted_tokens() -> BTreeMap<&'static str, String> {
             ),
         ),
         ("bearer_prefix", format!("bearer {valid}")),
+        // The four the two JSON readers decide differently from this file.
+        // Each is listed in [`DISCLOSED_DIVERGENCES`] with the verdict this
+        // acceptor reaches, and the module doc says why.
+        ("payload_null", assemble(HEADER, b"null")),
+        ("payload_trailing_bytes", {
+            let mut bytes = valid_payload.clone();
+            bytes.extend_from_slice(b"zz");
+            assemble(HEADER, &bytes)
+        }),
+        ("payload_second_value", {
+            let mut bytes = valid_payload.clone();
+            bytes.extend_from_slice(br#"{"a":1}"#);
+            assemble(HEADER, &bytes)
+        }),
+        ("header_null", assemble(b"null", &valid_payload)),
     ]
     .into_iter()
     .collect()
 }
+
+/// The recorded cases where [`accept`] deliberately answers something other
+/// than the robot does, with the verdict it answers.
+///
+/// Every entry is a refusal where the robot was lenient, so it can only turn a
+/// token the robot would have read into one this acceptor does not. The module
+/// doc explains each. [`the_acceptor_agrees_with_every_recorded_verdict`]
+/// asserts both halves: that the acceptor reaches the verdict named here, and
+/// that the verdict named here is not the recorded one, so a Go toolchain or
+/// module that stopped diverging fails rather than going unnoticed.
+const DISCLOSED_DIVERGENCES: [(&str, Verdict); 4] = [
+    ("payload_null", Verdict::ClaimsNotObject),
+    ("payload_trailing_bytes", Verdict::ClaimsNotObject),
+    ("payload_second_value", Verdict::ClaimsNotObject),
+    ("header_null", Verdict::HeaderNotJson),
+];
 
 /// `base64.URLEncoding`: the URL alphabet with padding, which is the one
 /// encoder a token must never carry.
@@ -783,6 +883,9 @@ fn the_robot_parse_section_is_exactly_the_cases_this_file_covers() {
 /// only prove that this file can copy a string. Rebuilding them means the
 /// payload bytes come from [`go_marshal`] and the segments from
 /// [`encode_segment`], so the assembly is under test as well as the reader.
+///
+/// The four cases in [`DISCLOSED_DIVERGENCES`] are held to the verdict that
+/// table names instead, and to the recorded verdict not being it.
 #[test]
 fn the_acceptor_agrees_with_every_recorded_verdict() {
     let cases = recorded_cases();
@@ -790,20 +893,87 @@ fn the_acceptor_agrees_with_every_recorded_verdict() {
     let tokens = crafted_tokens();
 
     let mut checked = 0usize;
+    let mut diverged = 0usize;
     for case in lines.iter().filter(|case| case.kind() == "verdict") {
         let name = case.get("name");
         let token = tokens
             .get(name)
             .unwrap_or_else(|| panic!("line {}: no token is rebuilt for {name}", case.number));
-        assert_eq!(
-            accept(token).text(),
-            case.output,
-            "line {}: {name}",
-            case.number
-        );
+        match DISCLOSED_DIVERGENCES
+            .iter()
+            .find(|(disclosed, _)| *disclosed == name)
+        {
+            Some((_, verdict)) => {
+                assert_eq!(
+                    accept(token).text(),
+                    verdict.text(),
+                    "line {}: {name}: a disclosed divergence no longer answers \
+                     what the module doc says it answers",
+                    case.number
+                );
+                assert_ne!(
+                    verdict.text(),
+                    case.output,
+                    "line {}: {name}: Go now agrees with this acceptor, so the \
+                     disclosure in the module doc is stale",
+                    case.number
+                );
+                diverged += 1;
+            }
+            None => assert_eq!(
+                accept(token).text(),
+                case.output,
+                "line {}: {name}",
+                case.number
+            ),
+        }
         checked += 1;
     }
     assert_eq!(checked, ROBOT_VERDICTS);
+    assert_eq!(
+        diverged,
+        DISCLOSED_DIVERGENCES.len(),
+        "a disclosed divergence names a case the recording no longer holds"
+    );
+}
+
+/// A timestamp carrying a multibyte character is refused, not a panic.
+///
+/// [`parses_as_rfc3339`] reads its fields by byte index, and the seconds field
+/// is the one where a character can straddle the end of the slice: a two-byte
+/// character starting at byte eighteen leaves byte nineteen inside it, so
+/// `&text[17..19]` would split it. The claim is a string out of a token
+/// anybody can craft, so the guard is what stands between a malformed token
+/// and a panic where a refusal belongs.
+#[test]
+fn a_timestamp_whose_seconds_field_holds_a_multibyte_character_is_refused() {
+    // 'é' is two bytes, and "2026-09-09T12:34:5" is eighteen, so it occupies
+    // bytes eighteen and nineteen.
+    let straddling = "2026-09-09T12:34:5é";
+    assert_eq!(
+        straddling.len(),
+        20,
+        "the character is not where it belongs"
+    );
+    assert!(!straddling.is_char_boundary(19), "byte 19 is inside it");
+
+    let token = assemble(
+        HEADER,
+        &payload(|claims| {
+            claims.insert("iat".to_owned(), Value::from(straddling));
+        }),
+    );
+    assert_eq!(accept(&token), Verdict::TimeParse);
+
+    // And in the other timestamp, which is read by the same function one claim
+    // later.
+    let token = assemble(
+        HEADER,
+        &payload(|claims| {
+            claims.insert("expires".to_owned(), Value::from(straddling));
+        }),
+    );
+    assert_eq!(accept(&token), Verdict::TimeParse);
 }
 
 // ---------------------------------------------------------------------------

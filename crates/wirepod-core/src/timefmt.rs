@@ -273,12 +273,28 @@ pub fn legacy_stamp(at: WallTime, utc_offset_secs: i32) -> String {
 /// Go guards the pair with `if offset != 0`, which is a no-op: a zero first
 /// offset leaves the candidate instant equal to the wall value the lookup
 /// already placed inside its own interval, so the unconditional two-step below
-/// is equivalent rather than merely close. What the recording cannot pin is
-/// where the *first* lookup happens. A zone whose transitions are hours from
-/// local midnight answers the same whether the guess is taken at the target
-/// wall time or at the input instant, so the probe fixes only the pair's joint
-/// answer; the order here is Go's and the next reader has to check it against
-/// `time/time.go:1752-1760` rather than against the tests.
+/// is equivalent rather than merely close.
+///
+/// The first lookup has to happen at the target wall time, and the sign of the
+/// offset is why. `wall` below is the target civil time read as if it were
+/// UTC, so it sits `offset` seconds *after* the instant it names in a zone
+/// east of Greenwich and that far *before* it in a zone west of Greenwich.
+/// East of Greenwich a target inside the hour a fall back repeats therefore
+/// puts `wall` on the far side of the transition while the input instant, a
+/// month earlier, is still on the near side, and the two candidate instants
+/// `wall - guess` then straddle the transition and resolve different offsets.
+/// West of Greenwich `wall` leans the same way the earlier input does and both
+/// candidates land on the same side, which is why `America/Los_Angeles` cannot
+/// separate the two orders however the cases are chosen.
+///
+/// The probe's `claims_matrix` case `paris_fall_back` is the one that fixes
+/// it: 02:00 on 25 October 2026 in `Europe/Paris` is inside the repeated hour,
+/// and `AddDate` answers 1792890000 at `+01:00` where a first lookup taken at
+/// the input instant answers 1792886400 at `+02:00`. Driven against Go over
+/// every hour of 2026 and 2027 in all 597 zones the tzdata release embeds, the
+/// order written here matched `AddDate` in every case, 103 of those zones
+/// separated the two orders somewhere in that span, and every separation had a
+/// positive offset at the input instant.
 pub fn add_months(at: WallTime, clock: &dyn WallClock) -> WallTime {
     let broken = break_down(at.unix_secs, clock.utc_offset_secs_at(at.unix_secs));
     let (year, month) = if broken.date.month == 12 {

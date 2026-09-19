@@ -61,11 +61,12 @@
 //	             Level.String.
 //	claims_matrix
 //	             pkg/servers/token/token.go:254-265 again, driven end to end
-//	             over fourteen instants, five requestor ids and three token
-//	             ids, in America/Los_Angeles and in UTC. The claims section
-//	             above records one claim set and exists to pin the header, the
-//	             key order and the two segments; this one exists to pin what
-//	             moves. See "How the claims_matrix section is built" below.
+//	             over fifteen instants, five requestor ids and three token
+//	             ids, in America/Los_Angeles, in Europe/Paris and in UTC. The
+//	             claims section above records one claim set and exists to pin
+//	             the header, the key order and the two segments; this one
+//	             exists to pin what moves. See "How the claims_matrix section
+//	             is built" below.
 //	jws          pkg/servers/token/token.go:266-267, rsa.GenerateKey at 1024
 //	             bits and SignedString, recorded as invariants only: the
 //	             segment count, the signature's byte and character lengths,
@@ -78,7 +79,7 @@
 //	             vector-cloud/internal/token/identity/identity.go:158
 //	             (ParseUnverified) followed by
 //	             vector-cloud/internal/token/identity/token.go:96-161
-//	             (FromJwtToken), over thirty-one crafted tokens. See "The
+//	             (FromJwtToken), over thirty-five crafted tokens. See "The
 //	             module the robot_parse section substitutes" below.
 //	uuid         github.com/google/uuid v1.6.0's version4.go:47
 //	             (NewRandomFromReader), which is the transform uuid.New
@@ -143,8 +144,8 @@
 // # How the claims_matrix section is built
 //
 // The same library and the same seven claims, driven over what the claims
-// section holds fixed. Fourteen cases move three things at once: the instant,
-// which sits on both sides of two daylight saving transitions and inside both
+// section holds fixed. Fifteen cases move three things at once: the instant,
+// which sits on both sides of three daylight saving transitions and inside both
 // the hour a spring forward removes and the hour a fall back repeats; the
 // requestor id, which covers the default serial, a lowercase serial, an
 // uppercase one, one carrying all five characters encoding/json escapes, and
@@ -156,10 +157,11 @@
 // string, its Unix second and its offset are what let a driver check the
 // instant rather than only the formatting, and the signing input is the two
 // encoded segments. The payload line's input column carries the instant in
-// every form the driver needs, so it never has to own a tz database. The six
-// kind=offset lines are the same transition edges addmonth_local records,
+// every form the driver needs, so it never has to own a tz database. Six of the
+// ten kind=offset lines are the same transition edges addmonth_local records,
 // repeated because a driver rebuilt from them has to answer for the two extra
-// instants a whole claim build asks about.
+// instants a whole claim build asks about; the other four are Europe/Paris's
+// two 2026 transitions, for the one case that runs east of Greenwich.
 //
 // The requestor ids travel as lowercase hex of their UTF-8 bytes rather than
 // as themselves, because two of the five carry bytes no recording should hold
@@ -1044,9 +1046,22 @@ func legacyStampSection() {
 // uses and this section reuses its six transition edges, so a test can rebuild
 // one step function and drive both. The second is the degenerate case: an
 // offset of zero, which time.RFC3339Nano writes as "Z" rather than "+00:00".
+// The third is the sign the first two cannot show. America/Los_Angeles is west
+// of Greenwich, so the target wall time read as UTC sits seven or eight hours
+// before the instant it names and both of AddDate's zone lookups land on the
+// same side of a transition however the first one is taken. Europe/Paris is
+// east of it, so the same value sits one or two hours after the instant, and a
+// target inside the hour a fall back repeats separates the two lookup orders.
+//
+// Its 2026 transitions are the EU rule of Directive 2000/84/EC, 01:00 UTC on
+// the last Sunday in March and the last Sunday in October, which is where the
+// two recorded edges sit. The EU has debated ending the arrangement, so unlike
+// the US rule this one is not certain to outlive the recording; if a tzdata
+// release ever moved it, `cargo xtask go-probe --check` is what would say so.
 const (
-	matrixZone    = "America/Los_Angeles"
-	matrixZoneUTC = "UTC"
+	matrixZone      = "America/Los_Angeles"
+	matrixZoneUTC   = "UTC"
+	matrixZoneParis = "Europe/Paris"
 )
 
 // matrixRequestor is one value of the requestor_id claim, under the label the
@@ -1098,9 +1113,14 @@ func claimsMatrixSection() {
 	if err != nil {
 		panic(err)
 	}
+	paris, err := time.LoadLocation(matrixZoneParis)
+	if err != nil {
+		panic(err)
+	}
 
 	emit(sec, "kind=const name=zone", matrixZone)
 	emit(sec, "kind=const name=zone_utc", matrixZoneUTC)
+	emit(sec, "kind=const name=zone_paris", matrixZoneParis)
 
 	// The same six transition edges addmonth_local records, repeated here so
 	// this section stands on its own: Claims::new asks the zone for an offset
@@ -1117,6 +1137,25 @@ func claimsMatrixSection() {
 		t := u.In(la)
 		_, off := t.Zone()
 		emit(sec, fmt.Sprintf("kind=offset zone=%s unix=%d", matrixZone, t.Unix()),
+			fmt.Sprint(off))
+	}
+
+	// Both 2026 transition edges of the third zone, the same pair shape. Two
+	// of the four are what paris_fall_back needs: a driver rebuilt from these
+	// has to answer at the input instant, at the target wall value read as
+	// UTC, and at that value minus each of the two candidate offsets, and the
+	// fall back edge is what separates the last two. The spring forward pair
+	// is recorded with it so the step function is right across the whole of
+	// 2026 rather than only after March.
+	for _, u := range []time.Time{
+		time.Date(2026, time.March, 29, 0, 59, 59, 0, time.UTC),
+		time.Date(2026, time.March, 29, 1, 0, 0, 0, time.UTC),
+		time.Date(2026, time.October, 25, 0, 59, 59, 0, time.UTC),
+		time.Date(2026, time.October, 25, 1, 0, 0, 0, time.UTC),
+	} {
+		t := u.In(paris)
+		_, off := t.Zone()
+		emit(sec, fmt.Sprintf("kind=offset zone=%s unix=%d", matrixZoneParis, t.Unix()),
 			fmt.Sprint(off))
 	}
 
@@ -1178,16 +1217,37 @@ func claimsMatrixSection() {
 		// The year roll, at the longest fraction RFC3339Nano writes.
 		{name: "year_roll", zone: matrixZone, y: 2026, mo: time.December, d: 31, h: 12, ns: 999999999, requestor: "unknown", tokenID: "zero"},
 		// A fraction of exactly zero, which drops the decimal point entirely.
+		// Every input here is control_unknown's, so every recorded field is
+		// identical to that case's: this is a named alias and nothing else,
+		// kept because the name is what a reader looks for when asking where
+		// the missing decimal point is pinned.
 		{name: "zero_fraction", zone: matrixZone, y: 2026, mo: time.September, d: 9, h: 12, requestor: "unknown", tokenID: "zero"},
 		// Offset zero, which RFC3339Nano writes as "Z" and not "+00:00".
 		{name: "utc_control", zone: matrixZoneUTC, y: 2026, mo: time.September, d: 9, h: 12, requestor: "unknown", tokenID: "zero"},
 		{name: "utc_fraction", zone: matrixZoneUTC, y: 2026, mo: time.September, d: 9, h: 12, ns: 123456789, requestor: "robot_lower", tokenID: "mixed"},
+		// The one case a zone east of Greenwich is needed for. 02:00 on 25
+		// October 2026 is inside the hour Europe/Paris repeats, and the target
+		// wall time read as UTC lands after the transition while the instant a
+		// month earlier is still before it, so the two orders AddDate's pair of
+		// zone lookups could be taken in give different answers: 1792890000 at
+		// +01:00 as Go writes it, and 1792886400 at +02:00 if the first lookup
+		// were taken at the input instant instead. Nothing in
+		// America/Los_Angeles can show that, because a negative offset puts
+		// both candidates on the same side of the transition.
+		{name: "paris_fall_back", zone: matrixZoneParis, y: 2026, mo: time.September, d: 25, h: 2, requestor: "unknown", tokenID: "zero"},
 	}
 
 	for _, c := range cases {
-		loc := la
-		if c.zone == matrixZoneUTC {
+		var loc *time.Location
+		switch c.zone {
+		case matrixZone:
+			loc = la
+		case matrixZoneUTC:
 			loc = utc
+		case matrixZoneParis:
+			loc = paris
+		default:
+			panic("no location for zone " + c.zone)
 		}
 		// token.go:195-196: both instants come from time.Now() in time.Local,
 		// and the second is the first plus one calendar month.
@@ -1372,7 +1432,7 @@ func robotMissingClaim(claim string) string {
 }
 
 // robotParseUnverified is
-// github.com/golang-jwt/jwt@v3.2.2/parser.go:96-149, the call
+// github.com/golang-jwt/jwt@v3.2.2/parser.go:96-148, the call
 // vector-cloud/internal/token/identity/identity.go:158 makes, with each error
 // replaced by its verdict and the parsed claims handed back on success.
 //
@@ -1418,15 +1478,17 @@ func robotParseUnverified(tokenString string) (jwt.MapClaims, string) {
 // (:98 and :160) cannot be reached from identity.go:158, which always passes a
 // parsed token holding a jwt.MapClaims, so they have no case here.
 func robotFromJwtToken(claims jwt.MapClaims) string {
-	// :103, :108, :113 and :118, in that order. Every one is a type assertion
+	// :101, :106, :111 and :116, in that order. Every one is a type assertion
 	// to string, so a claim that is present but is a JSON number, object or
-	// null fails the same way a missing one does.
+	// null fails the same way a missing one does. The line cited is the
+	// assertion itself; the errorMissingClaim it reaches sits two lines below
+	// each one, at :103, :108, :113 and :118.
 	for _, name := range []string{"token_id", "token_type", "user_id", "requestor_id"} {
 		if _, ok := claims[name].(string); !ok {
 			return robotMissingClaim(name)
 		}
 	}
-	// :123-129.
+	// :121-129.
 	issuedAt, ok := claims["iat"].(string)
 	if !ok {
 		return robotMissingClaim("iat")
@@ -1538,10 +1600,15 @@ func robotParseSection() {
 
 	// The payload encoded by the padding encoder rather than the raw one.
 	// base64.RawURLEncoding rejects '=' outright, which is the difference the
-	// case is here for; if the fixed payload's length happened to be a multiple
-	// of three the padded encoder would emit no '=' at all, so a single
-	// insignificant trailing space is added in that case. It is the same JSON
-	// value either way, and the decode never gets far enough to see it.
+	// case is here for.
+	//
+	// The branch below is dormant and is here for the day the claim set
+	// changes length. The fixed payload is 238 bytes and 238 % 3 == 1, so the
+	// padded encoder already emits two '=' characters and the padded segment
+	// is the payload itself. Only a payload whose length were a multiple of
+	// three would pad to nothing, and that is the case the trailing space
+	// covers: it is the same JSON value either way, and the decode never gets
+	// far enough to see it.
 	padded := validPayload
 	if len(padded)%3 == 0 {
 		padded = append(append([]byte{}, padded...), ' ')
@@ -1556,8 +1623,9 @@ func robotParseSection() {
 	cases := []robotCase{
 		{"valid", valid},
 
-		// token.go:103, :108, :113, :118, :123 and :131: a claim that is not a
-		// string, missing being one way to not be one.
+		// token.go:101, :106, :111, :116, :121 and :131, the six type
+		// assertions: a claim that is not a string, missing being one way to
+		// not be one.
 		{"missing_token_id", drop("token_id")},
 		{"missing_token_type", drop("token_type")},
 		{"missing_user_id", drop("user_id")},
@@ -1623,6 +1691,23 @@ func robotParseSection() {
 		// parser.go:107-108, the one error message that names the caller's
 		// mistake rather than the library's.
 		{"bearer_prefix", "bearer " + valid},
+
+		// The four shapes where the two JSON readers parser.go uses part
+		// company with a port that reads both segments as one JSON value.
+		// parser.go:123-136 decodes the payload with json.NewDecoder(..)
+		// .Decode, which reads one value and leaves whatever follows it in the
+		// buffer, and decoding a JSON null into a map is a no-op rather than an
+		// error; parser.go:112 unmarshals the header the same lenient way. So
+		// the robot answers on the claims it did or did not get rather than on
+		// the segment being malformed. None of the four is a shape this server
+		// writes, and the Rust acceptor's verdicts for them are listed in the
+		// module doc of crates/wirepod-core/tests/jwt_robot.rs.
+		{"payload_null", assemble(defaultHeader, []byte(`null`))},
+		{"payload_trailing_bytes",
+			assemble(defaultHeader, append(append([]byte{}, validPayload...), "zz"...))},
+		{"payload_second_value",
+			assemble(defaultHeader, append(append([]byte{}, validPayload...), `{"a":1}`...))},
+		{"header_null", assemble([]byte(`null`), validPayload)},
 	}
 
 	for _, c := range cases {
