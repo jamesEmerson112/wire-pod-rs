@@ -330,6 +330,25 @@ impl AssetDir {
     }
 }
 
+/// The SDK ini directory the port falls back to when nobody resolved one:
+/// `./.anki_vector/`, under whatever working directory the process was started
+/// in.
+///
+/// Not a Go path. Go's `SDKIniPath` is absolute in every branch it can take
+/// (`vars.go:207-227`): the user's home directory on Windows and macOS
+/// (`:208-209`), the Android data directory (`:211`), and a path rebuilt from
+/// `os.Getwd` on Linux (`:217-225`). None of the three is relative and none of
+/// them is this, so a state that ends up here corresponds to no Go mode at all.
+///
+/// It is relative on purpose. A default rooted at the user's home directory
+/// would put an unconfigured test's writes into the real `~/.anki_vector/`,
+/// beside the ini file the production server and the Python SDK share, which is
+/// a worse failure than a fallback that is obviously nobody's directory. The
+/// boot path passes the home directory explicitly, and a builder that reaches
+/// this constant says so in a warning
+/// ([`crate::state::AppStateBuilder::build`]).
+pub const DEFAULT_SDK_INI_DIR: &str = "./.anki_vector/";
+
 /// Go's `SDKIniPath` on Windows and macOS: the user's home directory with
 /// `"/.anki_vector/"` concatenated onto it (`vars.go:207-209`).
 ///

@@ -1,5 +1,5 @@
-//! The Phase 1 stores `AppState` carries, their defaults, and the production
-//! log clock.
+//! The Phase 1 stores `AppState` carries, their defaults, the two ways the
+//! configuration changes, and the production log clock.
 //!
 //! `tests/state.rs` covers what the P4 slice put in the state; this covers what
 //! Phase 1 added. Nothing here touches the disk: every store is asserted by the
@@ -12,11 +12,12 @@ use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use tracing_subscriber::layer::SubscriberExt;
 use wirepod_core::config::config_gate;
-use wirepod_core::logger::{LogClock, LogLevel, LogRing, ManualLogClock};
-use wirepod_core::paths::{AssetDir, DataDir, sdk_ini_dir};
+use wirepod_core::logger::{LogClock, LogLayer, LogLevel, LogRing, ManualLogClock};
+use wirepod_core::paths::{AssetDir, DEFAULT_SDK_INI_DIR, DataDir, sdk_ini_dir};
 use wirepod_core::persist::WriteGate;
-use wirepod_core::test_support::{FakeConnFactory, FakeRobotConn};
+use wirepod_core::test_support::{FakeConnFactory, FakeRobotConn, install_tracing_backstop};
 use wirepod_core::timefmt::legacy_stamp;
 use wirepod_core::wallclock::{FixedWallClock, SystemWallClock, WallClock, WallTime};
 use wirepod_core::{
@@ -48,6 +49,11 @@ fn fixed_wall() -> Arc<dyn WallClock> {
 }
 
 fn factory() -> Arc<dyn RobotConnFactory> {
+    // Every state in this file is built through here, and `build` logs. The
+    // backstop has to be in place before the first test thread reaches that
+    // callsite, or `tracing` caches it as never interested and the warning
+    // assertions below read an empty ring however they are ordered.
+    install_tracing_backstop();
     let conn: Arc<dyn RobotConn> = Arc::new(FakeRobotConn::new());
     Arc::new(FakeConnFactory::connecting_to(conn))
 }
@@ -63,6 +69,42 @@ fn config_with_provider(provider: &str) -> ApiConfig {
     let mut config = ApiConfig::default();
     config.weather.provider = provider.to_owned();
     config
+}
+
+/// The instant the rings below stamp their entries with.
+///
+/// Anything but zero: `GetEntries` keeps an entry only when its `TimeMS` is
+/// strictly greater than the `since` it was asked for (`logger.go:227`), so a
+/// ring at the epoch would answer nothing to the `since` of 0 that
+/// [`recorded_lines`] asks with.
+const STAMPED_AT: i64 = 1_767_000_000_000;
+
+/// A ring wired to a subscriber, for a build that logs.
+fn ring() -> Arc<LogRing> {
+    Arc::new(LogRing::new(Arc::new(ManualLogClock::new(
+        STAMPED_AT,
+        "2026.01.02 03:04:05",
+    ))))
+}
+
+/// Installs `ring` as this thread's subscriber until the guard is dropped, over
+/// the process-wide backstop. Copied from `tests/config.rs`, where the comment
+/// on its own copy explains why both halves are load bearing: `tracing` caches
+/// one interest answer per callsite for every thread, so a callsite first
+/// reached by a test that installed nothing is cached as never interested and
+/// every later assertion on that line sees an empty ring.
+fn watching(ring: &Arc<LogRing>) -> tracing::subscriber::DefaultGuard {
+    install_tracing_backstop();
+    let subscriber = tracing_subscriber::registry().with(LogLayer::new(Arc::clone(ring)));
+    tracing::subscriber::set_default(subscriber)
+}
+
+/// Every log line one body recorded, as `(level, comp, msg)`.
+fn recorded_lines(ring: &LogRing) -> Vec<(String, String, String)> {
+    ring.get_entries(LogLevel::Debug, 0)
+        .into_iter()
+        .map(|entry| (entry.level, entry.comp, entry.msg))
+        .collect()
 }
 
 /// A [`WallClock`] that counts both of its methods, so a reading that costs two
@@ -148,12 +190,64 @@ fn a_default_state_carries_every_phase_one_store_empty() {
 }
 
 /// The default SDK ini directory is relative on purpose: Go resolves it from
-/// the user's home directory (`vars.go:208`), and defaulting there would have
-/// an unconfigured test writing into the real `~/.anki_vector/`.
+/// the user's home directory on Windows and macOS (`vars.go:208-209`), and
+/// defaulting there would have an unconfigured test writing into the real
+/// `~/.anki_vector/`.
 #[test]
 fn the_default_sdk_ini_directory_is_not_the_home_directory() {
     let state = default_state();
     assert_eq!(state.sdk_ini().dir(), sdk_ini_dir(Path::new(".")));
+    assert_eq!(
+        DEFAULT_SDK_INI_DIR,
+        sdk_ini_dir(Path::new(".")),
+        "the named fallback and the working-directory spelling have drifted apart"
+    );
+    assert_eq!(state.sdk_ini().dir(), DEFAULT_SDK_INI_DIR);
+}
+
+/// Deviation 38 is that the port resolves every path explicitly and says what
+/// it resolved rather than guessing one from the working directory. A state
+/// that falls back to [`DEFAULT_SDK_INI_DIR`] resolved nothing, so the build
+/// says so, at `WARN` and with no component, as a line Go has no counterpart
+/// for.
+#[test]
+fn a_defaulted_sdk_ini_directory_is_warned_about() {
+    let ring = ring();
+    let state = {
+        let _guard = watching(&ring);
+        default_state()
+    };
+
+    assert_eq!(state.sdk_ini().dir(), DEFAULT_SDK_INI_DIR);
+    assert_eq!(
+        recorded_lines(&ring),
+        [(
+            "WARN".to_owned(),
+            String::new(),
+            format!("SDK ini directory was not resolved; falling back to {DEFAULT_SDK_INI_DIR}")
+        )],
+        "a build that fell back to the working directory said nothing about it"
+    );
+}
+
+/// The other half: the boot path resolves the directory, so the warning is a
+/// signal rather than a line printed at every start.
+#[test]
+fn a_resolved_sdk_ini_directory_is_not_warned_about() {
+    let ring = ring();
+    let state = {
+        let _guard = watching(&ring);
+        AppState::builder(factory())
+            .sdk_ini(SdkIniStore::new("/fixed/home/.anki_vector/"))
+            .build()
+    };
+
+    assert_eq!(state.sdk_ini().dir(), "/fixed/home/.anki_vector/");
+    assert_eq!(
+        recorded_lines(&ring),
+        [],
+        "a build handed an SDK ini directory warned about it anyway"
+    );
 }
 
 /// The three stores whose identity is a path are built from whatever
@@ -179,6 +273,11 @@ fn the_config_gate_is_the_one_the_config_module_builds() {
 
     assert_eq!(state.config_gate().path(), expected.path());
     assert_eq!(state.config_gate().mode(), expected.mode());
+    assert_eq!(
+        state.config_gate().temporary_in(),
+        expected.temporary_in(),
+        "the gate puts its temporary somewhere the config module's does not"
+    );
     assert_eq!(
         state.config_gate().path(),
         data.api_config_path().to_string_lossy(),
@@ -207,9 +306,15 @@ fn the_builder_setters_replace_each_default() {
     });
 
     let state = AppState::builder(factory())
-        .paths(Paths::new(data, AssetDir::new("/fixed/assets")))
+        .paths(Paths::new(data.clone(), AssetDir::new("/fixed/assets")))
         .config(config_with_provider("openweathermap"))
-        .config_gate(WriteGate::new("/fixed/elsewhere/apiConfig.json", 0o600))
+        // The gate has to name the file the paths name, because `build`
+        // debug-asserts that it does, so what distinguishes this one from the
+        // gate the builder would have made is its mode.
+        .config_gate(WriteGate::new(
+            data.api_config_path().to_string_lossy().into_owned(),
+            0o600,
+        ))
         .jdocs(JdocsStore::new("/fixed/elsewhere/jdocs.json"))
         .session_certs(SessionCertStore::with_info(vec![RecurringInfo {
             id: "Vector-R2D2".to_owned(),
@@ -227,10 +332,13 @@ fn the_builder_setters_replace_each_default() {
     assert_eq!(state.config().weather.provider, "openweathermap");
     assert_eq!(
         state.config_gate().path(),
-        "/fixed/elsewhere/apiConfig.json",
+        data.api_config_path().to_string_lossy()
+    );
+    assert_eq!(
+        state.config_gate().mode(),
+        0o600,
         "the builder ignored the configuration gate it was handed"
     );
-    assert_eq!(state.config_gate().mode(), 0o600);
     assert_eq!(state.jdocs().path(), "/fixed/elsewhere/jdocs.json");
     assert_eq!(state.session_certs().len(), 1);
     assert_eq!(state.session_certs().snapshot()[0].esn, ESN_A);
@@ -303,6 +411,95 @@ fn replacing_the_config_swaps_the_arc_and_old_snapshots_survive() {
     );
 }
 
+/// Go's web UI writers each own a few fields of the one shared struct and
+/// mutate them in place before flushing (`config-ws/webserver.go:196-202`,
+/// `:212-217`, `:253-255`), so two of them running at once cannot drop each
+/// other's fields. Two field edits here must not either, which is why
+/// `update_config` clones, edits and stores under one hold of the write lock
+/// instead of reading a pointer, editing a clone and replacing.
+///
+/// Each thread appends to a field of its own and the count is the assertion, so
+/// a lost update is a shortfall rather than a coin toss about which write landed
+/// last. The yield inside the edit is what makes the shortfall certain rather
+/// than likely: under a read-clone-edit-replace implementation it sits in the
+/// window between the read and the write, and under this one it merely holds the
+/// guard a moment longer.
+#[test]
+fn two_disjoint_field_updates_both_survive() {
+    /// Enough rounds that a lost update is a certainty rather than a race the
+    /// scheduler might decline to run, and few enough to finish in milliseconds.
+    const ROUNDS: usize = 300;
+
+    let state = AppState::builder(factory()).build();
+
+    let weather_writer = Arc::clone(&state);
+    let weather = std::thread::spawn(move || {
+        for _ in 0..ROUNDS {
+            weather_writer.update_config(|config| {
+                config.weather.unit.push('w');
+                std::thread::yield_now();
+            });
+        }
+    });
+
+    let stt_writer = Arc::clone(&state);
+    let stt = std::thread::spawn(move || {
+        for _ in 0..ROUNDS {
+            stt_writer.update_config(|config| {
+                config.stt.language.push('s');
+                std::thread::yield_now();
+            });
+        }
+    });
+
+    weather.join().expect("the weather writer panicked");
+    stt.join().expect("the STT writer panicked");
+
+    let config = state.config();
+    assert_eq!(
+        config.weather.unit.len(),
+        ROUNDS,
+        "the weather writer's edits were overwritten by the other writer's"
+    );
+    assert_eq!(
+        config.stt.language.len(),
+        ROUNDS,
+        "the STT writer's edits were overwritten by the other writer's"
+    );
+    assert_eq!(
+        config.weather.provider,
+        ApiConfig::default().weather.provider,
+        "an edit reached a field neither writer named"
+    );
+}
+
+/// An edit sees what the edit before it published, which is what makes the two
+/// writers above additive rather than merely both present at the end.
+#[test]
+fn an_update_starts_from_the_document_the_last_one_published() {
+    let state = AppState::builder(factory())
+        .config(config_with_provider("openweathermap"))
+        .build();
+
+    state.update_config(|config| config.stt.language.push_str("en-US"));
+
+    let after = state.config();
+    assert_eq!(after.stt.language, "en-US");
+    assert_eq!(
+        after.weather.provider, "openweathermap",
+        "the edit dropped a field it never named"
+    );
+
+    let before = Arc::clone(&after);
+    state.update_config(|config| config.stt.language.push_str("-2"));
+
+    assert_eq!(state.config().stt.language, "en-US-2");
+    assert_eq!(
+        before.stt.language, "en-US",
+        "a handler part way through a request had its configuration changed underneath it"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The wall clock
 // ---------------------------------------------------------------------------
@@ -350,6 +547,23 @@ fn the_log_clock_spends_one_reading_on_both_fields() {
     assert_eq!(
         reading.stamp, "2025.12.31 19:00:00",
         "the stamp is not the reading formatted at the reading's own offset"
+    );
+}
+
+/// Go's `UnixMilli` is `t.unixSec()*1e3 + int64(t.nsec())/1e6` (the Go standard
+/// library's `time/time.go:1434-1436`) over a nanosecond field that is always in
+/// `[0, 1e9)`, so an instant half a millisecond before the epoch is
+/// `-1000 + 999`, which is `-1`. Truncating the instant as a whole toward zero
+/// would answer `0`, and nothing else in this file would notice.
+#[test]
+fn a_reading_before_the_epoch_floors_its_millisecond_field() {
+    let before_epoch = WallTime::new(-1, 999_500_000);
+    let clock = WallLogClock::new(Arc::new(FixedWallClock::new(before_epoch, 0)));
+
+    assert_eq!(
+        clock.now().unix_millis,
+        -1,
+        "a pre-epoch reading was truncated toward zero rather than following Go's UnixMilli"
     );
 }
 

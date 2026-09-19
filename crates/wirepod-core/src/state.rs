@@ -19,13 +19,28 @@
 //! readers that already cloned keep the document they started with, which is
 //! the one thing Go's shared global cannot offer.
 //!
-//! Nothing here derives [`Debug`]. The configuration carries the operator's
-//! provider keys and the bot-info file carries the robots' GUIDs, and a
-//! `{:?}` of this struct would put both into the log ring the web UI serves.
-//! The individual stores that could leak a secret redact their own `Debug`
-//! (see [`crate::token::stores::TokenStores`]); this type simply has none.
+//! What that costs is what [`AppState::update_config`] exists to pay back. Go's
+//! web UI writers reach into one shared struct, change the few fields each of
+//! them owns and flush it (`config-ws/webserver.go:196-202`, `:212-217`,
+//! `:253-255`). Nothing orders them, but because they mutate in place they
+//! cannot drop one another's fields. A clone, an edit and a
+//! [`AppState::replace_config`] can: two handlers that started from the same
+//! pointer each publish a document missing the other's edit, and the later
+//! write wins whole. So a field edit is one call that clones, edits and stores
+//! under a single hold of the write lock, and [`AppState::replace_config`] is
+//! left to the boot path, which replaces the whole document and has no
+//! concurrent writer to lose.
+//!
+//! Nothing here derives [`Debug`], and that guards exactly one thing: a `{:?}`
+//! of the whole state. It is not a redaction. [`ApiConfig`] derives a full
+//! [`Debug`] of its own (`config.rs:264`), and so do [`BotInfo`] and its rows
+//! (`store/bot_info.rs:30`, `:47`), so anything that reaches through an
+//! accessor and formats what it gets back still prints the operator's provider
+//! keys and the robots' GUIDs. The stores that genuinely redact say so in a
+//! hand-written `Debug` (see [`crate::token::stores::TokenStores`]). Giving
+//! [`ApiConfig`] a redacting `Debug` is the real fix and belongs to a later
+//! commit, which will own `config.rs`.
 
-use std::path::Path;
 use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
@@ -33,7 +48,7 @@ use crate::clock::{Clock, SystemClock};
 use crate::config::ApiConfig;
 use crate::esn::Esn;
 use crate::logger::{LogClock, LogInstant, LogRing};
-use crate::paths::{AssetDir, DataDir, sdk_ini_dir};
+use crate::paths::{AssetDir, DEFAULT_SDK_INI_DIR, DataDir};
 use crate::persist::WriteGate;
 use crate::robot::conn::RobotConnFactory;
 use crate::robot::registry::{GetRobotError, RobotEntry, RobotRegistry};
@@ -100,19 +115,6 @@ impl Default for Paths {
     }
 }
 
-/// The default SDK ini directory: `./.anki_vector/`.
-///
-/// Go resolves this one from the user's home directory on every platform it
-/// supports here (`vars.go:208`), and there is no relative literal to fall back
-/// on. Defaulting to the home directory would put an unconfigured test's writes
-/// in the real `~/.anki_vector/`, beside the ini file the production server and
-/// the Python SDK share, so the default is rooted at the working directory like
-/// every other one above and the boot path passes the home directory
-/// explicitly.
-fn default_sdk_ini_dir() -> String {
-    sdk_ini_dir(Path::new("."))
-}
-
 /// The production [`LogClock`]: Go's `time.Now()` at the top of `logf`.
 ///
 /// Go reads the clock once per line (`logger.go:138`) and spends that one
@@ -145,11 +147,17 @@ impl LogClock for WallLogClock {
         let at = self.wall.now();
         let offset = self.wall.utc_offset_secs_at(at.unix_secs);
         LogInstant {
-            // Go's `UnixMilli` (`logger.go:141`): seconds times a thousand
+            // Go's `UnixMilli` (`logger.go:141`), which is
+            // `t.unixSec()*1e3 + int64(t.nsec())/1e6` in the Go standard
+            // library (`time/time.go:1434-1436`): seconds times a thousand
             // plus the truncated fraction. [`crate::wallclock::WallTime`] keeps
             // its nanosecond field in `[0, 1e9)` however far the seconds are
             // from the epoch, exactly as `time.Time` does, so this is Go's
-            // arithmetic and not an approximation of it. The saturation covers
+            // arithmetic and not an approximation of it. Before the epoch the
+            // seconds carry the whole negative part and the fraction is added
+            // back, so half a millisecond before the epoch is `-1000 + 999`,
+            // which is `-1` and not the `0` that truncating the instant as a
+            // whole toward zero would give. The saturation covers
             // a clock set roughly three hundred million years out, where Go
             // would wrap; nothing observes the difference and a panic inside
             // the logger would be worse than either.
@@ -275,16 +283,59 @@ impl AppState {
     ///
     /// The lock is taken and released inside this call, so the returned
     /// document can be held across an `.await` and read as many times as the
-    /// handler likes. It is a snapshot: a [`AppState::replace_config`] that
-    /// lands afterwards is invisible to it, which is what a handler part way
-    /// through answering a request wants, and what Go's shared global denies
-    /// it.
+    /// handler likes. It is a snapshot: an [`AppState::update_config`] or a
+    /// [`AppState::replace_config`] that lands afterwards is invisible to it,
+    /// which is what a handler part way through answering a request wants, and
+    /// what Go's shared global denies it.
     pub fn config(&self) -> Arc<ApiConfig> {
         Arc::clone(&self.config.read().unwrap_or_else(PoisonError::into_inner))
     }
 
-    /// Replaces the configuration, which the web UI's save and the boot
-    /// rewrite both do.
+    /// Changes some of the configuration's fields and publishes the result,
+    /// under one hold of the write lock.
+    ///
+    /// This is the call a handler that owns a few fields makes. Go's web UI
+    /// writers own a few each and reach into the one shared struct to set them:
+    /// the weather handler writes three fields and flushes
+    /// (`config-ws/webserver.go:196-202`), the knowledge handler decodes
+    /// straight into its own sub-struct (`:212-217`), and the STT handler sets
+    /// the language and the setup flag (`:253-255`). Nothing orders those three
+    /// in Go, and nothing needs to: mutating one struct in place cannot drop a
+    /// field somebody else just set.
+    ///
+    /// Reading the pointer, cloning it, editing the clone and calling
+    /// [`AppState::replace_config`] would drop one. Two handlers that read the
+    /// same pointer would each publish a document carrying their own edit and
+    /// missing the other's, and whichever wrote second would win the whole
+    /// document. Taking the write guard first is what closes that window: the
+    /// clone `edit` receives is made under the guard, so it already carries
+    /// every edit published before it, and no other writer can be between its
+    /// own clone and its own store.
+    ///
+    /// `edit` therefore runs with the write lock held. It must not touch this
+    /// state again — [`AppState::config`] would deadlock — and it cannot await,
+    /// because it is a plain closure rather than a future, which is also why
+    /// the crate's `deny(clippy::await_holding_lock)` has nothing to say about
+    /// it. Readers are unaffected either way: one that already cloned the
+    /// pointer keeps the document it started with, exactly as after a replace.
+    ///
+    /// Like [`AppState::replace_config`], this is memory only; the file is
+    /// written through [`AppState::config_gate`].
+    pub fn update_config(&self, edit: impl FnOnce(&mut ApiConfig)) {
+        let mut current = self.config.write().unwrap_or_else(PoisonError::into_inner);
+        let mut next = (**current).clone();
+        edit(&mut next);
+        *current = Arc::new(next);
+    }
+
+    /// Replaces the whole configuration document, which is what the boot path
+    /// does once it has read or created the file.
+    ///
+    /// Whole-document replacement, not a field edit: whatever the state held is
+    /// gone, so a caller that means to change some fields and keep the rest
+    /// calls [`AppState::update_config`] instead. The boot path is the caller
+    /// with nothing to lose, because it runs before any handler is serving and
+    /// the document it installs is the file it just parsed.
     ///
     /// This is memory only. The file is written through
     /// [`AppState::config_gate`], and the two are separate calls because Go's
@@ -433,6 +484,14 @@ impl AppStateBuilder {
 
     /// Writes `apiConfig.json` through `gate` rather than through the one
     /// [`crate::config::config_gate`] builds for the data directory.
+    ///
+    /// The only legitimate override is a test pointing the whole state at a
+    /// temporary directory, and such a test hands a gate naming the same file
+    /// [`AppStateBuilder::paths`] does: [`AppStateBuilder::build`]
+    /// debug-asserts that the two agree, because a gate over one file beside a
+    /// data directory naming another orders nothing between them. What the
+    /// override is for is the rest of the gate — the mode and the temporary's
+    /// placement — which the test can then choose.
     pub fn config_gate(mut self, gate: WriteGate) -> Self {
         self.config_gate = Some(gate);
         self
@@ -452,7 +511,9 @@ impl AppStateBuilder {
     }
 
     /// Writes the SDK ini through `sdk_ini` rather than through an empty store
-    /// at `./.anki_vector/`. The boot path passes the home directory here.
+    /// at [`DEFAULT_SDK_INI_DIR`], which [`AppStateBuilder::build`] warns
+    /// about. The boot path passes the home directory here, which is what keeps
+    /// that warning a signal rather than a line every boot prints.
     pub fn sdk_ini(mut self, sdk_ini: SdkIniStore) -> Self {
         self.sdk_ini = Some(sdk_ini);
         self
@@ -471,6 +532,15 @@ impl AppStateBuilder {
     /// The binary passes the ring it already gave [`crate::logger::LogLayer`],
     /// because a ring nothing writes to would leave the web UI's three log
     /// handlers permanently empty.
+    ///
+    /// The ring has to have been built over the same [`WallClock`] that reaches
+    /// [`AppStateBuilder::wall`], because a ring carries its own
+    /// [`LogClock`] and nothing here can reach in and change it. Wire the two
+    /// to different clocks and a line's stamp and the token server's claims
+    /// read different times, which is exactly the disagreement
+    /// [`WallLogClock`] exists to prevent within one line. A builder that sets
+    /// neither gets the pairing for free: [`AppStateBuilder::build`] wraps its
+    /// own wall clock in a [`WallLogClock`] and builds the ring over that.
     pub fn logs(mut self, logs: Arc<LogRing>) -> Self {
         self.logs = Some(logs);
         self
@@ -497,12 +567,37 @@ impl AppStateBuilder {
         let config_gate = self
             .config_gate
             .unwrap_or_else(|| crate::config::config_gate(self.paths.data()));
+        // A gate over one file beside a data directory naming another is a
+        // wiring mistake with no symptom until something writes: the gate's
+        // holders would order their writes against each other while writing a
+        // file nothing else reads. The defaulted gate cannot disagree, so this
+        // only ever catches a caller that reached
+        // [`AppStateBuilder::config_gate`], which is a test.
+        debug_assert_eq!(
+            config_gate.path(),
+            self.paths.data().api_config_path().to_string_lossy(),
+            "the configuration gate and the resolved paths name different files"
+        );
         let jdocs = self
             .jdocs
             .unwrap_or_else(|| JdocsStore::new(self.paths.data().jdocs_path()));
-        let sdk_ini = self
-            .sdk_ini
-            .unwrap_or_else(|| SdkIniStore::new(default_sdk_ini_dir()));
+        let sdk_ini = self.sdk_ini.unwrap_or_else(|| {
+            // Deviation 38: the port resolves every path explicitly and says
+            // what it resolved, rather than guessing one from the working
+            // directory the way `vars.go:213-225` does. Reaching this arm means
+            // nobody resolved this one, and the fallback corresponds to no Go
+            // mode at all — Go's `SDKIniPath` is absolute in all three of its
+            // branches (`vars.go:207-227`) — so the line is the disclosure that
+            // `sdk_config.ini` is about to be written somewhere that is nobody's
+            // home directory and that moves with the process's working
+            // directory.
+            tracing::warn!(
+                target: "wirepod_core::state",
+                comp = "",
+                "SDK ini directory was not resolved; falling back to {DEFAULT_SDK_INI_DIR}"
+            );
+            SdkIniStore::new(DEFAULT_SDK_INI_DIR)
+        });
         let registry = RobotRegistry::new(self.factory)
             .with_timings(self.timings)
             .with_clock(Arc::clone(&clock))
