@@ -4060,6 +4060,9 @@ dependencies = [
 [[package]]
 name = "wirepod-intent"
 version = "0.1.0"
+dependencies = [
+ "regex",
+]
 
 [[package]]
 name = "wirepod-llm"

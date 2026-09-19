@@ -37,6 +37,7 @@ protox = "0.7"
 # The feature set spike S1 resolved with: the ring provider only, no aws-lc-rs,
 # and `tls12` because Vector's gateway is old enough to need it.
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+regex = "1"
 rustls-pemfile = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
