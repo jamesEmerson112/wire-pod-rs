@@ -3,12 +3,10 @@ target/
 spikes/**/vendor/
 *.log
 dump.txt
-# `docs/` holds the phase specs, which are tracked, next to scratch notes, which are
-# not. `docs/*` rather than `docs/` so that git still descends into the directory and
-# the negation below can take effect; an ignored directory is never opened at all.
+# `docs/` holds the tracked documents listed below next to scratch notes, which are
+# not tracked. `docs/*` rather than `docs/` so that git still descends into the
+# directory and the negations can take effect.
 docs/*
-!docs/phases/
-# `docs/plan.md` is the authoritative copy of the approved plan and is tracked. It
-# was added before the `docs/*` rule and so survived it, which left the rule and the
-# tree disagreeing; the negation below is what makes the intent explicit.
-!docs/plan.md
+!docs/translation.md
+!docs/pending-upstream.md
+!docs/archive/

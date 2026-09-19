@@ -1,20 +1,8 @@
-//! Repo maintenance tasks. Currently: `sync-assets` and `go-probe`.
+//! Repo maintenance tasks. Currently: `sync-assets`.
 
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-
-/// Go programs under `docs/phases/` whose recorded stdout the Rust tests read
-/// through `include_str!`. Each is a directory holding `main.go`, its own
-/// `go.mod` so it never joins this workspace or the Go server's module, and the
-/// `expected.txt` this command writes and checks. Paths are relative to the
-/// repo root and are written with `/` because they are joined, never printed
-/// raw.
-const PROBE_DIRS: &[&str] = &[
-    "docs/phases/P1-robot-connect-auth/go-probe",
-    "docs/phases/P1-robot-connect-auth/ini-probe",
-    "docs/phases/P1-robot-connect-auth/store-probe",
-];
 
 /// (source path relative to --from, destination relative to assets/)
 const ASSET_MAP: &[(&str, &str)] = &[
@@ -58,20 +46,7 @@ fn main() {
                 );
             }
         }
-        Some("go-probe") => {
-            let mut check = false;
-            for a in &args[1..] {
-                match a.as_str() {
-                    "--check" => check = true,
-                    other => die(&format!("unknown flag {other}")),
-                }
-            }
-            go_probe(check);
-        }
-        _ => die(concat!(
-            "usage: cargo xtask sync-assets --from <go-repo-root> [--check]\n",
-            "       cargo xtask go-probe [--check]"
-        )),
+        _ => die("usage: cargo xtask sync-assets --from <go-repo-root> [--check]"),
     }
 }
 
@@ -176,103 +151,4 @@ fn hash_file(p: &Path) -> Option<String> {
     let mut h = Sha256::new();
     h.update(&data);
     Some(format!("{:x}", h.finalize()))
-}
-
-/// Runs every Go probe under `PROBE_DIRS` and either rewrites its
-/// `expected.txt` or checks the committed recording against a fresh run.
-///
-/// With no `go` on the PATH this prints a SKIP line and returns without
-/// failing, so a CI runner that carries no Go toolchain stays green: the
-/// recordings are committed artifacts and only regenerating or auditing them
-/// needs Go.
-fn go_probe(check: bool) {
-    match std::process::Command::new("go").arg("version").output() {
-        Ok(_) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            println!(
-                "go-probe: SKIP (no `go` on PATH). The expected.txt recordings are committed, \
-                 so only regenerating or auditing them needs a Go toolchain."
-            );
-            return;
-        }
-        Err(e) => die(&format!("go-probe: could not run `go version`: {e}")),
-    }
-
-    let root = repo_root();
-    let mut drift = 0usize;
-    for rel in PROBE_DIRS {
-        let dir = root.join(rel);
-        let produced = run_probe(&dir, rel);
-        let expected = dir.join("expected.txt");
-        if check {
-            let recorded = std::fs::read_to_string(&expected).unwrap_or_else(|e| {
-                die(&format!(
-                    "go-probe --check: cannot read {rel}/expected.txt: {e}"
-                ))
-            });
-            if let Some((n, want, got)) = first_difference(&recorded, &produced) {
-                eprintln!("go-probe --check: {rel}/expected.txt differs at line {n}");
-                eprintln!("  recorded: {want}");
-                eprintln!("  produced: {got}");
-                drift += 1;
-            }
-        } else {
-            std::fs::write(&expected, &produced).unwrap_or_else(|e| {
-                die(&format!("go-probe: cannot write {rel}/expected.txt: {e}"))
-            });
-            let lines = produced.lines().count();
-            println!("go-probe: wrote {rel}/expected.txt ({lines} lines)");
-        }
-    }
-
-    if check {
-        if drift > 0 {
-            eprintln!(
-                "go-probe --check: {drift} recording(s) out of date; \
-                 rerun `cargo run -p xtask -- go-probe`"
-            );
-            std::process::exit(1);
-        }
-        println!("go-probe: clean ({} probe(s))", PROBE_DIRS.len());
-    }
-}
-
-/// `go run .` in one probe directory, returning its stdout. Each probe carries
-/// its own `go.mod`, so this never touches the Rust workspace or the Go
-/// server's module.
-fn run_probe(dir: &Path, rel: &str) -> String {
-    let out = std::process::Command::new("go")
-        .args(["run", "."])
-        .current_dir(dir)
-        .output()
-        .unwrap_or_else(|e| die(&format!("go-probe: cannot run `go run .` in {rel}: {e}")));
-    if !out.status.success() {
-        eprint!("{}", String::from_utf8_lossy(&out.stderr));
-        die(&format!("go-probe: `go run .` failed in {rel}"));
-    }
-    String::from_utf8(out.stdout)
-        .unwrap_or_else(|e| die(&format!("go-probe: {rel} produced non-UTF-8 output: {e}")))
-}
-
-/// The 1-based number of the first line that differs, with both sides rendered
-/// through `{:?}` so a stray carriage return or trailing space is visible.
-///
-/// The split is on `'\n'` rather than `str::lines` on purpose: `lines` swallows
-/// a trailing newline, so a recording that differs only by its last byte would
-/// compare equal. Splitting leaves that difference as a final empty element on
-/// one side, reported as `<end of file>` on the other.
-fn first_difference(recorded: &str, produced: &str) -> Option<(usize, String, String)> {
-    let render = |s: Option<&str>| match s {
-        Some(s) => format!("{s:?}"),
-        None => "<end of file>".to_string(),
-    };
-    let a: Vec<&str> = recorded.split('\n').collect();
-    let b: Vec<&str> = produced.split('\n').collect();
-    for n in 0..a.len().max(b.len()) {
-        let (x, y) = (a.get(n).copied(), b.get(n).copied());
-        if x != y {
-            return Some((n + 1, render(x), render(y)));
-        }
-    }
-    None
 }

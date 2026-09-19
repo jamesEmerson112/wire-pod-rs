@@ -41,8 +41,7 @@ use wirepod_core::token::stores::{
 };
 
 /// The Go recording every expectation below is read from.
-const EXPECTED: &str =
-    include_str!("../../../docs/phases/P1-robot-connect-auth/store-probe/expected.txt");
+const EXPECTED: &str = include_str!("data/store-probe/expected.txt");
 
 /// The stamp the ring is fixed at. Nothing here reads it; it only has to be
 /// stable so no assertion depends on the wall clock.

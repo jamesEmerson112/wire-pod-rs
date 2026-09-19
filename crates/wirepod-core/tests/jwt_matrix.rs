@@ -56,8 +56,7 @@ use wirepod_core::token::jwt::{
 };
 use wirepod_core::wallclock::{FixedWallClock, WallClock, WallTime};
 
-const EXPECTED: &str =
-    include_str!("../../../docs/phases/P1-robot-connect-auth/go-probe/expected.txt");
+const EXPECTED: &str = include_str!("data/go-probe/expected.txt");
 
 /// Seconds in a day, for building an instant out of a recorded civil date.
 const SECS_PER_DAY: i64 = 86_400;

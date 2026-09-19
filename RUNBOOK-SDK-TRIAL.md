@@ -8,7 +8,7 @@ server keeps serving 80, 443, 8080 and 8084 throughout.
 This is the first time the ported handlers see a real socket and a real robot.
 Every test in `wirepod-server` drives the router through `tower`'s `oneshot`
 against a `FakeConnFactory`, so three of the questions in
-`docs/phases/P4-sdk-app/deviations.md` can only be answered here.
+`docs/archive/phases/P4-sdk-app/deviations.md` can only be answered here.
 
 ## What this proves, and what it does not
 

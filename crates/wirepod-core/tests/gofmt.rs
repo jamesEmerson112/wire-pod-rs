@@ -8,7 +8,7 @@
 
 use wirepod_core::{GoJsonError, go_format_f32, go_json_f64, go_json_f64_raw};
 
-const EXPECTED: &str = include_str!("../../../docs/phases/P4-sdk-app/gofmt-probe/expected.txt");
+const EXPECTED: &str = include_str!("data/gofmt-probe/expected.txt");
 
 /// Parses a `math.Float32frombits(0x...)` or `math.Float64frombits(0x...)`
 /// literal into its raw bits.

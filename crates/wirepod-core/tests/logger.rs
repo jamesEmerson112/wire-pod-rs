@@ -28,8 +28,7 @@ use wirepod_core::logger::{
 use wirepod_core::test_support::{FakeReceiver, install_tracing_backstop};
 use wirepod_core::{ConnError, EventLoopExit, EventOwner, StatusCode, run_event_stream};
 
-const EXPECTED: &str =
-    include_str!("../../../docs/phases/P1-robot-connect-auth/go-probe/expected.txt");
+const EXPECTED: &str = include_str!("data/go-probe/expected.txt");
 
 /// The stamp every `legacystamp` line layout case in the probe was recorded
 /// with, so a clock fixed here reproduces the recorded bytes exactly.

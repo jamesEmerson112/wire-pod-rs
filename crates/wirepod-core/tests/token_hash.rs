@@ -25,8 +25,7 @@ use wirepod_core::{
     new_from_hash,
 };
 
-const EXPECTED: &str =
-    include_str!("../../../docs/phases/P1-robot-connect-auth/go-probe/expected.txt");
+const EXPECTED: &str = include_str!("data/go-probe/expected.txt");
 
 /// One recorded case: its section, its `key=value` inputs and its unquoted
 /// output.

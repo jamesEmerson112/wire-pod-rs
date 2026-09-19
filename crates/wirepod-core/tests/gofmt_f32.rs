@@ -24,8 +24,7 @@ use std::collections::BTreeMap;
 
 use wirepod_core::{GoJsonError, go_json_f32, go_json_f32_raw, go_json_f64};
 
-const EXPECTED: &str =
-    include_str!("../../../docs/phases/P1-robot-connect-auth/go-probe/expected.txt");
+const EXPECTED: &str = include_str!("data/go-probe/expected.txt");
 
 /// One parsed line: the raw input column, its pairs in order, the unquoted
 /// output and the line number every failure message names.

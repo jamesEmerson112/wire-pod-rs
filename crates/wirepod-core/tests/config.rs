@@ -42,12 +42,10 @@ use wirepod_core::persist::WriteGate;
 use wirepod_core::test_support::install_tracing_backstop;
 
 /// The committed copy of this machine's `apiConfig.json`, redacted.
-const FIXTURE: &str =
-    include_str!("../../../docs/phases/P1-robot-connect-auth/fixtures/apiConfig.json");
+const FIXTURE: &str = include_str!("data/fixtures/apiConfig.json");
 
 /// The Go probe recording the `float32` renderings come from.
-const EXPECTED: &str =
-    include_str!("../../../docs/phases/P1-robot-connect-auth/go-probe/expected.txt");
+const EXPECTED: &str = include_str!("data/go-probe/expected.txt");
 
 /// What the live file measured when it was copied. A second statement of the
 /// number, so that a fixture regenerated from a changed live file fails here

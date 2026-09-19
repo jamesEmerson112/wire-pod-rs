@@ -38,8 +38,7 @@ use wirepod_core::store::sdk_ini::{
 };
 use wirepod_core::store::session_certs::SESSION_CERT_FILE_MODE;
 
-const EXPECTED: &str =
-    include_str!("../../../docs/phases/P1-robot-connect-auth/ini-probe/expected.txt");
+const EXPECTED: &str = include_str!("data/ini-probe/expected.txt");
 
 /// A ceiling on every awaited operation, generous enough that only a hang
 /// reaches it. Real durations, because this crate's tests never pause the

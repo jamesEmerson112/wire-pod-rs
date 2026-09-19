@@ -43,8 +43,7 @@ use wirepod_core::store::jdocs::{
 use wirepod_core::test_support::install_tracing_backstop;
 
 /// The committed copy of this machine's `jdocs.json`, redacted.
-const FIXTURE: &str =
-    include_str!("../../../docs/phases/P1-robot-connect-auth/fixtures/jdocs.json");
+const FIXTURE: &str = include_str!("data/fixtures/jdocs.json");
 
 /// What the live file measured when it was copied. A second statement of the
 /// number, so that a fixture regenerated from a changed live file fails here

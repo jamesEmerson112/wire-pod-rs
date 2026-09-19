@@ -40,8 +40,7 @@ use wirepod_core::token::jwt::{
 };
 use wirepod_core::wallclock::{FixedWallClock, WallClock, WallTime};
 
-const EXPECTED: &str =
-    include_str!("../../../docs/phases/P1-robot-connect-auth/go-probe/expected.txt");
+const EXPECTED: &str = include_str!("data/go-probe/expected.txt");
 
 /// How many cases the `claims` section holds. A second statement of the number,
 /// so that a case added to the probe fails here rather than going untested.
