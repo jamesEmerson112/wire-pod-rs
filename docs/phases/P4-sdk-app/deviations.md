@@ -846,13 +846,82 @@ reports the provider's signature schemes.
 
 ---
 
+## 28. The JWT signature slot carries drawn bytes, not an RS512 signature
+
+This is the first of the numbers Phase 1 reserved to be written out. It sits here, out of sequence
+with the twenty-four entries above, because those describe the SDK-app slice and this describes the
+token service; the reserved list below carries the rest and marks this one landed.
+
+**Go.** `CreateJWT` builds the token with `jwt.NewWithClaims(jwt.SigningMethodRS512, ...)`
+(`token.go:254`), generates a fresh 1024-bit RSA key with `rsa.GenerateKey(rand.Reader, 1024)`
+(`token.go:266`), and signs the two encoded segments with it (`token.go:267`). Both calls discard
+their error into `_`. The key is a local variable of that one call: nothing stores it, nothing
+writes it to disk, and no peer is ever handed a public half. An RS512 signature over a 1024-bit key
+is 128 bytes, which is 171 base64url characters with the padding stripped.
+
+**Rust.** `issue_token` in `crates/wirepod-core/src/token/jwt.rs` writes the same header and the
+same claim payload, and fills the third segment with `SIGNATURE_LEN` bytes taken from the operating
+system's random source through `random_signature`. `SIGNATURE_LEN` is 128, so the segment the robot
+receives is the length Go's is, and the bytes are drawn afresh for every token rather than fixed, so
+that two tokens issued from one claim set still differ from each other.
+
+**Why.** There is no verifier anywhere on this wire for a real signature to satisfy. On the server
+side, `jwt.` occurs in the whole chipper tree exactly once, at `token.go:254`, and `SignedString`
+exactly once, at `token.go:267`; there is no `Parse`, no `ParseWithClaims` and no `ParseUnverified`
+in any Go file under `chipper/`, so the server never reads a token back. On the robot side the only
+parse in either tree is `new(jwt.Parser).ParseUnverified`
+(`vector-cloud/internal/token/identity/identity.go:158`), and `ParseUnverified`
+(`golang-jwt/jwt@v3.2.2/parser.go:96-148`) splits the string on `.`, refuses anything that is not
+exactly three parts (`:97-99`), decodes and reads parts zero and one (`:104-136`), looks the
+signing method up from the header (`:139-145`), and never refers to part two at any point. The
+third segment is counted and nothing else. `FromJwtToken`
+(`vector-cloud/internal/token/identity/token.go:96-161`), which runs next, reads only claims.
+
+The recording says the same thing from the Go side. The `robot_parse` section of
+`docs/phases/P1-robot-connect-auth/go-probe/expected.txt` runs that pair over crafted tokens and
+answers `ok` for both `empty_signature_segment` and `garbage_signature_segment`, so a slot holding
+nothing at all and a slot holding bytes that are not a signature are each accepted. The `jws`
+section records what survives of a signature without recording a byte of one: three segments, 128
+bytes and 171 characters in the third, that `SignedString` leaves the signing string untouched,
+that no standard-alphabet character reaches a token, both header values, and the pair
+`same_key_twice_differs` false and `fresh_key_each_call_differs` true. That last pair is the whole
+reason Go generates a key per request: PKCS#1 v1.5 signing is deterministic, so the only observable
+property Go's signature has is that two tokens differ, and drawing the bytes reproduces it.
+
+Computing a real signature instead would mean taking an RSA implementation into the dependency
+graph and generating a 1024-bit key on every token request, to produce a number that neither end of
+the connection will look at. The plan's own note on key sizes points the same way: `ring`, which
+this workspace already carries for TLS, refuses RSA keys below 2048 bits.
+
+**What this does not change.** The header still says `RS512`, because the robot looks the signing
+method up by name and `ParseUnverified` fails with `signing method (alg) is unavailable.` for a name
+it does not know (`parser.go:140-142`). The claim payload is unchanged, and the first two segments
+are byte-identical to Go's for the same claims, which is what the `claims` and `claims_matrix`
+sections pin.
+
+**Where tested.** `crates/wirepod-core/tests/jwt.rs::the_signature_slot_is_drawn_and_differs_between_two_tokens`
+asserts the length, that two draws differ, that two tokens built from one claim set differ, and
+that they differ only in the third segment.
+`crates/wirepod-core/tests/jwt_robot.rs::an_empty_signature_segment_still_parses_which_is_why_deviation_28_is_safe`
+runs a token with an empty third segment and a token with a drawn one through the Rust model of the
+robot's reader, and checks the recorded `empty_signature_segment` verdict beside them.
+`crates/wirepod-core/tests/jwt_matrix.rs::the_jws_section_matches_this_ports_assembly` drives the
+`jws` invariants above against this port's own assembly. And
+`crates/wirepod-vector/tests/live_token.rs` took one `RefreshToken` from the production Go server on
+this machine and asserted that its third segment is 171 characters decoding to 128 bytes with no
+character outside the raw base64url alphabet, which is the length this port writes.
+
+---
+
 ## Reserved for Phase 1
 
 Phase 1 reserves the numbers 25 through 42, one per decision taken when the phase was planned.
 The full text of each belongs to commit C23, which writes the entries proper; until then this
 list is what keeps a source file that cites one of these numbers pointing at something. A line
 marked **landed** describes code that is already on `master`, and the rest describe work the
-phase has not reached yet.
+phase has not reached yet. Number 28 is the exception to the first sentence: the C11 deep pass
+settled it on both sides of the wire, so it is written out above as a numbered entry and the line
+below points at it.
 
 25. mDNS registration goes through `mdns-sd` rather than Go's `kercre123/zeroconf`. The record on
     the wire is identical and only the library's own timing differs.
@@ -860,8 +929,12 @@ phase has not reached yet.
     knowledge, with `--alpn off` as the escape hatch back to Go's no-ALPN behaviour.
 27. Every port is bound on `0.0.0.0` and on `[::]` without taking `socket2`, and a failure to bind
     the IPv6 socket is a warning rather than a fatal error.
-28. The JWT signature slot carries CSPRNG bytes rather than an RS512 signature, because the robot
-    parses the token with `ParseUnverified` and no peer ever receives a key.
+28. **Landed.** The JWT signature slot carries 128 CSPRNG bytes rather than an RS512 signature,
+    because the robot parses the token with `ParseUnverified` and no peer ever receives a key.
+    Written out in full as entry 28 above, which is the one reserved number this file carries as a
+    numbered entry; implemented in `crates/wirepod-core/src/token/jwt.rs` and tested by
+    `crates/wirepod-core/tests/jwt.rs`, `crates/wirepod-core/tests/jwt_robot.rs`,
+    `crates/wirepod-core/tests/jwt_matrix.rs` and `crates/wirepod-vector/tests/live_token.rs`.
 29. **Landed.** Every state file is written as a temporary file beside the target followed by a
     rename over it, inside `spawn_blocking`, where Go truncates in place with `os.WriteFile`.
     There is one write per mutation, where two of Go's four jdocs callers write the same bytes
@@ -937,6 +1010,17 @@ one is C23's decision rather than this file's.
   here (`db1ca2a`, `613a90c`).
 - A JSON string carrying a lone-surrogate escape is a type error that leaves the field alone,
   where Go's `unquoteBytes` substitutes U+FFFD and stores the result (`613a90c`).
+- The same escape in a **key** costs the whole file rather than one field, and that is a follow-up
+  rather than only a difference to record. `gojson::merge_object` asks `serde_json` for each key as
+  a `String`, so a key carrying a lone surrogate makes the refusal propagate out of the entire
+  decode and the caller falls back to its zero value. Go accepts the escape, stores it as U+FFFD
+  (`decode.go:1277-1288`), matches it against no tag and drops it as unknown, and loads the rest of
+  the document normally. The fix is to treat a key `serde_json` refuses as an unknown key, and it
+  belongs to a commit that can test all three files this loop reads, because the abort is live for
+  `apiConfig.json` and `jdocs.json` as well as for a `vic.AppTokens` document. `merge_object` was
+  deliberately left unchanged in the commit that found this, with the outcome pinned by
+  `crates/wirepod-core/tests/jwt_document.rs::a_lone_surrogate_in_a_key_empties_the_manager_where_go_stores_a_replacement_character`
+  and Go's answer quoted beside it (`01c2582`).
 - In the jdocs store, an empty list is written as the literal `null`, which is what Go's nil slice
   marshals to and what every state Go can reach produces; unknown keys survive at both levels
   where Go's decoder drops them, re-serialised in sorted order; and every write hands back its
@@ -966,13 +1050,9 @@ one is C23's decision rather than this file's.
   GUIDs, hashes and certificate bytes, so a `{:?}` in a handler cannot put a secret into the log
   ring the web UI serves. Go has no equivalent and writes a plaintext GUID line at startup, which
   reserved deviation 39 already covers from the other direction (`84bed48`).
-- The JWT signature slot carries 128 CSPRNG bytes rather than an RS512 signature. This is reserved
-  deviation 28. Go generates a throwaway 1024-bit RSA key per request (`token.go:266`), keeps
-  nothing and publishes no public half, and the robot parses with `ParseUnverified`
-  (`vector-cloud/internal/token/identity/identity.go:158`), which is the only parse of a token in
-  either tree, so no verifier exists on either side of the wire. 128 bytes is the length such a
-  signature has, and they are drawn rather than fixed so that two tokens issued in the same second
-  still differ (`6d72056`).
+- The JWT signature slot carries 128 CSPRNG bytes rather than an RS512 signature. This one is no
+  longer a candidate: the C11 deep pass produced the evidence on both sides of the wire, and it is
+  written out above as numbered deviation 28 (`6d72056`, `4a5fd5b`).
 - A failed random draw for the token id or the signature is a returned `RandomError` rather than
   Go's panic in `uuid.New` (`token.go:181`) and discarded `_` at `token.go:266`. This is the C2
   note's rule applied to the second draw site (`6d72056`).
@@ -983,13 +1063,21 @@ one is C23's decision rather than this file's.
   empty the document (`6d72056`).
 - Unknown keys inside a `vic.AppTokens` document and inside one client token survive a
   read-modify-write, where Go's decoder drops them; survivors are re-serialised in sorted order.
-  This is the same choice C8 made for the jdocs file itself (`6d72056`).
+  This is the same choice C8 made for the jdocs file itself. Routing the read through the crate's
+  Go decoder made it reachable from a hand-edited file as well as from a document this server
+  wrote, and an unknown key whose value nests past `serde_json`'s recursion limit of 128 is dropped
+  silently and without a fault, where Go's scanner allows 10,000 levels (`scanner.go:146`) and
+  drops every unknown key anyway (`6d72056`, `2e58a50`, `01c2582`).
 - An empty `ClientTokenManager` is written as `{"client_tokens":null}`, which is what Go's nil
   slice marshals to and the only empty state Go can reach: `WriteTokenHash` declares `var
   tokenJson ClientTokenManager` (`token.go:102`) and only appends to it (`token.go:114`). A `[]`
   put into a `json_doc` by hand therefore comes back out as `null`, which is the one thing the
-  round trip does not preserve. Same shape mismatch and same resolution as the jdocs list above
-  (`6d72056`).
+  round trip does not preserve. Go's own empty slice is not nil, because `array` replaces a
+  zero-length result with a fresh empty slice (`decode.go:588-590`), so Go writes `[]` where this
+  port writes `null`. Same shape mismatch and same resolution as the jdocs list above, and pinned
+  by `crates/wirepod-core/tests/jwt_document.rs::an_empty_array_re_marshals_as_null_where_go_writes_an_empty_array`,
+  which also asserts that both spellings read back to the same manager, so the difference stops at
+  the bytes (`6d72056`, `01c2582`).
 - The `requestor_id` claim carries the serial exactly as the bot-info file spells it, because
   `token.go:223` concatenates `robot.Esn` verbatim and `StoreBotInfo` wrote it trimmed but never
   lowercased (`botInfoStorer.go:134`). `Requestor::Robot` therefore holds a raw `String` rather
@@ -1001,9 +1089,16 @@ one is C23's decision rather than this file's.
   anywhere writes a jdoc under a bare serial, so `jdocExists` is always false, `token.go:103-107`
   always runs, and the decode at `token.go:108` only ever sees the empty string. The port
   reproduces both arms rather than fixing the lookup, because normalising either spelling would
-  make the document accumulate and change a file the Go server reads back. One consequence is
-  itself unreachable for the same reason: a type error part way through an existing `json_doc`
-  leaves the manager empty here where Go keeps whatever decoded before the fault (`6d72056`).
+  make the document accumulate and change a file the Go server reads back. What the dead arm does
+  when it is reached is now Go's, since the read goes through the crate's Go decoder: a type error
+  part way through an existing `json_doc` records the first fault, every other key in the document
+  still decodes, and the appended token lands on top of whatever decoded. What leaves the manager
+  empty is not a type error but a document `serde_json` refuses outright, which is two things. One
+  is a document that is not a single JSON value, which is the empty `json_doc` every reachable call
+  has and which Go's own `checkValid` rejects the same way (`decode.go:98-105`). The other is a
+  document carrying an escape `serde_json` will not decode, of which a lone surrogate in a key is
+  the case that matters, and Go loads that document with the escape stored as U+FFFD
+  (`decode.go:1277-1288`) and the key dropped as unknown (`6d72056`, `2e58a50`, `01c2582`).
 - `pull_jdocs` refuses an answer whose `NamedJdocs` list is empty with an `Internal` error reading
   `robot answered PullJdocs with no documents`, where all three Go call sites index `NamedJdocs[0]`
   unchecked and panic. This is the empty `NamedJdocs` panic reserved 31 already names, recorded
@@ -1020,6 +1115,73 @@ one is C23's decision rather than this file's.
 - A `JdocType` number outside the four reads as `ROBOT_SETTINGS`, which is proto3's zero value and
   what an absent field decodes to. None of the three Go call sites reads `jdoc_type` at all, so no
   caller can observe the choice (`6a05378`).
+- Go's truncation of a decoded list is `SetLen` (`decode.go:585`), which shortens the slice and
+  leaves the dropped elements sitting in the backing array, so a third occurrence of one key that
+  grows past a shorter second occurrence decodes into what the first occurrence left there. A `Vec`
+  has no such shadow and pushes a fresh default instead. It takes three occurrences of
+  `client_tokens` in one hand-edited document to observe, and Go itself clears the backing array
+  whenever an occurrence is empty (`decode.go:588-590`). `store_list` was deliberately left
+  unchanged, because reproducing the behaviour would mean keeping a shadow list beside every list
+  field; a Go program printed Go's answer and
+  `crates/wirepod-core/tests/jwt_document.rs::a_third_occurrence_does_not_see_the_element_a_shorter_second_one_dropped`
+  pins this port's bytes with Go's quoted beside them (`2e58a50`, `01c2582`).
+- `TokenHashStore` is unbounded and the port has to decide in C17 whether to reproduce that. Go
+  appends one entry for every token request whose peer address matches no stored robot
+  (`token.go:236`), which is the arm every request from an unknown address takes, and the store's
+  only pruner is `RemoveFromPrimaryStore` (`token.go:135-138`), reached from the jdocs fallback at
+  `jdocs/server.go:107` and from nowhere else. The similarly named `RemoveFromSecondStore`
+  (`token.go:130-133`) prunes `SecondaryTokenStore` and never touches this one. So any local
+  process that can reach port 443 can grow the store without limit until the server restarts, and
+  each entry holds a GUID and its hash. C17 should decide whether to bound or expire the store
+  rather than carry the growth over, and record the answer either way (`0123b5b`, corrected in
+  `1045cdf`).
+- Go's walk over that store ranges while removing (`jdocs/server.go:94-109`), which is a decision of
+  its own and separate from bounding it. The `range` captures the slice header once while
+  `RemoveFromPrimaryStore` shortens the global slice underneath it, so a match makes the loop skip
+  the next entry and can carry the index past the end. C10 reproduced the outcome in
+  `take_primary_matches` and the `primary_walk` section of the store probe records what Go does,
+  including which shapes overrun; the open part is whether a bound on the store changes what that
+  walk can see, which is the same question the entry above asks from the other side (`0123b5b`,
+  `1045cdf`).
+- `AssociatePrimaryUser` must answer an error where Go crashes. The handler dereferences
+  `pem.Decode`'s result without checking it (`token.go:274-275`), and the Go server installs no
+  recovery interceptor, so a request whose `session_certificate` field is empty or is not PEM takes
+  the production process down. This is the nil PEM block reserved deviation 31 already names, and
+  it is why `crates/wirepod-vector/tests/live_token.rs` is forbidden from constructing that request
+  at all. C17 owns the handler and has to choose the status it answers with (`0123b5b`).
+- The recording substitutes one JWT library for the robot's own. The robot builds against
+  `github.com/dgrijalva/jwt-go` v3.2.1-0.20180719211823-0b96aaa70776+incompatible
+  (`vector-cloud/go.mod:8`), which is not in this machine's module cache, so the `robot_parse`
+  section runs `github.com/golang-jwt/jwt` v3.2.2+incompatible instead, the maintained fork of the
+  same code at the same major version and the one the Go server itself pins (`chipper/go.mod:16`).
+  Both module paths are recorded as constants of the section so the substitution is on the record
+  and a test asserts they are still there (`4a5fd5b`).
+- One recorded verdict is known to be able to differ between those two libraries.
+  `padded_payload_segment` is golang-jwt's answer, not necessarily the robot's: golang-jwt's
+  `DecodeSegment` is `base64.RawURLEncoding` (`golang-jwt/jwt@v3.2.2/token.go:102-104`), which
+  refuses a padding character outright, while the older dgrijalva build re-pads a segment before
+  decoding it and would accept one. Nothing this port writes is padded, so the difference is
+  unreachable from a token wire-pod issues, but the verdict is attributed to the substitute rather
+  than to the robot (`4a5fd5b`).
+- Six differences between the Rust model of the robot's reader in
+  `crates/wirepod-core/tests/jwt_robot.rs` and the robot's own reader are disclosed in that file's
+  module doc. They are **test-side** differences, not server-side ones, which is why they are
+  listed here rather than numbered: every one of them is a refusal where the robot is lenient, so
+  none can accept a token the robot would have rejected, and none is reachable from anything this
+  server writes. The first is that `decode_segment` requires the last base64 group's leftover bits
+  to be zero, where Go's `RawURLEncoding` only checks that under `Strict()`
+  (`encoding/base64/base64.go:394-396` and `:401-403` are the checks and the `enc.strict` guard on
+  them), so Go decodes `QR` and `eyC` and this decoder refuses both. The next four are the cases
+  where reading a segment as one whole `serde_json::Value` refuses what `parser.go`'s two lenient
+  readers accept, namely a null payload, a payload followed by trailing bytes, a payload followed
+  by a second JSON value, and a null header; all four are recorded cases of `robot_parse` and a
+  `DISCLOSED_DIVERGENCES` table asserts both what the acceptor answers and that the recording says
+  something else, so a Go build that stopped diverging fails rather than going unnoticed. The sixth
+  is that `parses_as_rfc3339` models only Go's `parseRFC3339` fast path and not the general parser
+  `time.ParseInLocation` falls back to, so it refuses a one-digit hour, a zone in the general
+  parser's wider range and a comma decimal separator, none of which `rfc3339_nano` can write. The
+  base64 candidate at the head of this list is the same first difference in a different decoder
+  (`72ffe37`).
 
 ---
 

@@ -30,4 +30,6 @@ P0. The listener design, the proto crate, and the vendored escape-pod certificat
 
 ## Status
 
-In progress (C0 to C8 landed, 2026-09-17). Two pieces of P1 surface are being written early as part of the P4 slice and are deliberately incomplete: the `/ok` and `/ok:80` connection-check routes return the right bodies but their side effects, the peer-IP jdocs ping and the mDNS run, are deferred to this phase and recorded as a deviation.
+In progress (C0 to C12 landed, 2026-09-18). The token service's own specification is
+`P1-robot-connect-auth/token.md`, which C17 implements from. Two pieces of P1 surface are being
+written early as part of the P4 slice and are deliberately incomplete: the `/ok` and `/ok:80` connection-check routes return the right bodies but their side effects, the peer-IP jdocs ping and the mDNS run, are deferred to this phase and recorded as a deviation.

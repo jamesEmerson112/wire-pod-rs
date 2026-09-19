@@ -1,6 +1,6 @@
 This file is the approved master plan for the Rust port of the wire-pod `chipper` server. It was written and approved in a planning session and originally lived at `~/.claude/plans/breezy-knitting-cray.md`, outside the repository. It has been copied here unchanged so that project knowledge lives with the project. This copy is now the authoritative one. The home-directory original is kept only as a historical artifact; when the two differ, this file wins.
 
-The plan below is the roadmap at the level of phases, crates, and locked decisions. Detail for each individual phase lives in `docs/phases/`, one document per phase, with an index at `docs/phases/README.md`. Nothing in the plan text below has been edited. As decisions change during implementation, they are recorded in the `## Amendments` section appended at the very end of this file rather than by rewriting the plan, so the original reasoning stays readable next to what replaced it.
+The plan below is the roadmap at the level of phases, crates, and locked decisions. Detail for each individual phase lives in `docs/phases/`, one document per phase, with an index at `docs/phases/README.md`. The plan text below is unedited except where a statement in it turned out to be factually wrong about the Go source or about a library, in which case the sentence is corrected in place and the correction is recorded in the Amendments section with its evidence. As decisions change during implementation, they are recorded in the `## Amendments` section appended at the very end of this file rather than by rewriting the plan, so the original reasoning stays readable next to what replaced it.
 
 ---
 
@@ -25,7 +25,7 @@ Live environment for verification: Go `chipper.exe` running (ports 80/443/8080/8
 - **D5:** The robot speaks **TLS 1.3 and negotiates ALPN h2** (verified via openssl against the bot's gateway) — strong evidence the inbound grpc-go client works against rustls. Still spiked first (P0-S1).
 - Protos are NOT in the repo — vendored from Go module cache: `digital-dream-labs/api@v0.0.0-20210824232136` (chipperpb wire package `chippergrpc2`, jdocs, token) and `fforchino/vector-go-sdk@v0.0.0-20231108155304` (12 protos, service `Anki.Vector.external_interface.ExternalInterface`). Both import `google/api/annotations.proto` + `http.proto` — vendor those too.
 - Magic constants (byte-exact): appkey `oDoa0quieSeir6goowai7f`, GlobalGUID `tni1TRsTRTaNSapjo0Y+Sw==` + its hardcoded hash doc, BLE auth token `2vMhFgktH3Jrbemm2WHkfGN`, mDNS record (`escapepod` / `_app-proto._tcp` / port 8084 / TXT `txtv=0 lo=1 la=2`), `server_config.json` shape, epod cert/key.
-- Token hashing must match Go byte-for-byte (existing jdocs hold Go-produced hashes): GUID = b64(16 rand bytes); hash = b64(SHA256(token‖salt)‖salt), sizes 16/16/32; constant-time compare. JWT: RS512, throwaway RSA key per call (robot never verifies sig but requires all 7 claims, RFC3339Nano-ish timestamps).
+- Token hashing must match Go byte-for-byte (existing jdocs hold Go-produced hashes): GUID = b64(16 rand bytes); hash = b64(SHA256(token‖salt)‖salt), sizes 16/16/32; constant-time compare. JWT: RS512, throwaway RSA key per call (robot never verifies sig; of the seven claims it requires six as JSON strings, namely `token_id`, `token_type`, `user_id`, `requestor_id`, `iat` and `expires`, and reads `permissions` only when it is present and is an object, `vector-cloud/internal/token/identity/token.go:96-161`; RFC3339Nano-ish timestamps).
 - Audio: first byte `0x4F` ⇒ Ogg-Opus else raw PCM 16k s16le; 300 Hz single-pole high-pass + gain 5 then 1.5 **per chunk with filter-state reset each chunk** (preserve — audible behavior); WebRTC VAD mode 2, 320-byte/10 ms frames, end-of-speech at `InactiveFrames>=23 && ActiveFrames>18`.
 - Ports 80 and 8080 serve the **same mux** (every route on both). No method checking. CORS `*` on `/api/`. `/api/get_kg_api` key-leak is kept as-is (webroot JS prefills the form from it).
 - `/api/set_kg_api` decodes the **whole** Knowledge struct — all state structs need `#[serde(default)]` + `#[serde(flatten)] extra` so fork/unknown fields survive round-trips (rollback safety). `battery.gohome_percent` is `Option<i32>` (nil=default 25, 0=disabled) with `skip_serializing_if`.
@@ -60,7 +60,7 @@ wire-pod-rs/
     wirepod-app/          # bin chipper(.exe): CLI, wiring; Phase 9 adds tray/single-instance
 ```
 
-Key crate choices: tokio, tonic 0.12 + prost + **protox**, axum 0.8, **hyper-util `auto` builder** (= the cmux replacement: sniffs h2 preface when ALPN absent), tokio-rustls (+ non-default `tls-native` escape hatch), **mdns-sd**, arc-swap (whole-struct config replace), `ogg` + `opus` (vendored libopus — same lib as Go ⇒ bit-identical decode; drops shipped DLLs), `webrtc-vad` (same C source as Go), `vosk` (reuse shipped libvosk.dll), whisper-rs, pv_leopard (official), reqwest(rustls), **mlua lua51+vendored** (gopher-lua is 5.1; Luau rejected — would break user scripts), **extism** (WASM plugins; PDKs let Go plugin authors recompile not rewrite), russh (pure-Rust SSH), btleplug (deferred feature), jsonwebtoken, rsa+rcgen (**generate 2048-bit certs going forward**; ring rejects <2048; preflight ERROR for legacy keys), rust-ini, image/jpeg-encoder, tracing (+custom ring layer), uuid/base64/sha2/subtle/chrono, tray-icon + windows crate (Phase 9). Weak-on-Windows flags: btleplug (deferred per D3), coqui libstt (Linux-only, feature-off, best-effort — project discontinued).
+Key crate choices: tokio, tonic 0.12 + prost + **protox**, axum 0.8, **hyper-util `auto` builder** (= the cmux replacement: sniffs h2 preface when ALPN absent), tokio-rustls (+ non-default `tls-native` escape hatch), **mdns-sd**, arc-swap (whole-struct config replace), `ogg` + `opus` (vendored libopus — same lib as Go ⇒ bit-identical decode; drops shipped DLLs), `webrtc-vad` (same C source as Go), `vosk` (reuse shipped libvosk.dll), whisper-rs, pv_leopard (official), reqwest(rustls), **mlua lua51+vendored** (gopher-lua is 5.1; Luau rejected — would break user scripts), **extism** (WASM plugins; PDKs let Go plugin authors recompile not rewrite), russh (pure-Rust SSH), btleplug (deferred feature), rsa+rcgen (**generate 2048-bit certs going forward**; ring rejects <2048; preflight ERROR for legacy keys), rust-ini, image/jpeg-encoder, tracing (+custom ring layer), uuid/base64/sha2/subtle/chrono, tray-icon + windows crate (Phase 9). Weak-on-Windows flags: btleplug (deferred per D3), coqui libstt (Linux-only, feature-off, best-effort — project discontinued).
 
 ## Core architecture decisions
 
@@ -126,6 +126,32 @@ Key crate choices: tokio, tonic 0.12 + prost + **protox**, axum 0.8, **hyper-uti
 ## Amendments
 
 Entries are added newest first, each dated, recording a decision that supersedes something in the plan text above.
+
+## Amendments (2026-09-18, P1 token service)
+
+**1. The JWT, as the C11 deep pass settled it.** Four things in the verified-facts line about the
+token above are now either corrected or backed by evidence. The signature slot carries 128 bytes
+drawn from the operating system's random source rather than an RS512 signature over a throwaway
+key, because no verifier exists on either side of this wire: the chipper tree holds exactly one
+`jwt.` use and one `SignedString` and no parse at all, and the robot's only parse is
+`ParseUnverified` (`vector-cloud/internal/token/identity/identity.go:158`), whose implementation
+(`golang-jwt/jwt@v3.2.2/parser.go:96-148`) counts three dot-separated parts and never refers to the
+third. That is now numbered deviation 28 in `docs/phases/P4-sdk-app/deviations.md`, with the
+recorded `empty_signature_segment` and `garbage_signature_segment` verdicts as its executable
+argument. The claim count is corrected in the line above: the robot requires six claims as JSON
+strings and reads `permissions` only when it is present and is an object
+(`vector-cloud/internal/token/identity/token.go:96-161`), so a seventh required claim was never
+there. The timestamps come from three separate `time.Now()` reads per association, at
+`token.go:195`, `token.go:196` and `token.go:110`, so `iat`, `expires` and the stored `issued_at`
+carry three different sub-second fractions and the port reads its injected clock three times to
+match. And the whole bundle was compared against the running Go server rather than argued from the
+source: `crates/wirepod-vector/tests/live_token.rs` takes one `RefreshToken` over TLS to
+`127.0.0.1:443`, which `GetEsnFromTarget` (`token.go:58-74`) cannot match to any stored robot, so
+the call takes the write-free arm at `token.go:231-239` and the modification times of the three
+state files are asserted unchanged either side of it. `jsonwebtoken` is dropped from the crate list
+above, because nothing in the port signs or verifies a token; `rsa` and `rcgen` stay, since that
+pair is for certificate generation in P7. The specification C17 implements the service from is
+`docs/phases/P1-robot-connect-auth/token.md`.
 
 ## Amendments (2026-09-09, P4 early slice)
 

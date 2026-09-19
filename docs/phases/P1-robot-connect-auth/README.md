@@ -3,8 +3,9 @@
 This folder is the Phase 1 spec folder. Today it holds the three Go probe
 programs whose recorded stdout the Rust tests read through `include_str!`, and
 `fixtures/`, which holds two state files the same tests read the same way.
-Commit C23 adds the rest of the phase spec beside them (`routes.md`,
-`state.md`, `startup-and-restart.md`) and extends this file.
+It also holds `token.md`, the specification of the token service that commit
+C17 implements from. Commit C23 adds the rest of the phase spec beside them
+(`routes.md`, `state.md`, `startup-and-restart.md`) and extends this file.
 
 `.gitignore` carries `docs/*` plus `!docs/phases/`, so everything here is
 tracked normally with `git add`. Nothing under `docs/` outside `docs/phases/`
