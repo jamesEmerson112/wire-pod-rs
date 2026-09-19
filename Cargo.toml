@@ -36,8 +36,9 @@ prost-types = "0.13"
 protox = "0.7"
 # The feature set spike S1 resolved with: the ring provider only, no aws-lc-rs,
 # and `tls12` because Vector's gateway is old enough to need it.
-rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 rustls-pemfile = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
@@ -66,6 +67,7 @@ walkdir = "2"
 # which is what Go resolves through the timezone database. Features are cfg
 # gates over generated bindings inside the one crate and pull no package.
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Time"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 wirepod-core = { path = "crates/wirepod-core" }
 wirepod-proto = { path = "crates/wirepod-proto" }
 wirepod-server = { path = "crates/wirepod-server" }
