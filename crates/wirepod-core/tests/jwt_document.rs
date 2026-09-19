@@ -97,6 +97,40 @@ const GO_DUPLICATE_LONGER_OUT: &str = concat!(
     r#"{"hash":"new","client_name":"","app_id":"","issued_at":""}]}"#,
 );
 
+/// Three occurrences of `client_tokens`: two elements, then one, then two.
+/// The second occurrence truncates and the third grows back past that length,
+/// which is the only shape that shows what `SetLen` keeps.
+const GO_THREE_OCCURRENCES_IN: &str = concat!(
+    r#"{"client_tokens":[{"hash":"#,
+    r#""AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","client_name":"first0"},"#,
+    r#"{"hash":"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB","#,
+    r#""client_name":"first1"}],"#,
+    r#""client_tokens":[{"app_id":"mid"}],"#,
+    r#""client_tokens":[{"issued_at":"third0"},{"issued_at":"third1"}]}"#,
+);
+
+/// What Go left: element one is the element the second occurrence truncated
+/// away, still carrying the first occurrence's `hash` and `client_name`,
+/// because `SetLen` shortens the slice and leaves the backing array alone
+/// (`decode.go:585`).
+const GO_THREE_OCCURRENCES_OUT: &str = concat!(
+    r#"{"client_tokens":[{"hash":"#,
+    r#""AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","#,
+    r#""client_name":"first0","app_id":"mid","issued_at":"third0"},"#,
+    r#"{"hash":"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB","#,
+    r#""client_name":"first1","app_id":"","issued_at":"third1"}]}"#,
+);
+
+/// What this port leaves instead, which is the recorded difference: a [`Vec`]
+/// has no backing array to shorten into, so the truncation drops the element
+/// and the third occurrence pushes a fresh one.
+const PORT_THREE_OCCURRENCES_OUT: &str = concat!(
+    r#"{"client_tokens":[{"hash":"#,
+    r#""AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","#,
+    r#""client_name":"first0","app_id":"mid","issued_at":"third0"},"#,
+    r#"{"hash":"","client_name":"","app_id":"","issued_at":"third1"}]}"#,
+);
+
 /// A populated `client_tokens`, then a second one holding `null`.
 const GO_ARRAY_THEN_NULL_IN: &str = concat!(
     r#"{"client_tokens":[{"hash":"a","client_name":"cn","app_id":"ai","issued_at":"ia"}],"#,
@@ -105,6 +139,16 @@ const GO_ARRAY_THEN_NULL_IN: &str = concat!(
 
 /// What Go left: the nil slice, which marshals to `null`.
 const GO_NULL_OUT: &str = r#"{"client_tokens":null}"#;
+
+/// An empty `client_tokens` array, which is the one input that leaves Go with
+/// a slice that is empty and **not** nil: `decode.go:588-590` replaces the
+/// field with `reflect.MakeSlice(t, 0, 0)` when the array it just read had no
+/// elements.
+const GO_EMPTY_ARRAY_IN: &str = r#"{"client_tokens":[]}"#;
+
+/// What Go marshalled that back out as, which is the same bytes it read: a
+/// non-nil empty slice is `[]` where a nil one is `null`.
+const GO_EMPTY_ARRAY_OUT: &str = r#"{"client_tokens":[]}"#;
 
 /// A populated `client_tokens`, then a second one holding a string.
 const GO_ARRAY_THEN_STRING_IN: &str = concat!(
@@ -135,6 +179,28 @@ const GO_STRING_THEN_ARRAY_OUT: &str =
 /// `[]vars.botjdoc`.
 const GO_NOT_AN_ARRAY_FAULT: &str =
     "cannot unmarshal string into client_tokens of type []ClientToken";
+
+/// The same for every other kind a `client_tokens` value can be, because the
+/// fault names the slice the key matched and not the value it found. Go's own
+/// text for the first of these is `json: cannot unmarshal bool into Go struct
+/// field ClientTokenManager.client_tokens of type []main.ClientToken`, and the
+/// four differ only in the word after `unmarshal`. Go reported length 0 and
+/// marshalled [`GO_NULL_OUT`] for all four.
+const GO_NOT_AN_ARRAY_CASES: [(&str, &str); 4] = [
+    (
+        r#"{"client_tokens":true}"#,
+        "cannot unmarshal bool into client_tokens of type []ClientToken",
+    ),
+    (
+        r#"{"client_tokens":1}"#,
+        "cannot unmarshal number into client_tokens of type []ClientToken",
+    ),
+    (
+        r#"{"client_tokens":{"a":1}}"#,
+        "cannot unmarshal object into client_tokens of type []ClientToken",
+    ),
+    (r#"{"client_tokens":"nope"}"#, GO_NOT_AN_ARRAY_FAULT),
+];
 
 /// An element that is a number, followed by a good one.
 const GO_BAD_ELEMENT_IN: &str =
@@ -220,6 +286,25 @@ const GO_APPENDED_DOC: &str = concat!(
     r#""client_name":"wirepod","app_id":"SDK","#,
     r#""issued_at":"2025-09-09T19:34:56.789012345Z"}]}"#,
 );
+
+/// [`GO_SEEDED_DOC`] with one key added: a lone-surrogate escape, the six
+/// characters backslash, `u`, `d`, `8`, `0`, `0`.
+///
+/// Raw strings throughout, so that Rust leaves the escape alone and the six
+/// characters reach the decoder the way they would from a hand-edited file.
+const GO_SURROGATE_KEY_IN: &str = concat!(
+    r#"{"client_tokens":[{"hash":"#,
+    r#""BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB","#,
+    r#""client_name":"wirepod","app_id":"SDK","#,
+    r#""issued_at":"2020-01-02T03:04:05.06Z"}],"#,
+    r#""\ud800":1}"#,
+);
+
+/// What Go left for it: no error, one client token, and the whole seeded
+/// document back. `checkValid` accepts the escape, `unquoteBytes` decodes it to
+/// U+FFFD (`decode.go:1277-1288`), and a key spelled U+FFFD matches no tag, so
+/// Go drops it the way it drops any unknown key.
+const GO_SURROGATE_KEY_OUT: &str = GO_SEEDED_DOC;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -442,6 +527,68 @@ fn a_duplicate_client_tokens_key_merges_element_wise_and_takes_the_second_length
     assert_eq!(marshal_client_tokens(&longer), GO_DUPLICATE_LONGER_OUT);
 }
 
+/// The one place the rule above and Go part, pinned here so that it is a
+/// recorded difference rather than an untested assumption.
+///
+/// Go's truncation is `v.SetLen(i)` (`decode.go:585`), which shortens the
+/// slice and leaves the backing array alone, so an element a shorter second
+/// occurrence dropped is still there for a longer third occurrence to grow
+/// back onto and decode into. Go's answer for
+/// [`GO_THREE_OCCURRENCES_IN`] is therefore
+/// [`GO_THREE_OCCURRENCES_OUT`], whose second element still carries the first
+/// occurrence's `hash` and `client_name`.
+///
+/// A [`Vec`] has no such shadow: `truncate` drops the element, and the third
+/// occurrence pushes a fresh [`Default`], so the port answers
+/// [`PORT_THREE_OCCURRENCES_OUT`] with the second element's first three fields
+/// empty. Reproducing Go would mean keeping a shadow list beside every list
+/// field for the sake of a document with three occurrences of one key in it,
+/// which nothing but a hand edit can produce, so the difference stands and
+/// this test is what says so.
+///
+/// Go resets the backing array whenever an occurrence is empty
+/// (`decode.go:588-590`), so the same shape with `[]` in the middle agrees in
+/// both languages; that is the second half of this test.
+#[test]
+fn a_third_occurrence_does_not_see_the_element_a_shorter_second_one_dropped() {
+    let manager = decode_clean(GO_THREE_OCCURRENCES_IN);
+
+    assert_eq!(
+        manager.client_tokens.len(),
+        2,
+        "the third occurrence did not grow the list back"
+    );
+    assert_eq!(
+        manager.client_tokens[0].app_id, "mid",
+        "the second occurrence's field did not reach element zero"
+    );
+    assert_eq!(
+        manager.client_tokens[0].issued_at, "third0",
+        "the third occurrence's field did not reach element zero"
+    );
+    assert_eq!(
+        manager.client_tokens[1].hash, "",
+        "the element the truncation dropped came back, so the Vec has a shadow \
+         and this test no longer describes the port"
+    );
+    assert_eq!(manager.client_tokens[1].issued_at, "third1");
+    assert_eq!(
+        marshal_client_tokens(&manager),
+        PORT_THREE_OCCURRENCES_OUT,
+        "the port's answer moved"
+    );
+
+    // And Go's, for the contrast this test exists for.
+    assert_ne!(
+        GO_THREE_OCCURRENCES_OUT, PORT_THREE_OCCURRENCES_OUT,
+        "the two literals agree, so this test proves nothing about the difference"
+    );
+    assert!(
+        GO_THREE_OCCURRENCES_OUT.contains(r#""client_name":"first1""#),
+        "Go's literal no longer carries the field the truncation kept"
+    );
+}
+
 /// Rule 3, the slice half (`decode.go:899-903`): a `null` empties the list
 /// rather than leaving it alone, because a slice is one of the four kinds
 /// `literalStore`'s null arm calls `SetZero` on. Everything else falls through
@@ -464,6 +611,57 @@ fn a_null_client_tokens_empties_the_list_the_way_go_zeroes_a_slice() {
     let alone = decode_clean(GO_NULL_OUT);
     assert!(alone.client_tokens.is_empty());
     assert_eq!(marshal_client_tokens(&alone), GO_NULL_OUT);
+}
+
+/// The other half of that rule, and the one input where the port and Go write
+/// different bytes for the same empty list.
+///
+/// Go distinguishes a nil slice from an empty one, and `{"client_tokens":[]}`
+/// gives it the second: `decode.go:588-590` replaces the field with
+/// `reflect.MakeSlice(t, 0, 0)` when the array it read had no elements, so the
+/// re-marshal is [`GO_EMPTY_ARRAY_OUT`], the same bytes that went in. A
+/// [`Vec`] has one empty state, and
+/// [`wirepod_core::token::jwt::serialize_client_tokens`] writes it as `null`
+/// because that is what the only empty manager the Go server can reach
+/// marshals to: `WriteTokenHash` declares `var tokenJson ClientTokenManager`
+/// and only ever appends to it, so a nil slice is the one it has.
+///
+/// A `[]` therefore reaches disk as `null`. It can only get into a `json_doc`
+/// by hand, both spellings decode to the same empty list on the way back in,
+/// and the Go server reads `null` as the nil slice it wrote, so nothing
+/// observes the change but a byte comparison of the file. Recorded as such in
+/// `docs/phases/P4-sdk-app/deviations.md`, and pinned here.
+#[test]
+fn an_empty_array_re_marshals_as_null_where_go_writes_an_empty_array() {
+    let manager = decode_clean(GO_EMPTY_ARRAY_IN);
+
+    assert!(
+        manager.client_tokens.is_empty(),
+        "the empty array did not decode to an empty list"
+    );
+    assert_eq!(
+        marshal_client_tokens(&manager),
+        GO_NULL_OUT,
+        "the port no longer writes an empty list as null"
+    );
+
+    // Go's answer, which is the bytes it read.
+    assert_ne!(
+        GO_EMPTY_ARRAY_OUT, GO_NULL_OUT,
+        "the two literals agree, so this test proves nothing about the difference"
+    );
+    assert_eq!(
+        GO_EMPTY_ARRAY_OUT, GO_EMPTY_ARRAY_IN,
+        "Go's round trip of an empty array is not the bytes it read"
+    );
+
+    // And the read-back agrees whichever spelling is on disk, which is why the
+    // difference stops at the bytes.
+    assert_eq!(
+        decode_clean(GO_EMPTY_ARRAY_OUT),
+        decode_clean(GO_NULL_OUT),
+        "the two spellings do not decode to the same manager"
+    );
 }
 
 /// Rule 4 (`decode.go:243-247`): a `client_tokens` whose value is not an array
@@ -514,6 +712,40 @@ fn a_client_tokens_that_is_not_an_array_records_one_fault_and_decodes_the_rest()
         r#"{"client_tokens":[{"hash":"h","client_name":"cn","app_id":"ai","issued_at":"t"}]}"#,
         "this is what Go marshalled, without the unknown key"
     );
+}
+
+/// The same fault for every other kind a `client_tokens` value can be, because
+/// the type a fault names is the field's and not the value's.
+///
+/// The test above drives one of the four, and one spelling of a message is not
+/// evidence about the other three: a fault built from the value's own kind, or
+/// from [`ClientToken`] rather than the slice, would pass it and fail here.
+/// Go's own text names `[]main.ClientToken` in the probe and
+/// `[]token.ClientToken` in the server, and this port drops the package
+/// qualifier as `crate::store::jdocs` does for `[]vars.botjdoc`.
+///
+/// Go reported length 0 and marshalled [`GO_NULL_OUT`] for all four, because
+/// the field keeps the nil slice it started with.
+#[test]
+fn every_non_array_client_tokens_value_records_the_slice_type() {
+    for (document, expected) in GO_NOT_AN_ARRAY_CASES {
+        let (manager, fault) = decode(document);
+
+        assert_eq!(
+            fault.as_deref(),
+            Some(expected),
+            "the fault for {document} is not the one Go printed"
+        );
+        assert!(
+            manager.client_tokens.is_empty(),
+            "{document} left something in the list"
+        );
+        assert_eq!(
+            marshal_client_tokens(&manager),
+            GO_NULL_OUT,
+            "{document} did not leave the field at the value Go leaves it at"
+        );
+    }
 }
 
 /// `decode.go:544-558`: Go grows the slice before it decodes into the element
@@ -670,12 +902,13 @@ async fn write_token_hash_appends_to_a_seeded_document_the_way_go_would() {
         .expect("nothing was stored under the prefixed serial");
 
     // `token.go:103-107` is skipped when the lookup hits, so the three fields
-    // are the seeded document's rather than the new-token literals.
-    assert_eq!(written.jdoc.doc_version, 7, "token.go:116-118");
-    assert_eq!(written.jdoc.fmt_version, 3, "token.go:117");
+    // are the seeded document's rather than the new-token literals. Go copies
+    // them one at a time into a fresh `AJdoc` at `token.go:120-124`.
+    assert_eq!(written.jdoc.doc_version, 7, "token.go:122");
+    assert_eq!(written.jdoc.fmt_version, 3, "token.go:123");
     assert_eq!(
         written.jdoc.client_metadata, "seeded-by-hand",
-        "token.go:118"
+        "token.go:121"
     );
     assert_eq!(
         written.jdoc.json_doc, GO_APPENDED_DOC,
@@ -733,4 +966,81 @@ async fn a_json_doc_that_is_not_one_json_value_leaves_the_manager_empty() {
             "the malformed json_doc {seed:?} left something behind"
         );
     }
+}
+
+/// The second class of document that empties the manager here, which Go loads
+/// in full. Recorded rather than fixed in this commit.
+///
+/// `crate::gojson`'s object loop asks for each key as a [`String`], and
+/// `serde_json` refuses to build one from a lone-surrogate escape, so the
+/// refusal propagates out of the whole decode and `write_token_hash` falls back
+/// to an empty manager. The appended token is then the only one, and the
+/// document written is [`GO_APP_TOKENS_DOC`].
+///
+/// Go accepts the same document. `checkValid` does not look inside an escape,
+/// `unquoteBytes` decodes a lone surrogate to U+FFFD
+/// (`decode.go:1277-1288`, and the `Unmarshal` doc comment at
+/// `decode.go:95-96` says so), and a key spelled U+FFFD matches no tag and is
+/// dropped like any unknown key. A Go run over [`GO_SURROGATE_KEY_IN`]
+/// reported no error, one client token and [`GO_SURROGATE_KEY_OUT`], so Go's
+/// document after the same write would be [`GO_APPENDED_DOC`], two tokens
+/// long.
+///
+/// The one in a key is the case that matters, because it costs the whole
+/// document. The same escape in a value is narrower and already recorded: it
+/// is a type error that leaves one field alone. The abort is not particular to
+/// this file either, since `apiConfig.json` and `jdocs.json` read through the
+/// same loop; the fix belongs to that loop and to a commit that can test all
+/// three.
+#[tokio::test]
+async fn a_lone_surrogate_in_a_key_empties_the_manager_where_go_stores_a_replacement_character() {
+    // The mechanism, before the write that shows its effect.
+    assert!(
+        serde_json::from_str::<Decoded<ClientTokenManager>>(GO_SURROGATE_KEY_IN).is_err(),
+        "the decoder now accepts the escape, so this test no longer describes the port"
+    );
+
+    let (_directory, store, clock) = store_and_clock("surrogate-key");
+    store
+        .add_jdoc(
+            TEST_ESN,
+            APP_TOKENS_DOC,
+            Jdoc {
+                doc_version: 1,
+                fmt_version: 1,
+                client_metadata: String::new(),
+                json_doc: GO_SURROGATE_KEY_IN.to_owned(),
+                extra: Default::default(),
+            },
+        )
+        .await;
+
+    tokio::time::timeout(
+        CEILING,
+        write_token_hash(&store, TEST_ESN, PLACEHOLDER_HASH, &clock),
+    )
+    .await
+    .expect("write_token_hash did not finish")
+    .expect("the rewrite failed");
+
+    let docs = store.snapshot();
+    let written = docs
+        .iter()
+        .find(|entry| entry.thing == format!("vic:{TEST_ESN}"))
+        .expect("nothing was stored under the prefixed serial");
+    assert_eq!(
+        written.jdoc.json_doc, GO_APP_TOKENS_DOC,
+        "the seeded token survived, so the manager was not emptied"
+    );
+
+    // Go's outcome for the same write, quoted so the difference is visible
+    // here rather than only in the prose above.
+    assert_ne!(
+        GO_APPENDED_DOC, GO_APP_TOKENS_DOC,
+        "the two literals agree, so this test proves nothing about the difference"
+    );
+    assert_eq!(
+        GO_SURROGATE_KEY_OUT, GO_SEEDED_DOC,
+        "Go's decode of the document no longer gives back the seeded token"
+    );
 }

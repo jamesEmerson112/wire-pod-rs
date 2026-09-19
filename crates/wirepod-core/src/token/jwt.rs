@@ -641,8 +641,8 @@ pub fn marshal_client_tokens(manager: &ClientTokenManager) -> String {
 /// running server. Nothing anywhere writes a jdoc under a bare serial, so
 /// there is no document for the lookup to find: `jdocExists` is always false
 /// at `token.go:101`, `token.go:103-107` always runs, and every reachable call
-/// here takes the `None` arm and decodes the empty string, which is not one
-/// JSON value in either language and so leaves the manager empty.
+/// here takes the `None` arm and decodes the empty string, which is one of the
+/// documents `serde_json` refuses and so leaves the manager empty.
 ///
 /// The arm stays unreachable for that reason and for no other. What it does
 /// when it is reached is now Go's: a `json_doc` that already holds client
@@ -655,6 +655,22 @@ pub fn marshal_client_tokens(manager: &ClientTokenManager) -> String {
 /// written out so that the port says what Go says rather than asserting a fact
 /// about the caller. This is the same kind of dead code `CompareHashAndToken`
 /// is, and C23 should describe it that way.
+///
+/// # What empties the manager
+///
+/// A document `serde_json` refuses, and that is wider than Go's `checkValid`.
+/// Two kinds reach it. One is a document that is not a single JSON value, which
+/// is Go's case too (`decode.go:98-105`) and is the empty `json_doc` every
+/// reachable call has. The other is a document carrying an escape `serde_json`
+/// will not decode, of which a lone surrogate in a **key** is the one that
+/// matters: `crate::gojson`'s object loop asks for each key as a [`String`], so
+/// the refusal propagates out of the whole decode. Go's scanner accepts that
+/// escape, `unquoteBytes` turns it into U+FFFD (`decode.go:1277-1288`), and the
+/// key then matches no tag and is dropped, so Go loads the rest of the
+/// document and this empties it. `tests/jwt_document.rs`'s
+/// `a_lone_surrogate_in_a_key_empties_the_manager_where_go_stores_a_replacement_character`
+/// pins both outcomes. The same abort is live for `apiConfig.json` and
+/// `jdocs.json`, which read through the same loop.
 ///
 /// # The clock
 ///
@@ -698,11 +714,13 @@ pub async fn write_token_hash(
     // arms are Go's two outcomes. A document that parses hands back whatever
     // decoded, fault and all, because `json.Unmarshal` fills the value as it
     // goes and only returns the first type error at the end
-    // (`decode.go:243-247`, `:182`). A document that is not one JSON value
-    // leaves the manager exactly as it was, because `checkValid` runs before
-    // anything is stored (`decode.go:98-105`) and the manager here has only
-    // ever been the zero value: the empty `json_doc` every reachable call has
-    // is that case.
+    // (`decode.go:243-247`, `:182`). A document `serde_json` refuses leaves the
+    // manager exactly as it was, and the manager here has only ever been the
+    // zero value. That covers a document which is not one JSON value, Go's own
+    // `checkValid` case (`decode.go:98-105`) and the empty `json_doc` every
+    // reachable call has, and also one carrying an escape `serde_json` will not
+    // decode, which Go accepts; the doc comment's "What empties the manager"
+    // says which and where it is tested.
     let mut manager = serde_json::from_str::<Decoded<ClientTokenManager>>(&json_doc)
         .map_or_else(|_| ClientTokenManager::default(), |decoded| decoded.value);
 

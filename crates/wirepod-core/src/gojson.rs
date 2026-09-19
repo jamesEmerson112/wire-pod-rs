@@ -43,7 +43,12 @@
 //!    (`decode.go:899-903`, whose own comment for the fall-through is
 //!    "otherwise, ignore null for primitives/string"). So a `null` empties a
 //!    [`store_list`] field and leaves a [`store_string`] or [`store_object`]
-//!    one alone.
+//!    one alone. Go has one target this does not hold for, and the port has
+//!    none of them: a field whose type implements `encoding.TextUnmarshaler`
+//!    never reaches that switch, because `literalStore` answers a `null` for
+//!    one with `UnmarshalTypeError{Value: "null"}` first
+//!    (`decode.go:863-876`). No type this port declares implements it, so the
+//!    rule holds here without the exception.
 //! 4. A value whose type does not fit the field its key matched records the
 //!    first such fault and decoding carries on through every other field
 //!    (`decode.go:243-247`). The caller therefore gets a half-filled value
@@ -80,6 +85,15 @@ use serde_json::value::RawValue;
 /// map at the position the `extra` field is declared at, which is last in every
 /// struct that carries one. Sorted order at least makes the rewrite
 /// deterministic, so two boots over the same file produce the same bytes.
+///
+/// One unknown key is still dropped rather than kept: one whose value nests
+/// past `serde_json`'s recursion limit of 128, which the object loop cannot
+/// parse into a [`Value`] and therefore skips, silently and with no fault. A
+/// probe over `{"stray":[[…1…]]}` keeps the key at 127 nested arrays and drops
+/// it at 128. Go's own scanner allows 10000 levels (`scanner.go:146`) and drops
+/// every unknown key at every depth anyway, so the bytes the Go server writes
+/// are the same either way; what stops at 128 is only this port's preservation
+/// of them, at a depth no state file this server writes comes near.
 pub type Extra = BTreeMap<String, Value>;
 
 // ---------------------------------------------------------------------------
@@ -378,6 +392,16 @@ pub trait GoObject: Default {
     const TAGS: &'static [&'static str];
     /// The path this object's fields hang off, `"knowledge."` say, and the
     /// empty string at the root.
+    ///
+    /// It describes the *position* the type is decoded at in its own file
+    /// rather than the type itself, because Go builds the path as it descends
+    /// and a struct that is only ever reached one way has only one path. So it
+    /// is right only at that position: [`crate::store::jdocs`]'s `Jdoc` spells
+    /// `jdoc.` because a jdoc is only ever an entry's `jdoc` field
+    /// (`store/jdocs.rs:164`), and [`crate::token::jwt`]'s `ClientToken` spells
+    /// `client_tokens.` because a client token is only ever an element of that
+    /// list. Decoding either as a document of its own would put that segment in
+    /// front of a fault Go would report with the field name alone.
     const PREFIX: &'static str;
     /// What a fault raised against the object itself calls it.
     const GO_TYPE: &'static str;
@@ -706,6 +730,15 @@ impl<'de, T: GoObject> Visitor<'de> for ListVisitor<'_, T> {
 /// [`GoObject::GO_TYPE`] because two `&'static str`s cannot be concatenated in
 /// a const context, and a [`DecodeFault`] carries a `&'static str`.
 ///
+/// The `[]botjdoc` named there is a *field* of that kind. The `[]botjdoc` at
+/// the root of `jdocs.json` is decoded by a loop of its own
+/// (`crate::store::jdocs`, `store/jdocs.rs:314-325`) which is this one's twin
+/// in every respect but the two the element rules below are about: it always
+/// pushes a fresh element and it never truncates. That is right there and would
+/// be wrong here, because a root slice is built empty for each read, so the
+/// index can never land on an element an earlier occurrence left and there is
+/// never a tail to drop.
+///
 /// Three things separate this from [`store_object`], and all three are Go's:
 ///
 /// - A `null` **empties** the list rather than leaving it alone. A slice is one
@@ -725,13 +758,16 @@ impl<'de, T: GoObject> Visitor<'de> for ListVisitor<'_, T> {
 /// into the element it just made; that is [`store_object`]'s existing
 /// behaviour and needs nothing here.
 ///
-/// One difference from Go is left in place. Go's truncation is `SetLen`, which
-/// keeps the elements it dropped in the backing array, so a third occurrence
-/// of the key that grows past a shorter second one decodes into what the first
-/// one left rather than into a zero value; a [`Vec`] has no such shadow and
-/// pushes a fresh [`Default`]. It takes three occurrences of one key in one
-/// hand-edited document to see, and Go itself resets the backing array
-/// whenever an occurrence is empty (`decode.go:588-590`).
+/// One difference from Go is left in place. Go's truncation is `SetLen`
+/// (`decode.go:585`), which keeps the elements it dropped in the backing array,
+/// so a third occurrence of the key that grows past a shorter second one
+/// decodes into what the first one left rather than into a zero value; a
+/// [`Vec`] has no such shadow and pushes a fresh [`Default`]. It takes three
+/// occurrences of one key in one hand-edited document to see, and Go itself
+/// resets the backing array whenever an occurrence is empty
+/// (`decode.go:588-590`). `tests/jwt_document.rs`'s
+/// `a_third_occurrence_does_not_see_the_element_a_shorter_second_one_dropped`
+/// pins both outputs, so the difference is recorded rather than assumed.
 ///
 /// # Errors
 ///
