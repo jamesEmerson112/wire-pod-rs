@@ -29,7 +29,7 @@ The user reordered these on 2026-09-19, after M1: the web UI moved ahead of voic
 | M2 | the web UI's API and the rest of the SDK app | about 2,000 |
 | M3 | voice commands: audio, Vosk, intent matching, the request processors | about 3,100 |
 | M4 | LLM and knowledge graph. NOT TRANSLATED, by the user's decision on 2026-09-20. Weather, which shared the milestone, is done. | 1,535 not translated |
-| M5 | Lua scripting, certificates and SSH setup, then the parts the Windows install does not use (five other speech engines, BLE, the Go plugin loader) | about 1,900 |
+| M5 | Lua scripting, certificates and SSH setup. Done. The rest of the milestone is cut or deferred: the five other speech engines and the Go plugin loader are cut, Bluetooth onboarding is deferred. | 823 translated |
 | M6 | debug against the robot, the optimization list, tray shell, packaging, cutover | none |
 
 ## File table
@@ -45,9 +45,9 @@ Status is one of: done, partial, or the milestone that will translate it.
 | `pkg/logger/logger.go` | 248 | `wirepod-core/src/logger.rs` | done |
 | `pkg/logger/msg-and.go`, `msg-winmac.go` | 40 | `wirepod-app` | M6 |
 | `pkg/mdnshandler/mdns.go` | 90 | `wirepod-server/src/mdns.rs` | done |
-| `pkg/scripting/scripting.go` | 317 | `wirepod-plugins/src/scripting.rs` | M5 |
-| `pkg/scripting/bcontrol.go` | 92 | `wirepod-plugins/src/bcontrol.rs` | M5 |
-| `pkg/scripting/display.go` | 36 | `wirepod-plugins/src/display.rs` | M5 |
+| `pkg/scripting/scripting.go` | 317 | `wirepod-plugins/src/scripting.rs` | done, apart from the `gopher-lua-libs` preload |
+| `pkg/scripting/bcontrol.go` | 92 | `wirepod-plugins/src/bcontrol.rs` | done |
+| `pkg/scripting/display.go` | 36 | `wirepod-plugins/src/display.rs` | done |
 | `pkg/servers/chipper/*.go` (seven files) | 296 | `wirepod-server/src/chipper/*.rs` | done |
 | `pkg/servers/jdocs/server.go` | 200 | `wirepod-server/src/jdocs/server.rs` | done |
 | `pkg/servers/jdocs/botInfoStorer.go` | 153 | `wirepod-core/src/store/bot_info.rs` | done |
@@ -56,7 +56,7 @@ Status is one of: done, partial, or the milestone that will translate it.
 | `pkg/vars/config.go` | 158 | `wirepod-core/src/config.rs` | done |
 | `pkg/vars/vars.go` | 465 | `wirepod-core/src/{paths,state,intents}.rs` and `store/*.rs` | done; `RememberedChats` comes with M4 |
 | `pkg/vtt/*.go` (three files) | 79 | `wirepod-server/src/vtt.rs` | done |
-| `pkg/wirepod/config-ws/webserver.go` | 545 | `wirepod-server/src/api/*.rs` | partial, 1 of 22 routes; M2 |
+| `pkg/wirepod/config-ws/webserver.go` | 545 | `wirepod-server/src/api/*.rs` | done, all 22 routes |
 | `pkg/wirepod/localization/localization.go` | 259 | `wirepod-intent/src/localization.rs` | done apart from `ReloadVosk` |
 | `pkg/wirepod/localization/download.go` | 192 | `wirepod-intent/src/download.rs` | done |
 | `pkg/wirepod/preqs/server.go` | 76 | `wirepod-ttr/src/preqs/server.rs` | done |
@@ -64,14 +64,14 @@ Status is one of: done, partial, or the milestone that will translate it.
 | `pkg/wirepod/preqs/intent_graph.go` | 95 | `wirepod-ttr/src/preqs/intent_graph.rs` | done |
 | `pkg/wirepod/preqs/knowledgegraph.go` | 159 | `wirepod-ttr/src/preqs/knowledgegraph.rs` | done |
 | `pkg/wirepod/preqs/stream_houndify.go` | 61 | none | cut, by decision |
-| `pkg/wirepod/sdkapp/robot.go` | 515 | `wirepod-core/src/robot/*.rs` and `wirepod-vector` | mostly done; the remainder is M2 |
-| `pkg/wirepod/sdkapp/server.go` | 886 | `wirepod-server/src/sdkapp/*.rs` | partial, 10 of 45 routes; M2 |
+| `pkg/wirepod/sdkapp/robot.go` | 515 | `wirepod-core/src/robot/*.rs` and `wirepod-vector` | done |
+| `pkg/wirepod/sdkapp/server.go` | 886 | `wirepod-server/src/sdkapp/*.rs` | done, all 45 routes |
 | `pkg/wirepod/sdkapp/jdocspinger.go` | 269 | `wirepod-server/src/jdocspinger.rs` | done |
-| `pkg/wirepod/sdkapp/batterywatchdog.go` | 290 | `wirepod-server/src/sdkapp/batterywatchdog.rs` | M2 |
-| `pkg/wirepod/sdkapp/bcassume.go` | 91 | `wirepod-server/src/sdkapp/bcassume.rs` | M2 |
-| `pkg/wirepod/sdkapp/urlreqs.go` | 67 | `wirepod-vector/src/urlreqs.rs` | M2 |
-| `pkg/wirepod/setup/certs.go` | 124 | `wirepod-setup/src/certs.rs` | M5 |
-| `pkg/wirepod/setup/ssh.go` | 254 | `wirepod-setup/src/ssh.rs` | M5 |
+| `pkg/wirepod/sdkapp/batterywatchdog.go` | 290 | `wirepod-server/src/sdkapp/batterywatchdog.rs` | done |
+| `pkg/wirepod/sdkapp/bcassume.go` | 91 | `wirepod-server/src/sdkapp/bcassume.rs` | done |
+| `pkg/wirepod/sdkapp/urlreqs.go` | 67 | `wirepod-vector/src/urlreqs.rs` | done |
+| `pkg/wirepod/setup/certs.go` | 124 | `wirepod-setup/src/certs.rs` | done |
+| `pkg/wirepod/setup/ssh.go` | 254 | `wirepod-setup/src/ssh.rs` | done; `russh` has never spoken to the robot |
 | `pkg/wirepod/setup/ble.go`, `ble_other.go` | 530 | `wirepod-setup/src/ble.rs` | deferred; the user wants it upgraded rather than translated |
 | `pkg/wirepod/speechrequest/speechrequest.go` | 365 | `wirepod-audio/src/speechrequest.rs` | done |
 | `pkg/wirepod/stt/vosk/Vosk.go` | 223 | `wirepod-stt/src/vosk.rs` | done, behind the `stt-vosk` feature |
@@ -96,7 +96,29 @@ Status is one of: done, partial, or the milestone that will translate it.
 | 2026-09-19, after M1 | about 4,800 of 12,130 (40%) | M1 translated: `chipper serve` starts the TLS listener with the chipper, jdocs and token services, mDNS, the `/ok` side effects and `/api-chipper/`; proven on loopback, not yet run against the robot |
 | 2026-09-20, M3 | about 9,100 of 12,130 (75%) | the voice pipeline is translated: audio decode and VAD, the Vosk engine behind a feature, intent matching and parameter extraction, behaviour control, and the three request processors wired into `chipper serve`. Not yet run against the robot. |
 | 2026-09-19, M2 | about 6,800 of 12,130 (56%) | the web UI runs on the Rust server: every page, all 22 `/api` routes and all 45 `/api-sdk` routes, the static mounts, the camera route, the battery watchdog and the idle sweeper. Checked against the Go server side by side. |
+| 2026-09-20, M5 | 9,309 of 12,130 (77%), which is every line the port is going to translate | the Lua host runs a script on the robot and `/api-lua/run_script` answers, a custom intent runs the script attached to it, the web UI can generate the certificate pair and the server config, and `/api-ssh/setup` can push a bot through onboarding. Nothing in M5 has met the robot. |
 | 2026-09-19, robot session | unchanged | M1 confirmed on the real robot: Vector completed TLS with the Rust listener, called `Jdocs/ReadDocs`, held his heartbeat on port 80, and the server pulled his jdocs. No token or voice request arrived during the session |
+
+## Where the translation ended
+
+M5 finished on 2026-09-20 and the translation is done, in the sense that every
+Go line the user wants in Rust is in Rust. The file table adds up like this:
+
+| | Go lines |
+|---|---|
+| translated | 9,309 |
+| cut: the LLM and knowledge graph (M4) | 1,535 |
+| cut: the five speech engines other than Vosk, with Houndify streaming | 635 |
+| cut: the Go `.so` plugin loader | 81 |
+| deferred: Bluetooth onboarding | 530 |
+| left for M6: the tray notification helper, which needs the tray shell first | 40 |
+| total | 12,130 |
+
+What is left is not translation. M6 is the robot debugging, the list below, the
+tray shell, packaging and cutover. The one thing owed from M3 is still owed: the
+voice pipeline has never met real audio, and the test is ten minutes with the
+user present, running `chipper serve --features stt-vosk` against a copy of the
+data directory and saying "Hey Vector, what time is it".
 
 ## What is deliberately not being translated
 
@@ -131,6 +153,10 @@ What this costs, so that the decision is reversible with open eyes. A voice comm
 ## Debug and optimization list
 
 Nothing here is acted on until translation is 100%.
+
+- `MakeLuaState` preloads `gopher-lua-libs` in Go, about thirty Go-written modules a script can `require`: json, http, strings, time, filepath and the rest. The Rust host gives a script mlua's own standard library instead, so a script that requires one of those modules fails where Go's would not. Nothing in the vendored web UI ships such a script, so this shows up only for a script the user writes.
+- The SSH client has never spoken to the robot. `russh` negotiates key exchange and ciphers differently from Go's `golang.org/x/crypto/ssh`, and Vector runs dropbear, so the first real onboarding attempt is the test. `/api-ssh/setup` is the route to watch.
+- Go's mux answers a 301 for a subtree prefix requested without its trailing slash. Only `/api-sdk` and `/api` do that here; `/api-chipper`, `/api-ssh`, `/api-lua` and `/session-certs` fall through to the 404 instead. Nothing the web UI or the robot sends uses the bare form, so this is invisible today.
 
 - `concurrent_writers_never_leave_a_torn_file` in `crates/wirepod-core/tests/persist.rs` fails intermittently on Windows with `Access is denied` when the whole suite runs in parallel, and passes every time on its own. It is a file-locking race between the atomic rename and another handle, not a fault in the code under test. It can fail a CI run, so it needs either a retry on that OS error or a lock that serialises the writers.
 
