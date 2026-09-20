@@ -122,10 +122,22 @@ pub async fn cert_handler(State(state): State<Arc<AppState>>, req: Request) -> R
 /// `localRedirect` sends a 301 where `ServeDir` sends a 307, and Go's file
 /// server never inspects the method where `ServeDir` answers 405 to anything
 /// but a GET or a HEAD, so another method is handed on as a GET.
+/// The content types Go's `mime.TypeByExtension` carries a charset on
+/// (`mime/type.go`, `builtinTypesLower`). `mime_guess` writes the bare type, so
+/// the charset is put back on the ones Go spells with it.
+const GO_CHARSET_TYPES: &[&str] = &["text/css", "text/html", "text/javascript", "text/xml"];
+
+/// Go's index redirect (`net/http/fs.go`): a path ending in `/index.html` is
+/// answered with a 301 to its directory rather than with the file.
+const INDEX_PAGE: &str = "/index.html";
+
 async fn serve_dir(dir: PathBuf, req: Request) -> Response {
     let (mut parts, body) = req.into_parts();
     if parts.method != Method::GET && parts.method != Method::HEAD {
         parts.method = Method::GET;
+    }
+    if parts.uri.path().ends_with(INDEX_PAGE) {
+        return local_redirect(parts.uri.query());
     }
     let req = Request::from_parts(parts, body);
     let response = match ServeDir::new(dir).oneshot(req).await {
@@ -135,6 +147,39 @@ async fn serve_dir(dir: PathBuf, req: Request) -> Response {
     let mut response = response.map(Body::new);
     if response.status() == StatusCode::TEMPORARY_REDIRECT {
         *response.status_mut() = StatusCode::MOVED_PERMANENTLY;
+    }
+    add_charset(&mut response);
+    response
+}
+
+/// Go writes `text/css; charset=utf-8` where `mime_guess` writes `text/css`.
+fn add_charset(response: &mut Response) {
+    let Some(current) = response
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return;
+    };
+    if !GO_CHARSET_TYPES.contains(&current) {
+        return;
+    }
+    if let Ok(value) = HeaderValue::from_str(&format!("{current}; charset=utf-8")) {
+        response.headers_mut().insert(header::CONTENT_TYPE, value);
+    }
+}
+
+/// Go's `localRedirect` (`net/http/fs.go`): a 301 to `./` carrying the query
+/// and nothing else, with no body and no content type.
+fn local_redirect(query: Option<&str>) -> Response {
+    let target = match query {
+        Some(query) if !query.is_empty() => format!("./?{query}"),
+        _ => "./".to_owned(),
+    };
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::MOVED_PERMANENTLY;
+    if let Ok(value) = HeaderValue::from_str(&target) {
+        response.headers_mut().insert(header::LOCATION, value);
     }
     response
 }
