@@ -17,6 +17,7 @@
 
 mod args;
 mod sdk_trial;
+mod serve;
 
 use std::process::ExitCode;
 
@@ -31,6 +32,15 @@ async fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let trial = match args::parse(argv) {
         Ok(args::Command::SdkTrial(trial)) => trial,
+        Ok(args::Command::Serve(serve)) => {
+            return match serve::run(serve).await {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("serve: {err}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         Err(err) => {
             eprintln!("chipper: {err}");
             eprintln!();

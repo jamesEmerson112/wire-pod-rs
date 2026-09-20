@@ -17,6 +17,9 @@ use std::path::PathBuf;
 /// The one subcommand, and what a bare invocation has to name.
 pub const SUBCOMMAND: &str = "sdk-trial";
 
+/// The subcommand that runs the server.
+pub const SERVE: &str = "serve";
+
 /// The default address to bind, which is loopback so the trial is never
 /// reachable from the LAN.
 pub const DEFAULT_BIND: &str = "127.0.0.1";
@@ -39,6 +42,20 @@ usage: chipper sdk-trial [--bot-info <path>] [--bind <addr>] [--port <u16>]
   --port <u16>                 the port to listen on (default: 18080)
   --liveness-deadline-ms <n>   bound the connect-time liveness call
                                (default: none, which is what the Go server does)
+
+usage: chipper serve [--packaged | --data-dir <path>] [--asset-dir <path>]
+                     [--sdk-ini-dir <path>] [--bind <addr>] [--web-port <u16>]
+                     [--http-port <u16>] [--tls-port <u16>]
+
+  --packaged             keep state under %APPDATA%/wire-pod, as the installed
+                         Go server does (default: the working directory)
+  --data-dir <path>      keep state under this directory instead
+  --asset-dir <path>     where webroot, intent-data and epod live (default: .)
+  --sdk-ini-dir <path>   where sdk_config.ini goes (default: ~/.anki_vector)
+  --bind <addr>          the address the two HTTP listeners bind (default: 0.0.0.0)
+  --web-port <u16>       the web port (default: 8080)
+  --http-port <u16>      the conn-check port (default: 80)
+  --tls-port <u16>       override the configured gRPC port, in memory only
 ";
 
 /// The parsed `sdk-trial` arguments.
@@ -67,8 +84,38 @@ impl Default for TrialArgs {
 }
 
 /// What the command line asked for.
+/// What `serve` runs with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ServeArgs {
+    pub packaged: bool,
+    pub data_dir: Option<PathBuf>,
+    pub asset_dir: Option<PathBuf>,
+    pub sdk_ini_dir: Option<PathBuf>,
+    pub bind: String,
+    pub web_port: Option<u16>,
+    pub http_port: Option<u16>,
+    pub tls_port: Option<u16>,
+}
+
+impl Default for ServeArgs {
+    fn default() -> Self {
+        Self {
+            packaged: false,
+            data_dir: None,
+            asset_dir: None,
+            sdk_ini_dir: None,
+            // Go listens on every interface.
+            bind: "0.0.0.0".to_owned(),
+            web_port: None,
+            http_port: None,
+            tls_port: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Command {
+    Serve(ServeArgs),
     /// Serve the SDK-app router against the real robot.
     SdkTrial(TrialArgs),
 }
@@ -125,6 +172,7 @@ where
     match args.next() {
         None => return Err(ParseError::NoSubcommand),
         Some(name) if name == SUBCOMMAND => {}
+        Some(name) if name == SERVE => return parse_serve(args),
         Some(name) => return Err(ParseError::UnknownSubcommand(name)),
     }
 
@@ -161,6 +209,43 @@ where
     Ok(Command::SdkTrial(trial))
 }
 
+fn parse_serve(mut args: impl Iterator<Item = String>) -> Result<Command, ParseError> {
+    fn path(
+        args: &mut impl Iterator<Item = String>,
+        flag: &'static str,
+    ) -> Result<Option<PathBuf>, ParseError> {
+        Ok(Some(PathBuf::from(
+            args.next().ok_or(ParseError::MissingValue(flag))?,
+        )))
+    }
+    fn port(
+        args: &mut impl Iterator<Item = String>,
+        flag: &'static str,
+    ) -> Result<Option<u16>, ParseError> {
+        let value = args.next().ok_or(ParseError::MissingValue(flag))?;
+        match value.parse() {
+            Ok(port) => Ok(Some(port)),
+            Err(_) => Err(ParseError::BadNumber { flag, value }),
+        }
+    }
+
+    let mut serve = ServeArgs::default();
+    while let Some(flag) = args.next() {
+        match flag.as_str() {
+            "--packaged" => serve.packaged = true,
+            "--data-dir" => serve.data_dir = path(&mut args, "--data-dir")?,
+            "--asset-dir" => serve.asset_dir = path(&mut args, "--asset-dir")?,
+            "--sdk-ini-dir" => serve.sdk_ini_dir = path(&mut args, "--sdk-ini-dir")?,
+            "--bind" => serve.bind = args.next().ok_or(ParseError::MissingValue("--bind"))?,
+            "--web-port" => serve.web_port = port(&mut args, "--web-port")?,
+            "--http-port" => serve.http_port = port(&mut args, "--http-port")?,
+            "--tls-port" => serve.tls_port = port(&mut args, "--tls-port")?,
+            _ => return Err(ParseError::UnknownFlag(flag)),
+        }
+    }
+    Ok(Command::Serve(serve))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,6 +263,7 @@ mod tests {
     fn trial(line: &[&str]) -> TrialArgs {
         match parse(argv(line)).expect("the line parses") {
             Command::SdkTrial(trial) => trial,
+            Command::Serve(_) => panic!("the line is a serve line"),
         }
     }
 
@@ -241,11 +327,38 @@ mod tests {
 
     #[test]
     fn an_unknown_subcommand_names_itself_and_the_one_that_exists() {
-        let err = parse(argv(&["serve"])).expect_err("serve is not a subcommand");
-        assert_eq!(err, ParseError::UnknownSubcommand("serve".to_owned()));
+        let err = parse(argv(&["launch"])).expect_err("launch is not a subcommand");
+        assert_eq!(err, ParseError::UnknownSubcommand("launch".to_owned()));
         let message = err.to_string();
-        assert!(message.contains("serve"), "{message}");
+        assert!(message.contains("launch"), "{message}");
         assert!(message.contains(SUBCOMMAND), "{message}");
+    }
+
+    #[test]
+    fn serve_defaults_to_the_working_directory_and_takes_its_overrides() {
+        assert_eq!(
+            parse(argv(&["serve"])),
+            Ok(Command::Serve(ServeArgs::default()))
+        );
+        let Ok(Command::Serve(serve)) = parse(argv(&[
+            "serve",
+            "--data-dir",
+            "C:/tmp/pod",
+            "--tls-port",
+            "1443",
+            "--web-port",
+            "18080",
+        ])) else {
+            panic!("the serve line parses");
+        };
+        assert_eq!(serve.data_dir, Some(PathBuf::from("C:/tmp/pod")));
+        assert_eq!(serve.tls_port, Some(1443));
+        assert_eq!(serve.web_port, Some(18080));
+        assert!(!serve.packaged);
+        assert_eq!(
+            parse(argv(&["serve", "--tls"])),
+            Err(ParseError::UnknownFlag("--tls".to_owned()))
+        );
     }
 
     #[test]
