@@ -110,6 +110,13 @@ Status is one of: done, partial, or the milestone that will translate it.
 
 Nothing here is acted on until translation is 100%.
 
+From the browser session of 2026-09-19, with the robot attached to the Rust server:
+
+- `/cam-stream` produces no frames. The robot lets `EnableImageStreaming` time out after five seconds and then `CameraFeed` never sends headers, so the handler hangs until the client gives up. Every other SDK call works on the same connection, including `SayText`, `BatteryState`, `PullJdocs` and `ProtocolVersion`. Not yet compared against the Go server, which is the test that would say whether this is the robot's state or a difference in the port.
+- Go's `get_ota` indexes a path segment that the only matching route cannot have, so the handler panics on every call. The port answers Go's own `failed to parse URL` 500 instead, and the proxy below it is unreachable in both.
+- `print_robot_info` prints the robot's GUID in Go. The port leaves it out.
+- The `sdkapp` log target is not in the default filter, so lines logged to it at debug never appear. Either add it to `DEFAULT_FILTER` or move those lines to a crate target.
+
 - A JSON key with a malformed Unicode escape makes the Rust decoder drop the whole file where Go loads it (`gojson::merge_object`).
 - The in-memory token store grows without bound, as in Go.
 - Session-certificate writes build a fresh write gate per call.
