@@ -889,3 +889,43 @@ async fn disconnecting_an_unconnected_robot_reports_false() {
     assert!(!within(registry.disconnect(&Esn::new(ESN_A))).await);
     assert_eq!(factory.connect_count(), 0);
 }
+
+#[tokio::test]
+async fn the_conn_timer_drops_a_robot_that_has_gone_idle() {
+    let (_robot, factory) = fakes(FakeRobotConn::new());
+    let clock = Arc::new(ManualClock::new());
+    let esn = Esn::new(ESN_A);
+    let registry = Arc::new(
+        registry(&factory)
+            .with_timings(Timings {
+                idle: Duration::from_secs(300),
+                idle_tick: Duration::from_millis(1),
+                ..Timings::instant()
+            })
+            .with_clock(Arc::clone(&clock) as Arc<dyn Clock>),
+    );
+    within(registry.get_or_connect(&esn, &bot_info()))
+        .await
+        .expect("the connect failed");
+
+    let cancel = CancellationToken::new();
+    let sweeping = tokio::spawn({
+        let registry = Arc::clone(&registry);
+        let cancel = cancel.clone();
+        async move { registry.run_conn_timer(cancel).await }
+    });
+
+    clock.advance_secs(299);
+    tokio::time::sleep(PARK_WINDOW).await;
+    assert_eq!(
+        registry.len(),
+        1,
+        "a robot inside the idle window was swept"
+    );
+
+    clock.advance_secs(2);
+    until(|| registry.is_empty()).await;
+
+    cancel.cancel();
+    within(sweeping).await.expect("the sweeper panicked");
+}

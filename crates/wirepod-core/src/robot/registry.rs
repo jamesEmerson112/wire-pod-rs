@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGua
 use std::time::Duration;
 
 use tokio::sync::Mutex as AsyncMutex;
+use tokio_util::sync::CancellationToken;
 
 use crate::clock::{Clock, SystemClock};
 use crate::esn::Esn;
@@ -390,6 +391,23 @@ impl RobotRegistry {
             }
         }
         evicted
+    }
+
+    /// Go's `connTimer` (`robot.go:423-452`): one sweeper for every robot
+    /// rather than one goroutine each, because the registry is keyed by serial
+    /// and no index can go stale.
+    pub async fn run_conn_timer(&self, cancel: CancellationToken) {
+        loop {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => return,
+                () = tokio::time::sleep(self.timings.idle_tick) => {}
+            }
+            for esn in self.idle_candidates(self.clock.now()) {
+                tracing::debug!(target: "sdkapp", bot = %esn, "closing SDK connection, source: connTimer");
+                self.disconnect(&esn).await;
+            }
+        }
     }
 
     /// The robot camera totals, without creating a meter.
