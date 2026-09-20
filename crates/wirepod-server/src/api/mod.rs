@@ -49,6 +49,9 @@ pub async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Respons
         "get_weather_api" => weather::get_weather_api(&state),
         "set_kg_api" => kg::set_kg_api(&state, &body(req).await).await,
         "get_kg_api" => kg::get_kg_api(&state),
+        "set_stt_info" => stt::set_stt_info(&state, &body(req).await).await,
+        "get_download_status" => stt::get_download_status(),
+        "get_stt_info" => stt::get_stt_info(&state),
         "get_bot_status" => bot_status::handle(&state),
         // Go's `default` (`webserver.go:76-77`).
         _ => reply::not_found(),
