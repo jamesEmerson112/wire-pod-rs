@@ -27,7 +27,7 @@ use axum::routing::any;
 use http::Uri;
 use wirepod_core::AppState;
 
-use crate::{api, conncheck, initweb, mux, reply, sdkapp};
+use crate::{api, conncheck, initweb, mux, reply, sdkapp, webroot};
 
 /// The port `BeginServer` serves the mux from, for the robot's conn check
 /// (`server.go:824`).
@@ -114,6 +114,13 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api-chipper/", any(initweb::chipper_http_api))
         .route("/api-chipper/*rest", any(initweb::chipper_http_api))
         .route(OK, any(conncheck::handle))
+        // An exact pattern, so only this literal path reaches the file server
+        // (`server.go:811`).
+        .route(webroot::SDK_APP_PATH, any(webroot::sdk_app))
+        // A subtree pattern, so the bare prefix reaches the handler too
+        // (`webserver.go:429`).
+        .route(webroot::SESSION_CERTS_PREFIX, any(webroot::cert_handler))
+        .route("/session-certs/*rest", any(webroot::cert_handler))
         .fallback(fallback)
         .with_state(state);
 
@@ -196,20 +203,17 @@ async fn moved_to_api(req: Request) -> Response {
 
 /// Everything none of the registered patterns matched.
 ///
-/// Two paths land here. `/ok:80` is a route in Go and is served as one, for the
-/// `matchit` reason above; the path it is compared against has already been
+/// Two things land here. `/ok:80` is a route in Go and is served as one, for
+/// the `matchit` reason above; the path it is compared against has already been
 /// unescaped by [`canonicalise`], which is what makes `GET /ok%3A80` answer
-/// `ok` as it does on the live Go server. Everything else is Go's root file
-/// server, which for a path with no file behind it answers
-/// `404 page not found\n` with four headers and no `Cache-Control`. Static file
-/// serving itself is P4 work; until then every path that would have hit a file
-/// gets the same 404 a missing file gets, which is the one thing about this
-/// fallback that is a stub rather than a contract.
-async fn fallback(state: State<Arc<AppState>>, req: Request) -> Response {
+/// `ok` as it does on the live Go server. It has to be checked first, because
+/// everything else is Go's root file server, which would otherwise be handed
+/// the colon path and answer its 404.
+async fn fallback(State(state): State<Arc<AppState>>, req: Request) -> Response {
     if req.uri().path() == OK_COLON_80 {
-        return conncheck::handle(state, req).await;
+        return conncheck::handle(State(state), req).await;
     }
-    reply::file_not_found()
+    webroot::web_root(&state, req).await
 }
 
 #[cfg(test)]
