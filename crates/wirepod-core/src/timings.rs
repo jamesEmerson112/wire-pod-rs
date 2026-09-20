@@ -20,6 +20,18 @@ pub struct Timings {
     pub disconnect_settle: Duration,
     /// How long a robot may go untouched before the sweeper drops it.
     pub idle: Duration,
+    /// One turn of `connTimer`'s loop.
+    pub idle_tick: Duration,
+    /// `bwPollInterval`: the battery watchdog's poll period.
+    pub battery_poll: Duration,
+    /// `bwRPCTimeout`.
+    pub battery_rpc: Duration,
+    /// `bwDockTimeout`: the bound on one go-home attempt.
+    pub battery_dock: Duration,
+    /// `bwCooldown`: the wait after any attempt.
+    pub battery_cooldown: Duration,
+    /// `bwGiveUpCooldown`: the wait after `bwMaxAttempts` failed attempts.
+    pub battery_give_up_cooldown: Duration,
 }
 
 impl Default for Timings {
@@ -30,6 +42,12 @@ impl Default for Timings {
             enable: Duration::from_secs(5),
             disconnect_settle: Duration::from_secs(3),
             idle: Duration::from_secs(300),
+            idle_tick: Duration::from_secs(1),
+            battery_poll: Duration::from_secs(30),
+            battery_rpc: Duration::from_secs(5),
+            battery_dock: Duration::from_secs(180),
+            battery_cooldown: Duration::from_secs(600),
+            battery_give_up_cooldown: Duration::from_secs(1800),
         }
     }
 }
@@ -43,6 +61,12 @@ impl Timings {
             enable: Duration::ZERO,
             disconnect_settle: Duration::ZERO,
             idle: Duration::ZERO,
+            idle_tick: Duration::ZERO,
+            battery_poll: Duration::ZERO,
+            battery_rpc: Duration::ZERO,
+            battery_dock: Duration::ZERO,
+            battery_cooldown: Duration::ZERO,
+            battery_give_up_cooldown: Duration::ZERO,
         }
     }
 }

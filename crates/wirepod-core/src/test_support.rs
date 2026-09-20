@@ -1095,6 +1095,7 @@ mod tests {
             .with_battery(Ok(BatteryReading {
                 level: BatteryLevel::Nominal,
                 volts: 4.1,
+                ..BatteryReading::default()
             }))
             .with_event_stream(Ok(Box::new(receiver)));
 

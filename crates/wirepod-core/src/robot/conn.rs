@@ -253,16 +253,20 @@ impl BatteryLevel {
 
 /// What a `BatteryState` call answers.
 ///
-/// Only the two fields the slice reads are carried. The full response also has
-/// a charging flag, a charger-platform flag, a suggested charge time and the
-/// cube's own battery, which `/api-sdk/get_battery` marshals wholesale; that
-/// route is deferred, and the type grows when it lands.
+/// Only the fields a caller reads are carried. The full response also has a
+/// suggested charge time and the cube's own battery, which
+/// `/api-sdk/get_battery` marshals wholesale; that route is deferred, and the
+/// type grows when it lands.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BatteryReading {
     /// The coarse level.
     pub level: BatteryLevel,
     /// The measured voltage.
     pub volts: f32,
+    /// Whether the robot is drawing charge.
+    pub is_charging: bool,
+    /// Whether the robot is sitting on its charger.
+    pub is_on_charger_platform: bool,
 }
 
 /// Whether the robot accepts the SDK protocol version offered.

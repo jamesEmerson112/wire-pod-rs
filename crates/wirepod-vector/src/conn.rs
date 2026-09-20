@@ -136,6 +136,8 @@ impl RobotConn for TonicRobotConn {
         Ok(BatteryReading {
             level: BatteryLevel::from_wire(response.battery_level),
             volts: response.battery_volts,
+            is_charging: response.is_charging,
+            is_on_charger_platform: response.is_on_charger_platform,
         })
     }
 

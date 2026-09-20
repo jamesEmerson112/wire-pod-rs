@@ -194,6 +194,8 @@ impl FakeRobot {
 impl ExternalInterface for FakeRobot {
     type EventStreamStream = UnboundedReceiverStream<Result<pb::EventResponse, Status>>;
     type CameraFeedStream = UnboundedReceiverStream<Result<pb::CameraFeedResponse, Status>>;
+    type BehaviorControlStream =
+        UnboundedReceiverStream<Result<pb::BehaviorControlResponse, Status>>;
 
     async fn battery_state(
         &self,
@@ -270,6 +272,38 @@ impl ExternalInterface for FakeRobot {
             status: None,
             named_jdocs,
         }))
+    }
+
+    /// Grants control to every `ControlRequest` the caller sends, so the
+    /// go-home path and `bcassume` can be driven end to end.
+    async fn behavior_control(
+        &self,
+        request: Request<tonic::Streaming<pb::BehaviorControlRequest>>,
+    ) -> Result<Response<Self::BehaviorControlStream>, Status> {
+        self.record("BehaviorControl", &request);
+        let mut incoming = request.into_inner();
+        let (sender, receiver) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Ok(Some(message)) = incoming.message().await {
+                let requested = matches!(
+                    message.request_type,
+                    Some(pb::behavior_control_request::RequestType::ControlRequest(_))
+                );
+                if requested {
+                    let granted = pb::BehaviorControlResponse {
+                        response_type: Some(
+                            pb::behavior_control_response::ResponseType::ControlGrantedResponse(
+                                pb::ControlGrantedResponse {},
+                            ),
+                        ),
+                    };
+                    if sender.send(Ok(granted)).is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+        Ok(Response::new(UnboundedReceiverStream::new(receiver)))
     }
 
     async fn enable_image_streaming(
@@ -366,8 +400,6 @@ impl ExternalInterface for FakeRobot {
         streaming {
             external_audio_stream_playback(tonic::Streaming<pb::ExternalAudioStreamRequest>)
                 -> ExternalAudioStreamPlaybackStream = pb::ExternalAudioStreamResponse;
-            behavior_control(tonic::Streaming<pb::BehaviorControlRequest>)
-                -> BehaviorControlStream = pb::BehaviorControlResponse;
             assume_behavior_control(pb::BehaviorControlRequest)
                 -> AssumeBehaviorControlStream = pb::BehaviorControlResponse;
             audio_feed(pb::AudioFeedRequest) -> AudioFeedStream = pb::AudioFeedResponse;
@@ -438,6 +470,14 @@ impl FakeRobotHandle {
             battery_volts: volts,
             ..pb::BatteryStateResponse::default()
         });
+    }
+
+    /// Scripts the two charger flags of what `BatteryState` answers.
+    pub fn set_charger(&self, is_charging: bool, is_on_charger_platform: bool) {
+        if let Ok(response) = lock(&self.state.battery).as_mut() {
+            response.is_charging = is_charging;
+            response.is_on_charger_platform = is_on_charger_platform;
+        }
     }
 
     /// Makes `BatteryState` fail with `status`.
