@@ -52,7 +52,11 @@ pub async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Respons
         "set_stt_info" => stt::set_stt_info(&state, &body(req).await).await,
         "get_download_status" => stt::get_download_status(),
         "get_stt_info" => stt::get_stt_info(&state),
+        "get_config" => config::get_config(&state),
         "get_bot_status" => bot_status::handle(&state),
+        "is_running" => config::is_running(),
+        "delete_chats" => config::delete_chats(),
+        "is_api_v3" => config::is_api_v3(),
         // Go's `default` (`webserver.go:76-77`).
         _ => reply::not_found(),
     };
