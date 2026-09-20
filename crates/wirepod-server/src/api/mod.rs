@@ -59,6 +59,9 @@ pub async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Respons
         "get_bot_status" => bot_status::handle(&state),
         "is_running" => config::is_running(),
         "delete_chats" => config::delete_chats(),
+        "get_ota" => ota::get_ota(req).await,
+        "get_version_info" => version::get_version_info(&state).await,
+        "generate_certs" => certs::generate_certs(),
         "is_api_v3" => config::is_api_v3(),
         // Go's `default` (`webserver.go:76-77`).
         _ => reply::not_found(),
