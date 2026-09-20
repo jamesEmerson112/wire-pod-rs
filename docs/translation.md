@@ -132,6 +132,8 @@ What this costs, so that the decision is reversible with open eyes. A voice comm
 
 Nothing here is acted on until translation is 100%.
 
+- `concurrent_writers_never_leave_a_torn_file` in `crates/wirepod-core/tests/persist.rs` fails intermittently on Windows with `Access is denied` when the whole suite runs in parallel, and passes every time on its own. It is a file-locking race between the atomic rename and another handle, not a fault in the code under test. It can fail a CI run, so it needs either a retry on that OS error or a lock that serialises the writers.
+
 From the browser session of 2026-09-19, with the robot attached to the Rust server:
 
 - `/cam-stream` gives nothing while the robot is asleep on its charger, on the Go server as well as on this one: `EnableImageStreaming` times out after five seconds and `CameraFeed` never sends headers, so the request hangs until the client gives up. Awake, the Go server streams normally. Measured on the Go server on 2026-09-20 with the robot awake: first frame 0.98 s after the request, then 71 frames in 20.0 s, which is 3.55 frames per second or about 282 ms between frames, 7.7 kB per frame, 547 kB in total, against a robot round trip of 12 to 22 ms. That frame rate is well under what the camera can do and is worth investigating. The same measurement has not yet been taken against the Rust server.
