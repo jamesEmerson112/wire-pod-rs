@@ -94,6 +94,7 @@ Status is one of: done, partial, or the milestone that will translate it.
 |---|---|---|
 | 2026-09-19 | about 2,300 of 12,130 (19%) | nothing the robot can use yet; the SDK dashboard slice runs beside Go |
 | 2026-09-19, after M1 | about 4,800 of 12,130 (40%) | M1 translated: `chipper serve` starts the TLS listener with the chipper, jdocs and token services, mDNS, the `/ok` side effects and `/api-chipper/`; proven on loopback, not yet run against the robot |
+| 2026-09-19, M2 | about 6,800 of 12,130 (56%) | the web UI runs on the Rust server: every page, all 22 `/api` routes and all 45 `/api-sdk` routes, the static mounts, the camera route, the battery watchdog and the idle sweeper. Checked against the Go server side by side. |
 | 2026-09-19, robot session | unchanged | M1 confirmed on the real robot: Vector completed TLS with the Rust listener, called `Jdocs/ReadDocs`, held his heartbeat on port 80, and the server pulled his jdocs. No token or voice request arrived during the session |
 
 ## Facts worth keeping from the old plan
@@ -116,6 +117,14 @@ From the browser session of 2026-09-19, with the robot attached to the Rust serv
 - Go's `get_ota` indexes a path segment that the only matching route cannot have, so the handler panics on every call. The port answers Go's own `failed to parse URL` 500 instead, and the proxy below it is unreachable in both.
 - `print_robot_info` prints the robot's GUID in Go. The port leaves it out.
 - The `sdkapp` log target is not in the default filter, so lines logged to it at debug never appear. Either add it to `DEFAULT_FILTER` or move those lines to a crate target.
+
+Checked against the running Go server, web-only on 18080 beside it:
+
+- Every static path matches byte for byte with the same headers: `/`, `/index.html`, the CSS and JS, `/sdkapp/*`, the 404 and `/ok`.
+- Of the twelve read-only `/api` routes, nine match in status, headers and body shape. The three that differ do so because of the environment, not the code. The STT provider is blank because both servers overwrite it from `STT_SERVICE`, which the tray app sets and a shell run does not. The log routes differ only by uptime, and the entry keys and types match. `get_version_info` reports from source because `assets/` carries no `version` file where the install does.
+- `/cam-stream` produces nothing on the Go server either, with the same robot in the same state, so the port matches Go here.
+- Running `chipper serve` from a shell with `STT_SERVICE` unset will blank the STT provider in `apiConfig.json`. Set `STT_SERVICE` and `STT_LANGUAGE` to match the tray app before pointing the server at the live data directory.
+- `assets/` does not vendor the `version` file the install has, so `get_version_info` always reports from source.
 
 - A JSON key with a malformed Unicode escape makes the Rust decoder drop the whole file where Go loads it (`gojson::merge_object`).
 - The in-memory token store grows without bound, as in Go.

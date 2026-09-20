@@ -16,6 +16,10 @@ The Go server and the Rust server cannot run at the same time in this mode, beca
    `./target/debug/chipper.exe serve --data-dir <scratch>/data --asset-dir assets --sdk-ini-dir <scratch>/ini`
    With `--packaged` instead of `--data-dir` it uses the live `%APPDATA%\wire-pod`, which is what a real cutover will do.
 
+   Set `STT_SERVICE` and `STT_LANGUAGE` to whatever the tray app uses before pointing the server at the live data directory. Go overwrites the config's STT provider from `STT_SERVICE` on every read, and so does this port, so a shell run without it blanks that setting in `apiConfig.json`.
+
+   Stop the server by its process id, never by its image name. The installed Go server is also called `chipper.exe`, so `taskkill /F /IM chipper.exe` takes both down.
+
 ## What a healthy start looks like
 
 Within a few seconds the log shows the four listeners, `Registering escapepod.local on network`, then from the robot:
