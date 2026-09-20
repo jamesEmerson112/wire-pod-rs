@@ -14,6 +14,7 @@
 //! camera operation lock the guard in [`crate::robot::cam`] holds across the
 //! settle and the enable RPC.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -314,6 +315,10 @@ pub struct SdkSession {
     /// Stim stream ownership, exclusive. The receive loop takes an `Arc` of it
     /// into its own task, so it is shared rather than owned inline.
     pub events: Arc<EventOwner>,
+    /// Go's `robots[i].BcAssumption`, the flag `release_behavior_control`
+    /// clears and the behaviour-control task polls (`bcassume.go:32`,
+    /// `bcassume.go:82`).
+    pub bc_assumption: AtomicBool,
     esn: Esn,
     cam_op: AsyncMutex<()>,
     last_touch: Mutex<Duration>,
@@ -330,6 +335,7 @@ impl SdkSession {
         Self {
             cam: CamOwner::new(),
             events: Arc::new(EventOwner::new()),
+            bc_assumption: AtomicBool::new(false),
             esn,
             cam_op: AsyncMutex::new(()),
             last_touch: Mutex::new(Duration::ZERO),

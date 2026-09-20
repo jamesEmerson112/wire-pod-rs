@@ -217,6 +217,8 @@ async fn connected_route(
         "temp_f" => settings::set_intbool(entry, "temp_is_fahrenheit", "true").await,
         "button_hey_vector" => settings::set_intbool(entry, "button_wakeword", "0").await,
         "button_alexa" => settings::set_intbool(entry, "button_wakeword", "1").await,
+        "assume_behavior_control" => bcassume::assume(entry, form.get("priority")),
+        "release_behavior_control" => bcassume::release(entry),
         "say_text" => speech::say_text(entry, form.get("text")).await,
         "move_wheels" => motion::move_wheels(entry, form.get("lw"), form.get("rw")).await,
         "move_lift" => motion::move_lift(entry, form.get("speed")).await,
