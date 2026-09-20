@@ -16,7 +16,11 @@ wirepod-proto = { workspace = true }
 wirepod-server = { workspace = true }
 wirepod-stt = { workspace = true }
 wirepod-vector = { workspace = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true }
+tokio-util = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
 wirepod-core = { workspace = true, features = ["test-util"] }
+wirepod-vector = { workspace = true, features = ["test-util"] }

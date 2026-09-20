@@ -4489,6 +4489,8 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-stream",
+ "tokio-util",
  "tracing",
  "wirepod-audio",
  "wirepod-core",
