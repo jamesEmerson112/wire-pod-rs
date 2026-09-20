@@ -819,6 +819,8 @@ mod tests {
             )
         }
 
+        fn run_lua_script(&self, _: &str, _: &str) {}
+
         async fn say_text(&self, _: &str, _: &str, _: &str, _: &str) -> Result<(), String> {
             Ok(())
         }

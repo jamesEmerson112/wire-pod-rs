@@ -75,6 +75,14 @@ pub trait IntentHooks: Send + Sync {
         bot_units: &str,
     ) -> Weather;
 
+    /// `go func(){ scripting.RunLuaScript(botSerial, c.LuaScript) }()`.
+    ///
+    /// Go's goroutine belongs to the implementor rather than to the matcher,
+    /// because the Lua host sits in a crate above this one. Nothing here waits
+    /// for the script, which is what the goroutine buys: a long script does not
+    /// hold up the exec below it or the intent going back.
+    fn run_lua_script(&self, bot_serial: &str, lua_script: &str);
+
     // TODO(M3): sayText from bcontrol.go, after vector.New
     async fn say_text(
         &self,
@@ -87,7 +95,10 @@ pub trait IntentHooks: Send + Sync {
 
 /// One entry of Go's three parallel arrays `PluginNames`, `PluginUtterances`
 /// and `PluginFunctions`, which one counter indexes together.
-// TODO(M5): ttr.LoadPlugins, which fills them from the Go `.so` files.
+///
+/// Nothing fills them. `ttr.LoadPlugins` reads Go `.so` files, which Rust
+/// cannot open at all, so the loader is cut and the arrays stay empty; the Lua
+/// host is this port's extensibility path.
 pub struct Plugin {
     pub name: String,
     pub utterances: Vec<String>,
@@ -278,7 +289,9 @@ async fn custom_intent_handler(
                         is_param = true;
                     }
 
-                    // TODO(M5): go scripting.RunLuaScript(botSerial, c.LuaScript) when it is set
+                    if !c.lua_script.is_empty() {
+                        ctx.hooks.run_lua_script(bot_serial, &c.lua_script);
+                    }
 
                     let mut args: Vec<String> = Vec::new();
                     for arg in &c.exec_args {
@@ -618,6 +631,8 @@ pub(crate) mod tests {
                 bot_units.to_owned(),
             )
         }
+
+        fn run_lua_script(&self, _bot_serial: &str, _lua_script: &str) {}
 
         async fn say_text(
             &self,

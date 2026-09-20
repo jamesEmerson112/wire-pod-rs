@@ -7,6 +7,7 @@ use std::sync::Arc;
 use axum::extract::{Request, State};
 use axum::response::Response;
 use wirepod_core::{AppState, write_config_to_disk};
+use wirepod_setup::certs;
 
 use crate::{form, literals, reply, startserver};
 
@@ -34,8 +35,12 @@ pub async fn chipper_http_api(State(state): State<Arc<AppState>>, req: Request) 
                 config.server.epconfig = false;
                 config.server.port = port;
             });
-            // TODO(M5): botsetup.CreateCertCombo()
-            // TODO(M5): botsetup.CreateServerConfig()
+            let combo = certs::create_cert_combo(state.paths().data()).await;
+            certs::create_server_config(state.paths().data(), &state.config().server).await;
+            if let Err(err) = combo {
+                tracing::info!(comp = "", "{err}");
+                return reply::text(format!("error: {err}"));
+            }
             state.update_config(|config| config.past_initial_setup = true);
             write_config(&state).await;
             restart(&state).await;
@@ -47,7 +52,7 @@ pub async fn chipper_http_api(State(state): State<Arc<AppState>>, req: Request) 
                 config.server.port = "443".to_owned();
                 config.past_initial_setup = true;
             });
-            // TODO(M5): botsetup.CreateServerConfig()
+            certs::create_server_config(state.paths().data(), &state.config().server).await;
             write_config(&state).await;
             restart(&state).await;
             reply::text(literals::DONE)

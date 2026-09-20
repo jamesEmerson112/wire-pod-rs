@@ -12,6 +12,7 @@ tracing = { workspace = true }
 wirepod-core = { workspace = true }
 wirepod-audio = { workspace = true }
 wirepod-intent = { workspace = true }
+wirepod-plugins = { workspace = true }
 wirepod-proto = { workspace = true }
 wirepod-server = { workspace = true }
 wirepod-stt = { workspace = true }

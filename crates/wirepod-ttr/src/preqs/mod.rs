@@ -24,6 +24,7 @@ use wirepod_intent::intentparam::bot_location_and_units;
 use wirepod_intent::match_intent_send::{
     IntentContext, IntentHooks, IntentSink, RequestKind, SendError, Weather,
 };
+use wirepod_plugins::scripting;
 use wirepod_proto::chippergrpc2 as pb;
 use wirepod_server::vtt::Sender;
 use wirepod_vector::status_error;
@@ -143,6 +144,24 @@ impl IntentHooks for Hooks {
         weather::weather_parser(&self.0, speech_text, bot_location, bot_units).await
     }
 
+    fn run_lua_script(&self, bot_serial: &str, lua_script: &str) {
+        let state = Arc::clone(&self.0);
+        let esn = Esn::new(bot_serial);
+        let lua_script = lua_script.to_owned();
+        // Go's `go func()`. `RunLuaScript` resolves the serial itself; the
+        // registry does it here, so the lookup moves inside the task too.
+        tokio::spawn(async move {
+            match state.get_robot(&esn).await {
+                Ok(entry) => {
+                    if let Err(err) = scripting::run_lua_script(entry, lua_script).await {
+                        tracing::error!(target: "lua", bot = %esn, "lua script: {err}");
+                    }
+                }
+                Err(err) => tracing::error!(target: "lua", bot = %esn, "lua script: {err}"),
+            }
+        });
+    }
+
     async fn say_text(
         &self,
         bot_serial: &str,
@@ -213,7 +232,7 @@ impl Globals {
             vosk_grammer_enable: false,
             custom_intents: self.custom_intents.as_deref(),
             robots: &self.robots,
-            // TODO(M5): ttr.LoadPlugins fills the three plugin arrays.
+            // `ttr.LoadPlugins` is cut: it reads Go `.so` files.
             plugins: &[],
             bot_location: &self.bot_location,
             bot_units: &self.bot_units,

@@ -11,7 +11,9 @@ use wirepod_server::vtt::{KgProcessor, KnowledgeGraphRequest, KnowledgeGraphResp
 use crate::preqs::AudioChunks;
 use crate::preqs::server::Server;
 
-// TODO(M5): var HKGclient houndify.Client
+// Go's `HKGclient` is cut with the rest of Houndify: it is not a
+// transcriber but a spoken-question service, and it was wire-pod's route
+// to the knowledge graph, which this port does not translate.
 
 /// Go type-asserts every value below without checking, which panics whenever
 /// Houndify answers with a shape it did not expect; each one is checked here.
@@ -64,8 +66,8 @@ pub fn init_knowledge(state: &AppState) {
                 "Houndify Client Key or ID was empty, not initializing kg client"
             );
         } else {
-            // TODO(M5): houndify.Client{ClientID, ClientKey} and
-            // HKGclient.EnableConversationState()
+            // Go builds the client here. Houndify is cut, so the log line
+            // is all that is left of it.
             tracing::info!(comp = "", "Initialized Houndify client");
         }
     }
@@ -78,7 +80,8 @@ fn houndify_kg(state: &AppState, req: SpeechRequest) -> String {
     let config = state.config();
     if config.knowledge.enable && config.knowledge.provider == "houndify" {
         tracing::info!(comp = "", "Sending request to Houndify...");
-        // TODO(M5): StreamAudioToHoundify(req, HKGclient)
+        // `StreamAudioToHoundify` is cut; the empty response falls through
+        // the parse below exactly as a failed request would.
         let _ = req;
         let server_response = String::new();
         api_response = parse_spoken_response(&server_response).unwrap_or_default();
@@ -188,9 +191,8 @@ pub fn houndify_text_request(
 
     tracing::info!(comp = "", "Sending text request to Houndify...");
 
-    // TODO(M5): HKGclient.TextSearch(houndify.TextRequest{Query: query_text,
-    // UserID: device, RequestID: session}), whose transport error Go logs
-    // before returning the empty string.
+    // `HKGclient.TextSearch` is cut; Go returns the empty string when its
+    // transport fails, which is what this leaves behind.
     let _ = (query_text, device, session);
     let server_response = String::new();
 

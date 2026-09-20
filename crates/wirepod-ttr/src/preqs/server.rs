@@ -53,8 +53,6 @@ impl Server {
         // asserts on the handler's function type, refusing anything that is
         // neither shape; the engine is both of those things.
 
-        // TODO(M5): ttr.LoadPlugins()
-
         Ok(Self {
             state,
             engine,

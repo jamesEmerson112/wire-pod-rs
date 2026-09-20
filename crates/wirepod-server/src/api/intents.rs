@@ -8,6 +8,7 @@ use serde::Deserialize;
 use wirepod_core::AppState;
 use wirepod_core::gojson::go_marshal;
 use wirepod_core::intents::CustomIntent;
+use wirepod_plugins::scripting::{ScriptError, validate_lua_script};
 
 use crate::api::error_text;
 use crate::reply;
@@ -16,6 +17,14 @@ const INVALID_BODY: &str = "invalid request body\n";
 const MISSING_FIELD: &str =
     "missing required field (name, description, utterances, and intent are required)\n";
 const INVALID_NUMBER: &str = "invalid intent number\n";
+
+/// `http.Error(w, "lua validation error: "+err.Error(), 400)`.
+fn lua_error(err: &ScriptError) -> Response {
+    error_text(
+        StatusCode::BAD_REQUEST,
+        format!("lua validation error: {err}\n"),
+    )
+}
 
 /// Go embeds `vars.CustomIntent` beside `number`; the flatten is that
 /// embedding.
@@ -43,7 +52,11 @@ pub fn add_custom_intent(state: &AppState, body: &[u8]) -> Response {
         return error_text(StatusCode::BAD_REQUEST, MISSING_FIELD);
     }
     intent.lua_script = intent.lua_script.trim().to_owned();
-    // TODO(M5): scripting.ValidateLuaScript(intent.LuaScript)
+    if !intent.lua_script.is_empty()
+        && let Err(err) = validate_lua_script(&intent.lua_script)
+    {
+        return lua_error(&err);
+    }
     let mut intents = state
         .custom_intents()
         .lock()
@@ -93,7 +106,9 @@ pub fn edit_custom_intent(state: &AppState, body: &[u8]) -> Response {
     }
     if !edit.lua_script.is_empty() {
         intent.lua_script = edit.lua_script;
-        // TODO(M5): scripting.ValidateLuaScript(intent.LuaScript)
+        if let Err(err) = validate_lua_script(&intent.lua_script) {
+            return lua_error(&err);
+        }
     }
     if !edit.exec_args.is_empty() {
         intent.exec_args = edit.exec_args;

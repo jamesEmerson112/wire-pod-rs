@@ -40,6 +40,7 @@ pub mod reply;
 pub mod router;
 pub mod sdkapp;
 pub mod serve;
+pub mod ssh_api;
 pub mod startserver;
 #[cfg(feature = "test-util")]
 pub mod test_support;

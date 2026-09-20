@@ -11,7 +11,9 @@ license.workspace = true
 test-util = ["wirepod-core/test-util"]
 
 [dependencies]
-axum.workspace = true
+# `multipart` is for `/api-ssh/setup` alone, which is the one route on this
+# surface whose body is a file upload (`ssh.go:230`).
+axum = { workspace = true, features = ["multipart"] }
 http.workspace = true
 http-body-util.workspace = true
 serde.workspace = true
@@ -44,6 +46,8 @@ image.workspace = true
 reqwest.workspace = true
 tower-http.workspace = true
 wirepod-intent = { path = "../wirepod-intent" }
+wirepod-plugins.workspace = true
+wirepod-setup.workspace = true
 wirepod-vector.workspace = true
 
 [dev-dependencies]

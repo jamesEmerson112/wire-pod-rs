@@ -99,6 +99,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 wirepod-audio = { path = "crates/wirepod-audio" }
 wirepod-core = { path = "crates/wirepod-core" }
 wirepod-intent = { path = "crates/wirepod-intent" }
+wirepod-plugins = { path = "crates/wirepod-plugins" }
 wirepod-stt = { path = "crates/wirepod-stt" }
 wirepod-ttr = { path = "crates/wirepod-ttr" }
 wirepod-proto = { path = "crates/wirepod-proto" }

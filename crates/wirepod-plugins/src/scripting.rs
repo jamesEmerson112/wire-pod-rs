@@ -320,7 +320,10 @@ pub(crate) fn g_rf_ls(lua: &Lua) -> mlua::Result<SdkClient> {
 
 pub fn make_lua_state(bot: Option<Bot>) -> Result<Lua, ScriptError> {
     let lua = Lua::new();
-    // TODO(M5): lualibs.Preload(L)
+    // Go preloads `gopher-lua-libs`, about thirty Go-implemented modules a
+    // script can `require`. mlua's own standard library is what a script
+    // gets here instead, so a script that requires one of those modules
+    // fails where Go's would not.
     let globals = lua.globals();
     globals.set("sayText", lua.create_function(say_text)?)?;
     globals.set("playAnimation", lua.create_function(play_animation)?)?;

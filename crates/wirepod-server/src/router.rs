@@ -28,7 +28,7 @@ use http::Uri;
 use wirepod_core::AppState;
 
 use crate::sdkapp::cam::CAM_STREAM_PATH;
-use crate::{api, conncheck, initweb, mux, reply, sdkapp, webroot};
+use crate::{api, conncheck, initweb, mux, reply, sdkapp, ssh_api, webroot};
 
 /// The port `BeginServer` serves the mux from, for the robot's conn check
 /// (`server.go:824`).
@@ -114,6 +114,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api", any(moved_to_api))
         .route("/api-chipper/", any(initweb::chipper_http_api))
         .route("/api-chipper/*rest", any(initweb::chipper_http_api))
+        // `RegisterSSHAPI` (`webserver.go:426`) and `RegisterScriptingAPI`
+        // (`server.go:801`) add their subtrees to the same mux, so they are
+        // part of this union too.
+        .route(ssh_api::PREFIX, any(ssh_api::ssh_setup))
+        .route("/api-ssh/*rest", any(ssh_api::ssh_setup))
+        .merge(wirepod_plugins::scripting::register_scripting_api())
         .route(OK, any(conncheck::handle))
         .route(CAM_STREAM_PATH, any(sdkapp::cam_stream::handle))
         // An exact pattern, so only this literal path reaches the file server
