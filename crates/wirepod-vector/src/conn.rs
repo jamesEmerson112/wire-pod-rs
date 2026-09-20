@@ -174,7 +174,9 @@ impl RobotConn for TonicRobotConn {
         // log lines use, because this is a diagnostic of the port's own and not
         // a line the Go server writes. That is also what puts it behind
         // `wirepod_vector=debug` rather than behind an `sdkapp` directive.
-        tracing::debug!(
+        // Trace, not debug: the dashboard probes every three seconds and the
+        // web UI's live log shows everything at debug.
+        tracing::trace!(
             ?result,
             host_version = response.host_version,
             "protocol version verdict, which every caller discards"

@@ -84,20 +84,24 @@ async fn load_state(
     let bot_info = read_bot_info(&data).await.unwrap_or_default();
     let jdocs = JdocsStore::load(&data).await.store;
     let session_certs = SessionCertStore::load(&data, &bot_info).await.store;
+    let custom_intents = wirepod_core::intents::load_custom_intents(&data);
 
-    Ok(
-        AppState::builder(Arc::new(TonicConnFactory::insecure_tls()))
-            .paths(Paths::new(data, assets))
-            .config(config)
-            .config_gate(gate)
-            .bot_info(bot_info)
-            .jdocs(jdocs)
-            .session_certs(session_certs)
-            .sdk_ini(sdk_ini)
-            .logs(logs)
-            .wall(wall)
-            .build(),
-    )
+    let state = AppState::builder(Arc::new(TonicConnFactory::insecure_tls()))
+        .paths(Paths::new(data, assets))
+        .config(config)
+        .config_gate(gate)
+        .bot_info(bot_info)
+        .jdocs(jdocs)
+        .session_certs(session_certs)
+        .sdk_ini(sdk_ini)
+        .logs(logs)
+        .wall(wall)
+        .build();
+    *state
+        .custom_intents()
+        .lock()
+        .unwrap_or_else(|err| err.into_inner()) = custom_intents;
+    Ok(state)
 }
 
 pub async fn run(args: ServeArgs) -> Result<(), ServeError> {
