@@ -1,8 +1,12 @@
 # wire-pod-rs
 
-I don't know Go so I'm porting this to Rust. There are a lot of potential doors for Wire-pod, 
+I don't know Go so I'm porting wire pod by kercre123 to Rust. There are a lot of potential doors for Wire-pod, 
 so I am moving it to a field I'm familiar with
 
+Some features I am working is:
++ Extra Log Monitor
++ Fixed Battery Report
++ Different UI for Robot Monitor
 
 A Rust port of the [wire-pod](https://github.com/kercre123/wire-pod) server for
 Anki/DDL Vector robots. Goal: a drop-in, protocol-compatible replacement for the
