@@ -1,0 +1,1747 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Vector Gateway Panel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:ital,wght@0,400;0,500;0,600;1,400&family=Barlow+Condensed:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+/* ---- Light palette. Every colour token is defined here on bare :root. ---- */
+:root{
+  color-scheme: light;
+  --ground:        #E8EBEC;   /* Shell Grey, Vector's moulded plastic */
+  --surface:       #F7F9F9;
+  --surface-2:     #DDE3E5;
+  --ink:           #0D1317;   /* Screen Off, the OLED black */
+  --ink-2:         #33434B;
+  --muted:         #5F7078;   /* Treadplate */
+  --rule:          #C5CED1;
+  --rule-soft:     #D8DEE0;
+
+  --acc:           #0A7F88;   /* Tip-Over Teal, readable weight */
+  --acc-line:      #0FB6C2;   /* Tip-Over Teal, the factory eye colour */
+  --acc-wash:      #DDF1F3;
+
+  --warn:          #8A5806;   /* Charge Amber, readable weight */
+  --warn-line:     #E8A322;   /* Charge Amber, the charger contact LED */
+  --warn-wash:     #F8EBD2;
+
+  --bad:           #A63527;   /* Cliff Red, readable weight */
+  --bad-line:      #D9503F;
+  --bad-wash:      #F8E2DE;
+
+  --focus:         #0A7F88;
+  --shadow:        0 1px 0 rgba(13,19,23,.06);
+
+  --f-disp: "Barlow Condensed", "Arial Narrow", Arial, system-ui, sans-serif;
+  --f-body: "Barlow", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Consolas, "Liberation Mono", monospace;
+}
+/* ---- Dark: system preference, unless the reader has chosen light. ---- */
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+    --ground:    #0D1317;
+    --surface:   #151E23;
+    --surface-2: #1D2930;
+    --ink:       #DCE5E8;
+    --ink-2:     #B3C2C8;
+    --muted:     #8698A0;
+    --rule:      #2B3940;
+    --rule-soft: #212D33;
+
+    --acc:       #35D2DC;
+    --acc-line:  #2DD4DE;
+    --acc-wash:  #10323A;
+
+    --warn:      #F0B94A;
+    --warn-line: #E8A322;
+    --warn-wash: #33260C;
+
+    --bad:       #F58975;
+    --bad-line:  #D9503F;
+    --bad-wash:  #37160F;
+
+    --focus:     #35D2DC;
+    --shadow:    0 1px 0 rgba(0,0,0,.4);
+  }
+}
+/* ---- Dark: explicit choice. ---- */
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --ground:    #0D1317;
+  --surface:   #151E23;
+  --surface-2: #1D2930;
+  --ink:       #DCE5E8;
+  --ink-2:     #B3C2C8;
+  --muted:     #8698A0;
+  --rule:      #2B3940;
+  --rule-soft: #212D33;
+
+  --acc:       #35D2DC;
+  --acc-line:  #2DD4DE;
+  --acc-wash:  #10323A;
+
+  --warn:      #F0B94A;
+  --warn-line: #E8A322;
+  --warn-wash: #33260C;
+
+  --bad:       #F58975;
+  --bad-line:  #D9503F;
+  --bad-wash:  #37160F;
+
+  --focus:     #35D2DC;
+  --shadow:    0 1px 0 rgba(0,0,0,.4);
+}
+
+*,*::before,*::after{ box-sizing: border-box; }
+html{ -webkit-text-size-adjust: 100%; }
+body{
+  margin:0;
+  background: var(--ground);
+  color: var(--ink);
+  font: 400 16px/1.55 var(--f-body);
+  font-variant-numeric: tabular-nums;
+}
+img{ max-width:100%; }
+[hidden]{ display:none !important; }
+:focus-visible{ outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+
+/* ---- One wrapper owns the side gutter. ---- */
+.wrap{
+  width: 100%;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding-left: 20px;
+  padding-right: 20px;
+}
+@media (max-width: 520px){ .wrap{ padding-left:16px; padding-right:16px; } }
+
+/* ---- Instrument header ---- */
+.masthead{
+  background: var(--surface);
+  border-bottom: 1px solid var(--rule);
+  padding-block: calc(14px + env(safe-area-inset-top, 0px)) 0;
+}
+.mast-row{ display:flex; align-items:flex-end; gap:16px; flex-wrap:wrap; }
+.mast-id{ flex: 1 1 320px; min-width:0; }
+.mast-id h1{
+  font: 700 clamp(26px, 5.2vw, 38px)/1 var(--f-disp);
+  letter-spacing: .01em;
+  text-transform: uppercase;
+  margin: 0 0 4px;
+}
+.mast-id h1 .dot{ color: var(--acc-line); }
+.mast-id p{ margin:0; color: var(--muted); font-size: 14.5px; max-width: 64ch; }
+.mast-tools{ display:flex; gap:8px; align-items:center; padding-bottom:2px; }
+
+.btn{
+  font: 600 13px/1 var(--f-disp);
+  letter-spacing:.09em; text-transform:uppercase;
+  background: var(--surface-2); color: var(--ink-2);
+  border: 1px solid var(--rule); border-radius: 2px;
+  padding: 9px 12px; cursor: pointer;
+}
+.btn:hover{ border-color: var(--acc-line); color: var(--ink); }
+
+.searchbar{ display:flex; gap:8px; align-items:center; margin: 14px 0 0; }
+.searchbar input[type="search"]{
+  flex:1 1 auto; min-width:0;
+  font: 400 15px/1.2 var(--f-mono);
+  background: var(--ground); color: var(--ink);
+  border: 1px solid var(--rule); border-radius: 2px;
+  padding: 10px 12px;
+}
+.searchbar input::placeholder{ color: var(--muted); }
+
+.chips{ display:flex; gap:6px; flex-wrap:wrap; margin: 10px 0 0; align-items:center; }
+.chips .chips-lab{
+  font: 600 11.5px/1 var(--f-disp); letter-spacing:.12em; text-transform:uppercase;
+  color: var(--muted); margin-right:2px;
+}
+.chip{
+  font: 600 12px/1 var(--f-disp); letter-spacing:.08em; text-transform:uppercase;
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--rule); border-radius: 2px;
+  padding: 7px 10px; cursor:pointer;
+}
+.chip[aria-pressed="true"]{ background: var(--acc-wash); border-color: var(--acc-line); color: var(--acc); }
+.chip:hover{ border-color: var(--acc-line); }
+.count{ font: 400 13px/1 var(--f-mono); color: var(--muted); margin-left:auto; }
+
+/* ---- Tab rail ---- */
+.rail-scroll{
+  overflow-x:auto; margin-top:14px; scrollbar-width:thin;
+  -webkit-mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 34px), transparent 100%);
+          mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 34px), transparent 100%);
+}
+.rail{ display:flex; gap:2px; min-width:max-content; border-bottom: 1px solid var(--rule); }
+.rail button{
+  position:relative; white-space:nowrap;
+  font: 600 14px/1 var(--f-disp); letter-spacing:.07em; text-transform:uppercase;
+  background: transparent; color: var(--muted);
+  border: 0; border-bottom: 3px solid transparent;
+  padding: 12px 13px 11px; cursor:pointer;
+}
+.rail button .n{ font: 500 11px/1 var(--f-mono); color: var(--muted); margin-left:6px; }
+.rail button:hover{ color: var(--ink); }
+.rail button[aria-selected="true"]{ color: var(--ink); border-bottom-color: var(--acc-line); }
+.rail button[aria-selected="true"] .n{ color: var(--acc); }
+.rail[data-locked="true"] button{ opacity:.45; }
+
+/* ---- Panels ---- */
+main{ padding-block: 26px calc(56px + env(safe-area-inset-bottom, 0px)); }
+.panel > h2{
+  font: 700 clamp(20px,3.6vw,26px)/1.1 var(--f-disp);
+  letter-spacing:.03em; text-transform:uppercase;
+  margin: 0 0 4px;
+}
+.panel > .lede{ color: var(--muted); margin: 0 0 22px; max-width: 76ch; font-size: 15.5px; }
+.panel + .panel{ margin-top: 34px; }
+
+h3.sec{
+  font: 700 16px/1.2 var(--f-disp); letter-spacing:.1em; text-transform:uppercase;
+  color: var(--ink); margin: 30px 0 10px;
+  padding-bottom: 6px; border-bottom: 1px solid var(--rule);
+}
+h3.sec:first-of-type{ margin-top: 4px; }
+.prose{ max-width: 80ch; }
+.prose p{ margin: 0 0 12px; }
+.prose ul{ margin: 0 0 14px; padding-left: 20px; }
+.prose li{ margin-bottom: 7px; }
+code, .m{ font-family: var(--f-mono); font-size: .9em; }
+.prose code{
+  background: var(--surface-2); border:1px solid var(--rule-soft);
+  border-radius:2px; padding: 0 4px;
+}
+a{ color: var(--acc); }
+
+/* ---- Tables ---- */
+.scroll{ overflow-x:auto; margin: 0 0 18px; border:1px solid var(--rule); border-radius:2px; background: var(--surface); }
+table{ border-collapse: collapse; width:100%; min-width: 520px; font-size: 14.5px; }
+th, td{ text-align:left; padding: 9px 12px; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+thead th{
+  font: 600 11.5px/1.2 var(--f-disp); letter-spacing:.11em; text-transform:uppercase;
+  color: var(--muted); background: var(--surface-2); border-bottom:1px solid var(--rule);
+  position: sticky; top: 0;
+}
+tbody tr:last-child td{ border-bottom: 0; }
+td .m{ color: var(--ink); }
+
+/* ---- Call slot ---- */
+.call{
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--rule);
+  border-radius: 2px;
+  margin-bottom: 10px;
+  box-shadow: var(--shadow);
+}
+.call[data-control="yes"]{ border-left-color: var(--warn-line); }
+.call[data-absent="yes"]{ border-left-color: var(--bad-line); border-left-style: dashed; }
+.call-hd{
+  display:flex; flex-wrap:wrap; align-items:baseline; gap: 6px 10px;
+  padding: 11px 14px 9px;
+  border-bottom: 1px solid var(--rule-soft);
+}
+.call-name{
+  font: 600 16.5px/1.25 var(--f-mono); margin:0; color: var(--ink);
+  word-break: break-word;
+}
+.call-req{ font: 400 13px/1.3 var(--f-mono); color: var(--muted); }
+.call-req::before{ content:"\00ab"; margin-right:2px; }
+.call-req::after{ content:"\00bb"; margin-left:2px; }
+.badges{ display:flex; gap:5px; flex-wrap:wrap; margin-left:auto; }
+.b{
+  font: 600 10.5px/1 var(--f-disp); letter-spacing:.11em; text-transform:uppercase;
+  padding: 4px 6px; border-radius:2px; border:1px solid var(--rule); color: var(--muted);
+  white-space:nowrap;
+}
+.b-unary{ border-style: dotted; }
+.b-stream{ border-color: var(--acc-line); color: var(--acc); background: var(--acc-wash); }
+.b-ctl{ border-color: var(--warn-line); color: var(--warn); background: var(--warn-wash); }
+.b-absent{ border-color: var(--bad-line); color: var(--bad); background: var(--bad-wash); }
+
+.call dl{ margin:0; padding: 4px 14px 12px; }
+.call dl > div{ display:grid; grid-template-columns: 116px 1fr; gap: 4px 14px; padding: 7px 0; border-bottom:1px solid var(--rule-soft); }
+.call dl > div:last-child{ border-bottom:0; padding-bottom:0; }
+.call dt{
+  font: 600 11px/1.5 var(--f-disp); letter-spacing:.11em; text-transform:uppercase;
+  color: var(--muted); padding-top:2px;
+}
+.call dd{ margin:0; font-size: 15px; color: var(--ink-2); }
+.call dd .m{ color: var(--ink); }
+.call dd p{ margin: 0 0 8px; }
+.call dd p:last-child{ margin-bottom:0; }
+.call dd ul{ margin:0; padding-left:18px; }
+.call dd li{ margin-bottom:4px; }
+.call dl > div.is-trap dt{ color: var(--bad); }
+.call dl > div.is-nc dt{ color: var(--warn); }
+@media (max-width: 620px){
+  .call dl > div{ grid-template-columns: 1fr; gap:2px; }
+  .call dt{ padding-top:0; }
+}
+
+.note{
+  border:1px solid var(--rule); border-left:4px solid var(--acc-line);
+  background: var(--surface); border-radius:2px;
+  padding: 12px 14px; margin: 0 0 18px; max-width: 84ch;
+}
+.note.warn{ border-left-color: var(--warn-line); }
+.note.bad{ border-left-color: var(--bad-line); }
+.note h4{
+  font: 700 12px/1.3 var(--f-disp); letter-spacing:.12em; text-transform:uppercase;
+  margin:0 0 6px; color: var(--ink);
+}
+.note p{ margin:0 0 8px; font-size:15px; color: var(--ink-2); }
+.note p:last-child{ margin-bottom:0; }
+
+.empty{ color: var(--muted); font-style: italic; padding: 18px 0; }
+
+footer{
+  border-top:1px solid var(--rule); background: var(--surface);
+  padding-block: 20px calc(24px + env(safe-area-inset-bottom, 0px));
+  color: var(--muted); font-size: 14px;
+}
+footer p{ margin:0 0 8px; max-width: 84ch; }
+.srcs{ font-family: var(--f-mono); font-size: 12.5px; line-height:1.7; overflow-wrap: anywhere; }
+.call dd, .call dt, .prose p, .prose li, .note p{ overflow-wrap: break-word; }
+
+.unconf{
+  font: 600 10.5px/1 var(--f-disp); letter-spacing:.1em; text-transform:uppercase;
+  color: var(--bad); border:1px dashed var(--bad-line); border-radius:2px;
+  padding:2px 5px; margin-right:6px; white-space:nowrap;
+}
+
+@media (prefers-reduced-motion: reduce){
+  *{ animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; scroll-behavior:auto !important; }
+}
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <div class="mast-row">
+      <div class="mast-id">
+        <h1>Vector Gateway<span class="dot">.</span></h1>
+        <p>The ninety RPCs a Vector robot running WireOS serves on port 443, what each one really does, and what it does when you get it wrong.</p>
+      </div>
+      <div class="mast-tools">
+        <button class="btn" id="theme" type="button" aria-pressed="false">Dark</button>
+      </div>
+    </div>
+
+    <div class="searchbar">
+      <input id="q" type="search" aria-label="Filter calls by name, field or behaviour" placeholder="filter calls, fields, traps&hellip;" autocomplete="off" spellcheck="false">
+      <button class="btn" id="clear" type="button">Clear</button>
+    </div>
+
+    <div class="chips">
+      <span class="chips-lab">Show only</span>
+      <button class="chip" type="button" data-flag="control" aria-pressed="false">Needs behaviour control</button>
+      <button class="chip" type="button" data-flag="stream" aria-pressed="false">Streaming</button>
+      <button class="chip" type="button" data-flag="absent" aria-pressed="false">Missing from the port</button>
+      <button class="chip" type="button" data-flag="trap" aria-pressed="false">Has a trap</button>
+      <span class="count" id="count"></span>
+    </div>
+
+    <div class="rail-scroll">
+      <div class="rail" role="tablist" aria-label="Sections" id="rail"></div>
+    </div>
+  </div>
+</header>
+
+<main class="wrap" id="main">
+<section class="panel" id="p-start" data-tab="Getting started">
+  <h2>Getting started</h2>
+  <p class="lede">What you need to know before any call on this page makes sense: which way the traffic runs, how you authenticate, and why behaviour control decides whether a call does anything at all.</p>
+
+  <div class="prose">
+    <h3 class="sec">Two directions, easily confused</h3>
+    <p>Your robot talks to your server, and your server talks to your robot, over two completely separate surfaces. This page covers only the second one.</p>
+  </div>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Direction</th><th>Who dials</th><th>Endpoint</th><th>Service</th><th>Auth</th></tr></thead>
+      <tbody>
+        <tr><td>Robot to your server</td><td><span class="m">vic-cloud</span> on the robot</td><td>whatever <span class="m">server_config.json</span> names</td><td><span class="m">ChipperGrpc</span>, <span class="m">Jdocs</span>, <span class="m">Token</span></td><td><span class="m">anki-access-token</span> and <span class="m">anki-app-key</span> metadata</td></tr>
+        <tr><td>You to the robot</td><td>your server, the app, the Python SDK</td><td><span class="m">&lt;robot ip&gt;:443</span></td><td><span class="m">ExternalInterface</span></td><td><span class="m">Authorization: Bearer &lt;client GUID&gt;</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="prose">
+    <p>The robot never dials <span class="m">ExternalInterface</span> and your server never serves it. Everything in the other thirteen tabs is the second row.</p>
+
+    <h3 class="sec">Transport</h3>
+    <p>On WireOS the gateway is not a separate process. It is compiled into <code>vic-cloud</code> and started as a goroutine, listening on TCP 443 with a TLS config whose <code>NextProtos</code> is <code>["h2"]</code> and nothing else. The same handler serves the gRPC service and a grpc-gateway JSON mux.</p>
+    <p>The robot's certificate is self-signed and names the robot rather than an IP, so every client in this ecosystem skips verification. There is no working alternative; the certificate chain cannot be validated by anything you have.</p>
+
+    <h3 class="sec">The bearer token</h3>
+    <p>Authentication is one check on the HTTP <code>Authorization</code> header, in <code>cloud/cloud/config_linux.go</code>.</p>
+    <ul>
+      <li>The header must be present exactly once. Absent gives <span class="m">Unauthenticated</span> "No auth token"; more than one gives "Too many auth tokens".</li>
+      <li>It must start with <code>Bearer&nbsp;</code>. The value compared is <code>authHeader[7:]</code>.</li>
+      <li><code>Basic&nbsp;</code> is recognised, base64-decoded, and the result thrown away with a <code>// todo</code>. The code then slices at offset 7 anyway, which is one character into the payload because <code>Basic&nbsp;</code> is six characters. Basic is broken, not merely unsupported.</li>
+      <li>Exactly one path is exempt: <code>/Anki.Vector.external_interface.ExternalInterface/UserAuthentication</code>.</li>
+    </ul>
+    <p>The token you send is the plaintext client GUID. The robot only ever holds hashes of it, in the <span class="m">vic.AppTokens</span> jdoc, cached on disk at <code>/data/vic-gateway/token-hashes.json</code>.</p>
+  </div>
+  <div class="note warn">
+    <h4>A freshly issued GUID is not accepted at once</h4>
+    <p>The robot refreshes its hash list from jdocs at most once a minute, three times in fifteen minutes and six times an hour, and only when the cache is over an hour old. A token your server has just written into <span class="m">vic.AppTokens</span> can be rejected for up to an hour. <span class="m">UserAuthentication</span> forces a refresh on success, which is the only way to make it immediate.</p>
+  </div>
+
+  <div class="prose">
+    <h3 class="sec">Behaviour control</h3>
+    <p>Most of the interesting calls only do something while your connection holds behaviour control. You take it by opening <span class="m">BehaviorControl</span> and sending a <span class="m">ControlRequest</span> with a priority.</p>
+  </div>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Priority</th><th>Value</th><th>What it actually does</th></tr></thead>
+      <tbody>
+        <tr><td class="m">UNKNOWN</td><td class="m">0</td><td>Dropped. <span class="m">SDKComponent::HandleProtoMessage</span> assigns the level, then returns early through <span class="m">ANKI_VERIFY</span>. You are never granted control and nothing tells you so. Always set a priority.</td></tr>
+        <tr><td class="m">OVERRIDE_BEHAVIORS</td><td class="m">10</td><td>Activates <span class="m">SDKOverrideAll</span>, which sets <span class="m">disableCliffDetection</span>. This is what wire-pod uses.</td></tr>
+        <tr><td class="m">DEFAULT</td><td class="m">20</td><td>Activates <span class="m">SDKDefault</span>, which leaves cliff detection alone.</td></tr>
+        <tr><td class="m">RESERVE_CONTROL</td><td class="m">30</td><td>Takes the behaviour lock only. You get <span class="m">ControlGrantedResponse</span> immediately, but the handler returns before setting <span class="m">_sdkWantsControl</span>, so the SDK behaviour never activates. Every refusal and every silent drop below still applies. It activates <span class="m">BehaviorSDKLock</span>, whose entire body is one log line, to keep the robot still between scripts.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="prose">
+    <h3 class="sec">Three ways a call fails without control</h3>
+    <p>The gateway gates nothing. It forwards everything and the refusal, if any, happens further in. There are three distinct outcomes and only one of them looks like a failure.</p>
+    <ul>
+      <li><strong>Seven requests are refused with <span class="m">FORBIDDEN</span>.</strong> <span class="m">EnableMarkerDetection</span>, <span class="m">EnableFaceDetection</span>, <span class="m">EnableMotionDetection</span>, <span class="m">EnableMirrorMode</span>, <span class="m">SayText</span>, <span class="m">SetCameraSettings</span> and <span class="m">SetEyeColor</span>. The gateway then overwrites the status for five of them, so you see success. <span class="m">SayText</span> is the only one that reports honestly.</li>
+      <li><strong>Twelve action RPCs are queued and then never answered.</strong> Their responses come only from <span class="m">SDKComponent::OnActionCompleted</span>, which runs only while the SDK behaviour is active. The gateway blocks on a channel with no timeout, so your call hangs forever while the robot may still attempt the motion.</li>
+      <li><strong>Four direct motor RPCs are silently ignored.</strong> <span class="m">DriveWheels</span>, <span class="m">MoveHead</span>, <span class="m">MoveLift</span> and <span class="m">StopAllMotors</span> land in <span class="m">MovementComponent</span>, whose handlers log a warning and do nothing when <span class="m">_allowExternalMovementCommands</span> is unset. You get <span class="m">REQUEST_PROCESSING</span> and no movement.</li>
+    </ul>
+
+    <h3 class="sec">What losing control tears down</h3>
+    <p>A higher-priority behaviour takes control back and you get a <span class="m">ControlLostResponse</span>. <span class="m">OnBehaviorDeactivated</span> then, in order: re-arms the seven refusals, disables mirror mode and emits <span class="m">MirrorModeDisabled</span>, removes every vision mode subscription except <span class="m">VisionMode::Viz</span> and emits <span class="m">VisionModesAutoDisabled</span>, restores camera auto-exposure, reapplies all saved settings (which undoes an SDK eye colour), unlocks every animation track, forbids external movement commands again, and restores cliff stopping if this behaviour had disabled it. Image streaming survives on purpose, which is why a camera page works with no control at all.</p>
+
+    <h3 class="sec">Releasing it</h3>
+    <ul>
+      <li>Closing a <span class="m">BehaviorControl</span> stream releases control, because the request handler writes a <span class="m">ControlRelease</span> in a <code>defer</code>.</li>
+      <li>Closing an <span class="m">AssumeBehaviorControl</span> stream does not. That path has no such defer and the SDK behaviour keeps running after you have gone.</li>
+      <li>An explicit <span class="m">ControlRelease</span> clears the connection id before the behaviour deactivates, so the <span class="m">ControlLostResponse</span> that follows carries id 0 and is filtered out. You get no confirmation of your own release. An involuntary loss is delivered correctly.</li>
+      <li>Requesting control wakes a sleeping robot. It is the only SDK message registered as a wake reason, which is the practical fix for the camera hang in the Traps tab.</li>
+    </ul>
+
+    <h3 class="sec">Action tags</h3>
+    <p>Twelve RPCs carry an <code>id_tag</code>, and the gateway rejects it with <span class="m">InvalidArgument</span> "Invalid Action tag_id" unless it is between <span class="m">2000001</span> and <span class="m">3000000</span> inclusive. A zero-valued default is rejected, so you cannot leave the field unset. <span class="m">CancelActionByIdTag</span> does not validate the tag it is given.</p>
+
+    <h3 class="sec">One answer can go to the wrong caller</h3>
+    <p>The gateway routes engine responses back to waiting RPCs by protobuf message type, not per request. <span class="m">CreateChannel</span> keys listeners on the response type's name and fans each message out to every listener registered for it. Only <span class="m">BehaviorControl</span> and <span class="m">AssumeBehaviorControl</span> also filter on the connection id. Two clients issuing the same call at the same time can receive each other's answers, so serialise per robot.</p>
+
+    <h3 class="sec">The REST mirror</h3>
+    <p>Every RPC carrying a <code>google.api.http</code> option is also reachable as JSON on the same port and socket, for example <code>POST https://&lt;robot&gt;:443/v1/update_settings</code>. The marshaller is configured with <code>EmitDefaultValues</code>, <code>UseEnumNumbers</code>, <code>UseProtoNames</code> and, on WireOS, <code>DiscardUnknown</code>. So JSON uses proto field names, enums are numbers, and an unknown key is dropped in silence rather than rejected.</p>
+
+    <h3 class="sec">The proto your port vendors</h3>
+    <p>The robot defines ninety RPCs. The copy vendored at <code>crates/wirepod-proto/proto/vector/</code> has eighty-eight of them; <span class="m">UpdateUserEntitlements</span> and <span class="m">UploadDebugLogs</span> are absent and are marked as such on their tabs. Everything the port knows about exists on the robot.</p>
+    <p>Comparing field numbers across all the shared files, the messages, behaviour, cube, nav map, response status and alexa protos are identical apart from formatting. Two divergences are real and both are in <code>settings.proto</code>:</p>
+    <ul>
+      <li><strong><span class="m">RobotSettingsConfig</span> is renumbered.</strong> The robot has <span class="m">CustomEyeColor custom_eye_color = 3</span> and every field after it shifts by one, so the vendored <span class="m">default_location</span> at 3 arrives as <span class="m">custom_eye_color</span>, <span class="m">locale</span> at 5 arrives as <span class="m">dist_is_metric</span>, and so on down the message. The <span class="m">RobotSetting</span> enum shifts the same way. A binary <span class="m">UpdateSettings</span> built from the vendored proto sets the wrong settings. JSON over the REST mirror is immune because grpc-gateway matches on field names.</li>
+      <li><strong>The vendored <span class="m">EyeColor</span> enum stops two values short.</strong> It ends at <span class="m">CONFUSION_MATRIX_GREEN = 6</span>; the robot also has <span class="m">RAINBOW_EYES = 7</span> and <span class="m">ROBOT_RED = 8</span>.</li>
+    </ul>
+  </div>
+</section>
+
+
+<section class="panel" id="p-session" data-tab="Session" hidden>
+  <h2>Session</h2>
+  <p class="lede">Opening a connection, proving who you are, and taking and giving back the robot's attention.</p>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">ProtocolVersion</h3><span class="call-req">ProtocolVersionRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Answers entirely inside the gateway with <span class="m">host_version = 5</span>, the current protocol version. Nothing reaches the engine.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">client_version</span>, <span class="m">min_host_version</span>, both <span class="m">int64</span>. Only <span class="m">client_version</span> is read.</dd></div>
+      <div><dt>Control</dt><dd>Not needed.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>The version gate is vacuous. <span class="m">PROTOCOL_VERSION_MINIMUM</span> is 0, so the check <span class="m">client_version &lt; 0</span> can never fire and every client is told <span class="m">SUCCESS</span>. <span class="m">min_host_version</span> is ignored outright.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">SDKInitialization</h3><span class="call-req">SDKInitializationRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Reports your client's versions to the robot for analytics. It changes no behaviour.</dd></div>
+      <div><dt>Parameters</dt><dd>Five strings: <span class="m">sdk_module_version</span>, <span class="m">python_version</span>, <span class="m">python_implementation</span>, <span class="m">os_version</span>, <span class="m">cpu_version</span>. None is validated.</dd></div>
+      <div><dt>Control</dt><dd>Not needed.</dd></div>
+      <div><dt>Note</dt><dd>You can skip it. Nothing later depends on having sent it.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">UserAuthentication</h3><span class="call-req">UserAuthenticationRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Exchanges a user session token for a client GUID. The gateway proxies to <span class="m">vic-switchboard</span> with <span class="m">AppId: "SDK"</span> and, on success, forces the token hash cache to refresh so the new GUID works immediately.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">user_session_id</span> and <span class="m">client_name</span>, both <span class="m">bytes</span>. <span class="m">client_name</span> is truncated to 64 characters.</dd></div>
+      <div><dt>Control</dt><dd>Not needed. This is the one RPC exempt from the bearer check, so it is how you bootstrap with no token at all.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Rate limited at ten calls per ten seconds and twenty-five per ten minutes, returning <span class="m">ResourceExhausted</span> beyond that. If <span class="m">vic-switchboard</span> is not present the call fails with <span class="m">Internal</span> "User authentication is only available on the robot". On failure the response still carries <span class="m">RESPONSE_RECEIVED</span> and an empty <span class="m">client_token_guid</span>, so read the <span class="m">code</span> field, which is <span class="m">UNAUTHORIZED</span> or <span class="m">AUTHORIZED</span>.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="yes" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">BehaviorControl</h3><span class="call-req">BehaviorControlRequest</span><span class="badges"><span class="b b-stream">bidi stream</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>The stream you hold open for as long as you want control. Each request is a oneof of <span class="m">ControlRequest</span> (carrying a priority) or <span class="m">ControlRelease</span>. The robot answers with <span class="m">ControlGrantedResponse</span>, <span class="m">ControlLostResponse</span>, <span class="m">ReservedControlLostResponse</span> or a <span class="m">KeepAlivePing</span> once per second.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">priority</span>: 10 <span class="m">OVERRIDE_BEHAVIORS</span>, 20 <span class="m">DEFAULT</span>, 30 <span class="m">RESERVE_CONTROL</span>. Zero is <span class="m">UNKNOWN</span> and is dropped.</dd></div>
+      <div><dt>Control</dt><dd>This is how you get it. It is also the only SDK message that counts as a wake reason, so it wakes a sleeping robot.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Three, all covered in the Traps tab: priority 0 is dropped in silence, your own <span class="m">ControlRelease</span> is never confirmed because the response is tagged with connection id 0 and filtered out, and <span class="m">RESERVE_CONTROL</span> grants control without activating the behaviour.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="yes" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">AssumeBehaviorControl</h3><span class="call-req">BehaviorControlRequest</span><span class="badges"><span class="b b-stream">server stream</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>The same thing as one <span class="m">ControlRequest</span> on the bidi stream, sent as a single request with a streamed response. Convenient when you never need to release explicitly.</dd></div>
+      <div><dt>Parameters</dt><dd>Identical to <span class="m">BehaviorControl</span>.</dd></div>
+      <div><dt>Control</dt><dd>This is how you get it.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Closing this stream does not release control. Only the bidi handler writes a <span class="m">ControlRelease</span> in a <code>defer</code>. A client that uses this call and then exits leaves the SDK behaviour running on the robot, with cliff detection still off at priority 10.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">CancelBehavior</h3><span class="call-req">CancelBehaviorRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Cancels whatever the SDK behaviour has delegated to, by calling <span class="m">CancelDelegates</span> inside <span class="m">BehaviorSDKInterface</span>. This is how you stop a long behaviour such as <span class="m">LookAroundInPlace</span> early.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>The handler lives in <span class="m">HandleWhileActivated</span>, so it is only reachable while the SDK behaviour is active. The gateway returns <span class="m">REQUEST_PROCESSING</span> immediately either way, so you cannot tell from the reply whether anything was cancelled.</dd></div>
+      <div><dt>Note</dt><dd>The engine does produce a <span class="m">CancelBehaviorResponse</span> carrying <span class="m">OK</span> or <span class="m">FORBIDDEN</span>, but the gateway does not wait for it.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">CancelActionByIdTag</h3><span class="call-req">CancelActionByIdTagRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Cancels a queued or running action by the <span class="m">id_tag</span> you gave it. The cancelled action's own RPC then completes with <span class="m">ACTION_RESULT_CANCELLED_WHILE_RUNNING</span> (33554432), if you still have control for the response to be produced at all.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">id_tag</span>, <span class="m">uint32</span>. Use the tag you sent with the action.</dd></div>
+      <div><dt>Control</dt><dd>Not needed for the cancel itself to be forwarded.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Unlike the twelve action RPCs, this one does not run <span class="m">ValidateActionTag</span>, so an out-of-range tag is accepted and simply matches nothing. The gateway returns <span class="m">REQUEST_PROCESSING</span> without waiting, so a cancel that found no such action is indistinguishable from one that worked.</dd></div>
+    </dl>
+  </article>
+</section>
+
+
+<section class="panel" id="p-motion" data-tab="Motion" hidden>
+  <h2>Motion</h2>
+  <p class="lede">Four raw motor calls that return instantly and are silently dropped without control, and a set of cancellable actions that block until the motion finishes. Knowing which kind you are calling is the whole game here.</p>
+
+  <div class="note warn">
+    <h4>Set a deadline on every call in this tab</h4>
+    <p>The nine action RPCs below block on a channel with no timeout and without consulting your request context. Without behaviour control their response is never produced at all, so the call hangs until your client gives up. The robot imposes nothing.</p>
+  </div>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">DriveWheels</h3><span class="call-req">DriveWheelsRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Sets both tread speeds directly and returns at once. The wheels keep turning until you send another <span class="m">DriveWheels</span> or <span class="m">StopAllMotors</span>; there is no duration and no stop condition.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">left_wheel_mmps</span>, <span class="m">right_wheel_mmps</span>, <span class="m">left_wheel_mmps2</span>, <span class="m">right_wheel_mmps2</span>, all <span class="m">float</span>. The robot's <span class="m">MAX_WHEEL_SPEED_MMPS</span> is 220 and <span class="m">MAX_SAFE_WHEEL_SPEED_MMPS</span> is 170. Negative drives that tread backwards; opposite signs turn on the spot.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Silently ignored. It reaches <span class="m">MovementComponent</span>, which logs a warning and returns because <span class="m">_allowExternalMovementCommands</span> is unset.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>You always get <span class="m">REQUEST_PROCESSING</span>, control or not, so a status code tells you nothing. Check the robot.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">MoveHead</h3><span class="call-req">MoveHeadRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Sets head angular velocity and returns. The head moves at that rate until it hits a mechanical stop or you send another speed. This travels as gateway CLAD rather than protobuf.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">speed_rad_per_sec</span>, <span class="m">float</span>. Positive raises. The head's mechanical travel is &minus;22&deg; to +45&deg;.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Silently ignored, same as <span class="m">DriveWheels</span>. You get <span class="m">REQUEST_PROCESSING</span> and the head does not move.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">MoveLift</h3><span class="call-req">MoveLiftRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Sets lift angular velocity and returns. Also gateway CLAD.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">speed_rad_per_sec</span>, <span class="m">float</span>. Positive raises. The lift's travel is 32&nbsp;mm at the low dock position to 92&nbsp;mm at carry height.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Silently ignored.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">StopAllMotors</h3><span class="call-req">StopAllMotorsRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Stops head, lift and treads together.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Silently ignored, which is the worst case of the four: the stop you sent to halt a robot you have lost control of does nothing.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>This does not cancel queued actions. An action that is driving the treads will simply keep driving them. Use <span class="m">CancelActionByIdTag</span> for that.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">DriveStraight</h3><span class="call-req">DriveStraightRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Queues an action that drives a set distance and returns only when the action completes, with an <span class="m">ActionResult</span> code.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">speed_mmps</span> <span class="m">float</span>, which the proto says should be positive; <span class="m">dist_mm</span> <span class="m">float</span>, positive forward and negative backward; <span class="m">should_play_animation</span> <span class="m">bool</span>; <span class="m">id_tag</span> <span class="m">int32</span> in 2000001 to 3000000; <span class="m">num_retries</span> <span class="m">int32</span>.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>The action is queued on the robot anyway, but no response is ever produced and the call hangs forever.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>An <span class="m">id_tag</span> outside the range is rejected up front with <span class="m">InvalidArgument</span>, and zero is outside the range, so you cannot leave the field at its default.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">TurnInPlace</h3><span class="call-req">TurnInPlaceRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Rotates on the spot, either by a relative angle or to an absolute heading, and completes with an <span class="m">ActionResult</span>.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">angle_rad</span> <span class="m">float</span>, positive left in relative mode; <span class="m">speed_rad_per_sec</span>; <span class="m">accel_rad_per_sec2</span>; <span class="m">tol_rad</span>; <span class="m">is_absolute</span> <span class="m">uint32</span>, 0 relative and 1 absolute; <span class="m">id_tag</span>; <span class="m">num_retries</span>.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Queued, never answered.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd><span class="m">tol_rad</span> is silently clamped. Anything smaller than <span class="m">POINT_TURN_ANGLE_TOL</span>, which is two degrees, is raised to it, and zero is read as "use the default". Asking for a tenth of a degree gets you two degrees and a warning in the robot's log you will not see.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">SetHeadAngle</h3><span class="call-req">SetHeadAngleRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Moves the head to an absolute angle as an action and completes when it arrives.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">angle_rad</span> <span class="m">float</span>; <span class="m">max_speed_rad_per_sec</span>; <span class="m">accel_rad_per_sec2</span>; <span class="m">duration_sec</span>; <span class="m">id_tag</span>; <span class="m">num_retries</span>.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Queued, never answered.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd><span class="m">angle_rad</span> is clipped to the mechanical range, &minus;22&deg; to +45&deg;, which is &minus;0.384 to 0.785 radians. Asking for more is not an error; the head simply stops at the limit and the action still reports success.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">SetLiftHeight</h3><span class="call-req">SetLiftHeightRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Moves the lift to an absolute height as an action.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">height_mm</span> <span class="m">float</span>; <span class="m">max_speed_rad_per_sec</span>; <span class="m">accel_rad_per_sec2</span>; <span class="m">duration_sec</span>; <span class="m">id_tag</span>; <span class="m">num_retries</span>.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Queued, never answered.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd><span class="m">height_mm</span> is clipped to 32&ndash;92&nbsp;mm when it is converted to a lift angle. The three positions the rest of the robot cares about are 32&nbsp;mm for docking with a cube on the ground, 76&nbsp;mm for a cube stacked on another, and 92&nbsp;mm for carrying.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">GoToPose</h3><span class="call-req">GoToPoseRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Runs the path planner to drive to an x, y position and final heading in the robot's current coordinate frame, then completes with an <span class="m">ActionResult</span>.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">x_mm</span>, <span class="m">y_mm</span>, <span class="m">rad</span>, all <span class="m">float</span>; <span class="m">motion_prof</span>, a <span class="m">PathMotionProfile</span> whose eleven fields cover speed, acceleration and deceleration for straight, point-turn and docking segments, plus <span class="m">is_custom</span>; <span class="m">id_tag</span>; <span class="m">num_retries</span>.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Queued, never answered.</dd></div>
+      <div><dt>Note</dt><dd>Planning can fail on its own terms. Read the result code: <span class="m">PATH_PLANNING_FAILED_ABORT</span> (50331674) and <span class="m">PATH_PLANNING_FAILED_RETRY</span> (67108871) are distinct answers, and only the second is worth retrying.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">TurnTowardsFace</h3><span class="call-req">TurnTowardsFaceRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Turns the body and head towards a face the robot already knows the position of.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">face_id</span> <span class="m">int32</span>, from <span class="m">RequestEnrolledNames</span> or a <span class="m">RobotObservedFace</span> event; <span class="m">max_turn_angle_rad</span> <span class="m">float</span>; <span class="m">id_tag</span>; <span class="m">num_retries</span>.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Queued, never answered.</dd></div>
+      <div><dt>Note</dt><dd>It turns towards where the robot last saw that face, not towards a face it can currently see. If the robot does not know where the id is, the result is <span class="m">NO_FACE</span> (50331668).</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">DriveOffCharger</h3><span class="call-req">DriveOffChargerRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Delegates to the robot's own drive-off-charger behaviour rather than queueing an action, and answers with a <span class="m">BehaviorResults</span> rather than an <span class="m">ActionResult</span>.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>The response is produced by <span class="m">BehaviorSDKInterface</span> while it is activated, so expect no answer without control.</dd></div>
+      <div><dt>Note</dt><dd><span class="m">result</span> is one of <span class="m">BEHAVIOR_INVALID_STATE</span> (0), <span class="m">BEHAVIOR_COMPLETE_STATE</span> (1) or <span class="m">BEHAVIOR_WONT_ACTIVATE_STATE</span> (2). The last one is the answer when the robot is not on the charger.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">DriveOnCharger</h3><span class="call-req">DriveOnChargerRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>The reverse behaviour: finds the charger marker, lines up and reverses on. It can take a while and can fail after several attempts.</dd></div>
+      <div><dt>Parameters</dt><dd>None. You cannot say which charger or give it a timeout.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Same as above, no answer expected.</dd></div>
+      <div><dt>Note</dt><dd>Returns <span class="m">BehaviorResults</span>, so there is no detailed failure code. If you need to know why, watch the <span class="m">robot_state</span> event's status bits for <span class="m">ROBOT_STATUS_IS_ON_CHARGER</span> (0x1000) and <span class="m">ROBOT_STATUS_IS_CHARGING</span> (0x2000).</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">LookAroundInPlace</h3><span class="call-req">LookAroundInPlaceRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Runs the robot's search behaviour, turning the body and sweeping the head to map what is around it.</dd></div>
+      <div><dt>Parameters</dt><dd>None. There is no duration, no sweep angle and no stop condition in the request.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>No answer expected.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>It does not stop on its own in any bounded time you control. <span class="m">CancelBehavior</span> is how you end it, and that call returns <span class="m">REQUEST_PROCESSING</span> without confirming the cancel, so watch the <span class="m">LookAroundInPlaceResponse</span> arriving to know it is over.</dd></div>
+    </dl>
+  </article>
+</section>
+
+
+<section class="panel" id="p-cubeact" data-tab="Cube handling" hidden>
+  <h2>Cube handling</h2>
+  <p class="lede">Seven manipulation actions. All of them need the cube to be a known object in the robot's world, which means marker detection has seen it or the cube is connected and being tracked. Six take an <span class="m">id_tag</span>; one is a behaviour and does not.</p>
+
+  <div class="note">
+    <h4>Getting an object id</h4>
+    <p>Every call here except <span class="m">RollBlock</span> takes an <span class="m">object_id</span>. A negative value means "the currently selected object", which is the robot's own choice. Positive ids come from the <span class="m">object_event</span> stream, specifically <span class="m">RobotObservedObject.object_id</span>, or from <span class="m">ConnectCubeResponse.object_id</span>. Marker detection must be on for the first of those, and marker detection needs behaviour control.</p>
+  </div>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">GoToObject</h3><span class="call-req">GoToObjectRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Plans a path and drives to a set distance from a known object, without touching it.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">object_id</span> <span class="m">int32</span>; <span class="m">motion_prof</span>; <span class="m">distance_from_object_origin_mm</span> <span class="m">float</span>, measured from the object's centre rather than its face; <span class="m">use_pre_dock_pose</span> <span class="m">bool</span>; <span class="m">id_tag</span>; <span class="m">num_retries</span>.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Queued, never answered.</dd></div>
+      <div><dt>Note</dt><dd>The distance is from the object's origin, so it includes half the object's own depth. The proto does not state a minimum and the gateway does not validate one.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">DockWithCube</h3><span class="call-req">DockWithCubeRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Approaches the cube and lines the lift up against it, stopping there. It does not pick the cube up.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">object_id</span>; <span class="m">distance_from_marker_mm</span> <span class="m">float</span>; <span class="m">approach_angle_rad</span> <span class="m">float</span>, used only when <span class="m">use_approach_angle</span> is true; <span class="m">alignment_type</span>, one of <span class="m">LIFT_FINGER</span> (1), <span class="m">LIFT_PLATE</span> (2), <span class="m">BODY</span> (3) or <span class="m">CUSTOM</span> (4); <span class="m">use_pre_dock_pose</span>; <span class="m">motion_prof</span>; <span class="m">id_tag</span>; <span class="m">num_retries</span>.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Queued, never answered.</dd></div>
+      <div><dt>Note</dt><dd><span class="m">distance_from_marker_mm</span> is only honoured with <span class="m">ALIGNMENT_TYPE_CUSTOM</span>; the other three alignments have fixed geometries. <span class="m">ALIGNMENT_TYPE_UNKNOWN</span> is 0, so an unset field is not a valid alignment.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">PickupObject</h3><span class="call-req">PickupObjectRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Docks with the cube, closes the lift on it and raises it to carry height. On success the robot is carrying the cube and <span class="m">robot_state.carrying_object_id</span> becomes that id.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">object_id</span>, negative meaning the currently selected object; <span class="m">motion_prof</span>; <span class="m">approach_angle_rad</span>; <span class="m">use_approach_angle</span>; <span class="m">use_pre_dock_pose</span>; <span class="m">id_tag</span>; <span class="m">num_retries</span>.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Queued, never answered.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Two failure codes look alike and mean opposite things. <span class="m">PICKUP_OBJECT_UNEXPECTEDLY_MOVING</span> (50331675) means someone moved the cube; <span class="m">PICKUP_OBJECT_UNEXPECTEDLY_NOT_MOVING</span> (67108873) means the robot closed on nothing and missed. Only the second is in the retry class.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">PlaceObjectOnGroundHere</h3><span class="call-req">PlaceObjectOnGroundHereRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Lowers whatever the robot is carrying onto the ground where it is standing and backs off.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">id_tag</span> and <span class="m">num_retries</span> only. There is no pose and no object id; "here" is literal.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Queued, never answered.</dd></div>
+      <div><dt>Note</dt><dd><span class="m">NOT_CARRYING_OBJECT_ABORT</span> (50331671) is the answer when the robot is not carrying anything, and <span class="m">PLACEMENT_GOAL_NOT_FREE</span> (67108872) when there is no room.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">RollObject</h3><span class="call-req">RollObjectRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Docks with the cube and flips it a quarter turn with the lift. The action version, which needs the robot to be able to reach a valid pre-dock pose.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">object_id</span>, negative meaning the currently selected object; <span class="m">motion_prof</span>; <span class="m">approach_angle_rad</span>; <span class="m">use_approach_angle</span>; <span class="m">use_pre_dock_pose</span>; <span class="m">id_tag</span>; <span class="m">num_retries</span>.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Queued, never answered.</dd></div>
+      <div><dt>Note</dt><dd>Confirm the roll happened by watching the <span class="m">object_event</span> stream for <span class="m">ObjectUpAxisChanged</span> rather than trusting the result code alone.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">PopAWheelie</h3><span class="call-req">PopAWheelieRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Pushes down on the cube with the lift to tip the robot up onto its back. The robot ends up in an off-treads state on purpose.</dd></div>
+      <div><dt>Parameters</dt><dd>Identical shape to <span class="m">RollObject</span>: <span class="m">object_id</span>, <span class="m">motion_prof</span>, <span class="m">approach_angle_rad</span>, <span class="m">use_approach_angle</span>, <span class="m">use_pre_dock_pose</span>, <span class="m">id_tag</span>, <span class="m">num_retries</span>.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Queued, never answered.</dd></div>
+      <div><dt>Note</dt><dd>Expect the next few actions to fail with <span class="m">INVALID_OFF_TREADS_STATE</span> (50331664) until the robot has righted itself.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">RollBlock</h3><span class="call-req">RollBlockRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>The same visible outcome as <span class="m">RollObject</span>, but as a behaviour rather than an action. The proto comment says so explicitly: it triggers a Vector behaviour and works regardless of relative position and orientation, so the robot will go and find the cube first.</dd></div>
+      <div><dt>Parameters</dt><dd>None at all. No object id, no approach angle, no <span class="m">id_tag</span>.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>No answer expected, since the response comes from the activated SDK behaviour.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Because it has no <span class="m">id_tag</span>, <span class="m">CancelActionByIdTag</span> cannot stop it. Use <span class="m">CancelBehavior</span>. It also answers with <span class="m">BehaviorResults</span>, so you get no failure detail beyond "would not activate".</dd></div>
+    </dl>
+  </article>
+</section>
+
+
+<section class="panel" id="p-audio" data-tab="Speech and audio" hidden>
+  <h2>Speech and audio</h2>
+  <p class="lede">Four calls. One speaks, one sets the volume, one plays your audio through the speaker, and one that looks like a microphone feed is not one.</p>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">SayText</h3><span class="call-req">SayTextRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Speaks the text through the robot's text-to-speech and blocks until the utterance finishes. The gateway loops on the response channel until <span class="m">state</span> reaches <span class="m">FINISHED</span> (4), passing through <span class="m">GENERATING</span> (1), <span class="m">READY</span> (2) and <span class="m">PLAYING</span> (3).</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">text</span> <span class="m">string</span>; <span class="m">use_vector_voice</span> <span class="m">bool</span>, false giving a plain synthesised voice instead of the processed Vector one; <span class="m">duration_scalar</span> <span class="m">float</span> from 0.05 (fast) to 20.0 (slow); <span class="m">pitch_scalar</span> <span class="m">float</span> from &minus;1.0 (low) to +1.0 (high).</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Refused with <span class="m">FORBIDDEN</span>, and this is the one refusal you can actually see. The engine's refusal leaves <span class="m">state</span> at the zero value <span class="m">INVALID</span>, and the gateway maps that to gRPC <span class="m">Internal</span> with the message "Failed to say text".</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Because it blocks until the utterance ends, a long string holds the RPC open for as long as it takes to say it, and there is no gateway timeout. Set a client deadline that accounts for <span class="m">duration_scalar</span>.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">SetMasterVolume</h3><span class="call-req">MasterVolumeRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Writes the speaker volume through <span class="m">SettingsManager</span>, so it persists in <span class="m">vic.RobotSettings</span> and survives a reboot. This is a settings write, not a session override.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">volume_level</span>, a <span class="m">MasterVolumeLevel</span>: <span class="m">VOLUME_LOW</span> (0), <span class="m">VOLUME_MEDIUM_LOW</span> (1), <span class="m">VOLUME_MEDIUM</span> (2), <span class="m">VOLUME_MEDIUM_HIGH</span> (3), <span class="m">VOLUME_HIGH</span> (4).</dd></div>
+      <div><dt>Control</dt><dd>Not needed. The engine case has no behaviour check.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>You cannot mute. The engine adds one to your value before writing it, because the settings <span class="m">Volume</span> enum has <span class="m">MUTE</span> at 0 and this RPC deliberately skips it. A value above 4 is rejected with <span class="m">FORBIDDEN</span> and nothing is written, but the gateway overwrites the status to <span class="m">RESPONSE_RECEIVED</span>, so an out-of-range volume reads as success. Read back with <span class="m">PullJdocs</span> if it matters.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="yes" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">AudioFeed</h3><span class="call-req">AudioFeedRequest</span><span class="badges"><span class="b b-stream">server stream</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Not what the name says. On this firmware it streams a synthesised 1&nbsp;kHz sine wave, not microphone audio. The only producer of <span class="m">external_interface::AudioChunk</span> in the engine is <span class="m">SDKComponent::UpdateDependent</span>, whose comment calls itself a "temporary 1 kHz sine wave generator to test over the wire transfer", with a TODO to replace it with a subscription to the real feed.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd>Not needed. Opening the stream sets the robot's audio mode to <span class="m">AUDIO_VOICE_DETECT_MODE</span> and a <code>defer</code> sets it back to <span class="m">AUDIO_OFF</span> when you disconnect.</dd></div>
+      <div><dt>What arrives</dt><dd>One <span class="m">AudioFeedResponse</span> per 100&nbsp;ms, reassembled from ten engine chunks of 160 samples into <span class="m">signal_power</span> of 1600 samples, which is 3200 bytes of 16-bit signed PCM. The wave is <span class="m">sin(&pi;i/8)</span> at amplitude 1000 rather than full scale, so it cycles every 16 samples against the 16&nbsp;kHz processing rate.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>The metadata is hard-coded, so none of it means anything: <span class="m">direction_strengths</span> is twelve zero bytes, <span class="m">source_confidence</span> is 0, <span class="m">noise_floor_power</span> is 0, and <span class="m">source_direction</span> is 12, which the proto itself documents as the invalid value. The transport is completely correct, frames arrive on time, and nothing reports an error. There is also no RPC for <span class="m">AudioSendMode</span>: the message exists and the engine consumes it, but no method on the service takes it, and the engine's handler only sets a boolean, so the three processing modes are indistinguishable from outside.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="yes" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">ExternalAudioStreamPlayback</h3><span class="call-req">ExternalAudioStreamRequest</span><span class="badges"><span class="b b-stream">bidi stream</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Plays your PCM through the robot's speaker. Fully implemented, unlike <span class="m">AudioFeed</span>: the requests reach the animation process and the robot really makes the sound.</dd></div>
+      <div><dt>Parameters</dt><dd>Each request is a oneof of four. <span class="m">ExternalAudioStreamPrepare</span> carries <span class="m">audio_frame_rate</span> <span class="m">uint32</span> from 8000 to 16025 and <span class="m">audio_volume</span> <span class="m">uint32</span> from 0 to 100. <span class="m">ExternalAudioStreamChunk</span> carries <span class="m">audio_chunk_size_bytes</span> and <span class="m">audio_chunk_samples</span>, 16-bit little-endian PCM, with a current engine maximum of 1024 bytes per chunk. <span class="m">ExternalAudioStreamComplete</span> and <span class="m">ExternalAudioStreamCancel</span> are empty.</dd></div>
+      <div><dt>Control</dt><dd>Not needed. The four engine cases have no behaviour check.</dd></div>
+      <div><dt>What comes back</dt><dd>A oneof of <span class="m">ExternalAudioStreamPlaybackComplete</span>, <span class="m">ExternalAudioStreamBufferOverrun</span> (carrying <span class="m">audio_samples_sent</span> and <span class="m">audio_samples_played</span>, which is how you find your pacing) and a playback failure.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>The failure field is misspelled in the proto as <span class="m">audio_stream_playback_failyer</span>, so generated accessors carry the typo and so must your code. A request with none of the four oneof arms set is rejected with <span class="m">InvalidArgument</span> and, because the rejection happens in the request-handling goroutine, it closes the stream rather than answering.</dd></div>
+    </dl>
+  </article>
+</section>
+
+
+<section class="panel" id="p-anim" data-tab="Animation and face" hidden>
+  <h2>Animation and face</h2>
+  <p class="lede">Playing the robot's canned animations, listing the ones it knows, and taking over the screen yourself.</p>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">PlayAnimation</h3><span class="call-req">PlayAnimationRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Plays one named animation and blocks until it finishes. The reply echoes back the animation the robot actually executed.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">animation</span>, an <span class="m">Animation</span> message whose only field is <span class="m">name</span>; <span class="m">loops</span> <span class="m">uint32</span>; <span class="m">ignore_body_track</span>, <span class="m">ignore_head_track</span>, <span class="m">ignore_lift_track</span>, all <span class="m">bool</span>, which let the animation play without moving that part.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>The <span class="m">PlayAnimationResponse</span> is produced only by <span class="m">SDKComponent::OnActionCompleted</span>, which runs only while the SDK behaviour is active, so the call hangs. Whether the request itself is refused on the CLAD path is <span class="unconf">unconfirmed</span>.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd><span class="m">loops</span> of 0 and 1 are not obviously different, and neither is documented. There is no gateway timeout on this call, so a long or looping animation holds the RPC open for its whole duration.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">PlayAnimationTrigger</h3><span class="call-req">PlayAnimationTriggerRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Names a trigger rather than an animation and lets the robot pick a variant from that group, which is what makes repeated behaviour look less mechanical.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">animation_trigger</span>, an <span class="m">AnimationTrigger</span> whose only field is <span class="m">name</span>; <span class="m">loops</span>; <span class="m">use_lift_safe</span> <span class="m">bool</span>, which drops the lift track automatically if the robot is carrying something; and the same three <span class="m">ignore_*_track</span> flags.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Same as <span class="m">PlayAnimation</span>: no response is produced and the call hangs.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>It returns a <span class="m">PlayAnimationResponse</span>, not a trigger-specific message, and the gateway says why in a comment: in the end the engine is playing an animation. Because responses are matched by type, a concurrent <span class="m">PlayAnimation</span> on another connection can collect this one's reply.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">ListAnimations</h3><span class="call-req">ListAnimationsRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Returns every animation name the robot knows, as one accumulated <span class="m">ListAnimationsResponse</span>. The engine sends them in batches of roughly fifty per tick and ends with a sentinel entry named <span class="m">EndOfListAnimationsResponses</span>; the gateway collects the batches, stops on the sentinel and does not pass it on.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd>Not needed.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>The list is filtered. Any name containing <span class="m">_avs_</span> is dropped, which is every Alexa animation, under VIC-11583. And the call has its own five-second deadline: if the sentinel has not arrived by then you get gRPC <span class="m">DeadlineExceeded</span> with "ListAnimations request timed out" and no partial list.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">ListAnimationTriggers</h3><span class="call-req">ListAnimationTriggersRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>The same, for trigger names. Confirmed ungated: the engine case calls straight through with no behaviour check.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd>Not needed.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>A different filter and a different deadline from <span class="m">ListAnimations</span>. Names are lowercased and any containing <span class="m">deprecated</span> or <span class="m">alexa</span> are dropped, and the deadline is ten seconds rather than five.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">DisplayFaceImageRGB</h3><span class="call-req">DisplayFaceImageRGBRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Draws a raw bitmap on the robot's screen for a set duration. The gateway splits it into chunks of 600 pixels and pushes them to the animation process over CLAD, then returns <span class="m">REQUEST_PROCESSING</span> without waiting.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">face_data</span> <span class="m">bytes</span>. The gateway hard-codes <span class="m">totalPixels = 17664</span> and two bytes per pixel, so 35,328 bytes; <span class="m">duration_ms</span> <span class="m">uint32</span>; <span class="m">interrupt_running</span> <span class="m">bool</span>, which decides whether it displaces whatever is on the screen now.</dd></div>
+      <div><dt>Control</dt><dd>Not needed. It is not one of the seven refused requests.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Three of them, and this call is the usual first day lost. The pixel format is neither RGB888 nor standard RGB565: wire-pod, following the fforchino SDK, packs each pixel as <span class="m">000bbbbbrrrrrggg</span>, three unused high bits then five of blue, five of red and three of green, so green loses the most precision and getting it wrong swaps channels rather than failing. The byte order is the second: the robot's gateway reads each pixel with <span class="m">binary.BigEndian.Uint16</span>, while wire-pod writes its computed <span class="m">uint16</span> little-endian, so the two disagree by a byte swap and only testing on the robot settles which combination renders correctly. The third is length: the gateway slices <span class="m">face_data</span> by computed offsets with no length check and a TODO saying "Make this not implode on empty", so short or empty data is a fault in the handler, not an error you receive.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">SetEyeColor</h3><span class="call-req">SetEyeColorRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Sets the eye hue and saturation for the current session. It does not write a setting, so it is not the same as changing <span class="m">eye_color</span> through <span class="m">UpdateSettings</span>.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">hue</span> and <span class="m">saturation</span>, both <span class="m">float</span>. The proto gives no range and the gateway validates neither.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Refused with <span class="m">FORBIDDEN</span> by the engine, but you never learn that.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>This is the worst reporting of any call on the robot. The gateway registers no listener for <span class="m">SetEyeColorResponse</span> at all and returns <span class="m">REQUEST_PROCESSING</span> immediately, so the engine's refusal is delivered to nobody and dropped. You always see success, whether the colour changed or not. It is also undone the moment you lose control, because deactivation reapplies all saved settings, with a comment in the gateway noting that as a TODO.</dd></div>
+    </dl>
+  </article>
+</section>
+
+
+<section class="panel" id="p-camera" data-tab="Camera and vision" hidden>
+  <h2>Camera and vision</h2>
+  <p class="lede">Image streaming is deliberately ungated and works with no control at all. Every other vision mode is refused without control, and every one of them blocks the gateway with no timeout until the vision system confirms the change.</p>
+
+  <div class="note bad">
+    <h4>The single most expensive behaviour on the robot</h4>
+    <p>The engine does not answer a vision toggle immediately. It adds the mode to a pending list and only replies once a processed camera frame shows the mode has actually appeared or disappeared. A sleeping robot has paused its vision component and may have deleted the camera outright, so no frame is produced and the confirmation never comes. The gateway blocks on that channel with no timeout and without reading your request context, so your call hangs.</p>
+    <p>The fix is on your side: take behaviour control first. Requesting control is the only SDK message registered as a wake reason, so the robot wakes and the camera calls then answer.</p>
+  </div>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">EnableImageStreaming</h3><span class="call-req">EnableImageStreamingRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Turns <span class="m">VisionMode::Viz</span> on or off. This is the one vision mode that is ungated on purpose, with a comment in the engine saying "Allowed to be controlled even when the behavior is not active", and it is the mode that survives when you lose control so that image consumers keep working.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">enable</span> <span class="m">bool</span>; <span class="m">enable_high_resolution</span> <span class="m">bool</span>, which selects 1280 by 720 instead of the default 640 by 360.</dd></div>
+      <div><dt>Control</dt><dd>Not needed.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>It blocks until the vision system confirms, with no timeout, which is the hang described above. The gateway also carries a TODO, VIC-11579, saying streaming resolution is not yet selectable, so treat <span class="m">enable_high_resolution</span> on this call as affecting <span class="m">CaptureSingleImage</span> rather than the continuous stream.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">IsImageStreamingEnabled</h3><span class="call-req">IsImageStreamingEnabledRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Asks the engine whether <span class="m">VisionMode::Viz</span> is currently on and returns a single bool.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd>Not needed.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>The response has no status field set at all. The gateway builds a fresh <span class="m">IsImageStreamingEnabledResponse</span> carrying only <span class="m">is_image_streaming_enabled</span>, leaving <span class="m">status</span> nil, so code that reads the status code first will see the zero value <span class="m">UNKNOWN</span> on a perfectly good reply. It also blocks with no timeout like the others.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="yes" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">CameraFeed</h3><span class="call-req">CameraFeedRequest</span><span class="badges"><span class="b b-stream">server stream</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Calls <span class="m">EnableImageStreaming</span> itself, then reassembles the engine's <span class="m">ImageChunk</span> messages into whole frames and sends one <span class="m">CameraFeedResponse</span> per frame. A <code>defer</code> disables streaming when you disconnect.</dd></div>
+      <div><dt>Parameters</dt><dd>None. There is no frame rate, no resolution and no encoding choice.</dd></div>
+      <div><dt>Control</dt><dd>Not needed, which is why a camera page works on a robot you are not driving.</dd></div>
+      <div><dt>What arrives</dt><dd><span class="m">frame_time_stamp</span>, <span class="m">image_id</span>, <span class="m">image_encoding</span> and <span class="m">data</span>. The encoding is an <span class="m">ImageChunk.ImageEncoding</span>, so check it rather than assuming JPEG; the enum covers raw gray, raw RGB, YUYV, Bayer and five JPEG variants including minimized forms with no header or footer.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Always the default resolution. The handler passes <span class="m">EnableHighResolution: false</span> with a comment saying the video stream only uses the default image resolution, so there is no way to get 1280 by 720 from this call. Because it starts by calling <span class="m">EnableImageStreaming</span> and returns its error, a sleeping robot means the stream never even sends headers. The deferred disable waits on the same confirmation, so teardown can block too.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">CaptureSingleImage</h3><span class="call-req">CaptureSingleImageRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Less than it sounds. It never reaches the engine at all: the gateway implements it as enable streaming, take the first complete frame, disable streaming. The engine's subscription for <span class="m">kCaptureSingleImageRequest</span> is a commented-out line and is the only mention of the call anywhere in the engine.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">enable_high_resolution</span> <span class="m">bool</span>. Default is 640 by 360; with it set, 1280 by 720.</dd></div>
+      <div><dt>Control</dt><dd>Not needed, because it is built entirely on the ungated <span class="m">EnableImageStreaming</span>.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>It turns streaming off again when it is done, even if you had turned it on yourself, because the deferred disable is unconditional. Calling it in the middle of your own <span class="m">CameraFeed</span> session will interfere. It inherits the sleeping-robot hang from <span class="m">EnableImageStreaming</span> at both ends.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">GetCameraConfig</h3><span class="call-req">CameraConfigRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Returns the camera intrinsics and the limits you need before calling <span class="m">SetCameraSettings</span>. Call this first; the numbers are per robot, not constants.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd>Not needed.</dd></div>
+      <div><dt>What arrives</dt><dd><span class="m">focal_length_x</span>, <span class="m">focal_length_y</span>, <span class="m">center_x</span>, <span class="m">center_y</span>; <span class="m">fov_x</span> and <span class="m">fov_y</span>, which the proto states are full field of view in degrees, not half angles; and the four bounds <span class="m">min_camera_exposure_time_ms</span>, <span class="m">max_camera_exposure_time_ms</span>, <span class="m">min_camera_gain</span>, <span class="m">max_camera_gain</span>.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd><span class="m">CameraConfigResponse</span> has no status field, and the gateway returns the engine's message verbatim without adding one. There is nothing to check, so treat a successful RPC as the answer.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">SetCameraSettings</h3><span class="call-req">SetCameraSettingsRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Turns auto-exposure on, or turns it off and fixes gain and exposure to your values. With <span class="m">enable_auto_exposure</span> true the other two fields are ignored entirely.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">gain</span> <span class="m">float</span>; <span class="m">exposure_ms</span> <span class="m">uint32</span>; <span class="m">enable_auto_exposure</span> <span class="m">bool</span>. Both numbers are validated against the bounds <span class="m">GetCameraConfig</span> reports.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Refused with <span class="m">FORBIDDEN</span>, and the gateway overwrites the status to <span class="m">RESPONSE_RECEIVED</span>.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>This is the only refused call that leaks the truth, and only by accident. The gateway rewrites <span class="m">status</span> but leaves <span class="m">status_message</span> alone, and the engine fills that string on an out-of-range value with the actual permitted ranges: "Camera exposure time must be in the range X - Y ms, gain must be in the range A - B". So a non-empty <span class="m">status_message</span> on a <span class="m">RESPONSE_RECEIVED</span> reply means the call was rejected. Losing control also restores auto-exposure, so a fixed exposure does not survive a behaviour interruption.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">EnableMirrorMode</h3><span class="call-req">EnableMirrorModeRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Puts the camera feed on the robot's own screen, with whatever detections are enabled drawn over it. Useful for seeing what the robot sees without a client.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">enable</span> <span class="m">bool</span>.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Refused with <span class="m">FORBIDDEN</span>, which the gateway overwrites to <span class="m">RESPONSE_RECEIVED</span>. You see success and the screen does not change.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>It is turned off for you when you lose control, and the robot announces that with a <span class="m">mirror_mode_disabled</span> event rather than telling the caller. It also blocks with no timeout and has no fast path for the disable direction.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">EnableMarkerDetection</h3><span class="call-req">EnableMarkerDetectionRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Turns on the vision mode that recognises the printed markers on cubes and custom objects. This is what makes <span class="m">RobotObservedObject</span> events appear and what gives you an <span class="m">object_id</span> for the cube-handling calls.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">enable</span> <span class="m">bool</span>.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Refused with <span class="m">FORBIDDEN</span> in the enable direction, and the gateway overwrites the status to <span class="m">RESPONSE_RECEIVED</span>.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>The two directions behave differently. With <span class="m">enable = false</span> the gateway writes the request and returns <span class="m">REQUEST_PROCESSING</span> straight away without waiting, because of VIC-12762, whose comment records intermittent stalls of about fifty seconds and notes that disabling is "more of a suggestion" since other subscribers on the robot may want the mode kept on. With <span class="m">enable = true</span> it waits with no timeout. A TODO in the same comment asks whether the other vision modes have the same problem; they do, and they did not get the fix.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">EnableMotionDetection</h3><span class="call-req">EnableMotionDetectionRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Turns on the mode that produces <span class="m">robot_observed_motion</span> events, which report where in the frame motion was seen and, when it can be projected, where on the ground.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">enable</span> <span class="m">bool</span>.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Refused with <span class="m">FORBIDDEN</span>, overwritten to <span class="m">RESPONSE_RECEIVED</span>.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Blocks with no timeout in both directions. The engine also notes a one-frame lag between the mode changing and the response, so even a client that waits properly can miss the first frame's detections.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="yes" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">NavMapFeed</h3><span class="call-req">NavMapFeedRequest</span><span class="badges"><span class="b b-stream">server stream</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Streams the robot's navigation memory map. The gateway sets the engine's broadcast frequency on entry, reassembles each map from a begin, many data and an end message, and sends one <span class="m">NavMapFeedResponse</span> per complete map. A <code>defer</code> sets the frequency to &minus;1.0 when you disconnect.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">frequency</span> <span class="m">float</span>.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> Not among the seven refused requests, and the handler goes straight to CLAD, but this call was not audited for gating.</dd></div>
+      <div><dt>What arrives</dt><dd><span class="m">origin_id</span>, which you compare against the robot's current origin to know whether the map still applies; <span class="m">map_info</span> with the root depth, size and centre; and <span class="m">quad_infos</span>, each a content type, a depth and an RGBA colour. The ten content types run from <span class="m">NAV_NODE_CLEAR_OF_OBSTACLE</span> through the three proximity-obstacle kinds to <span class="m">NAV_NODE_CLIFF</span> and the two edge types.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd><span class="m">frequency</span> is a period in seconds, not a rate in hertz. The gateway logs it as seconds and the CLAD message it sends is named <span class="m">SetMemoryMapBroadcastFrequency_sec</span>. Asking for 30 gets you a map every thirty seconds, not thirty maps a second.</dd></div>
+    </dl>
+  </article>
+</section>
+
+
+<section class="panel" id="p-faces" data-tab="Faces" hidden>
+  <h2>Faces</h2>
+  <p class="lede">Detecting faces, naming them, and the two-step enrollment that is easy to get out of order. Most of the edit calls here return before anything has happened.</p>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">EnableFaceDetection</h3><span class="call-req">EnableFaceDetectionRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Turns on face detection and, optionally, four extra analyses. Without it, no <span class="m">robot_observed_face</span> event ever reaches your event stream.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">enable</span> plus four independent bools: <span class="m">enable_smile_detection</span>, <span class="m">enable_expression_estimation</span>, <span class="m">enable_blink_detection</span>, <span class="m">enable_gaze_detection</span>. Each costs vision time, so enable only what you read.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>Refused with <span class="m">FORBIDDEN</span>, and the gateway overwrites the status to <span class="m">RESPONSE_RECEIVED</span>. The stream simply stays empty.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Blocks with no timeout, and it is switched off for you when you lose control. If you want expressions, note that <span class="m">RobotObservedFace.expression_values</span> is a histogram summing to 100, except that it is all zeros when <span class="m">expression</span> is <span class="m">EXPRESSION_UNKNOWN</span>, which is what you get when estimation is off.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">RequestEnrolledNames</h3><span class="call-req">RequestEnrolledNamesRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Lists every face the robot has learned, and waits for the engine's real answer rather than returning early. This is the call to use to get a <span class="m">face_id</span> for <span class="m">TurnTowardsFace</span>.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd>Not needed.</dd></div>
+      <div><dt>What arrives</dt><dd><span class="m">LoadedKnownFace</span> records with <span class="m">face_id</span>, <span class="m">name</span> and four timestamps: <span class="m">seconds_since_first_enrolled</span>, <span class="m">seconds_since_last_updated</span>, <span class="m">seconds_since_last_seen</span> and <span class="m">last_seen_seconds_since_epoch</span>. The first three are ages, the fourth is an absolute time.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">SetFaceToEnroll</h3><span class="call-req">SetFaceToEnrollRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Arms the next enrollment. It stages the name and which face to attach it to; it does not start anything on its own.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">name</span> <span class="m">string</span>; <span class="m">observed_id</span> <span class="m">int32</span>, the id of a specific face being tracked, or 0 for the next one seen; <span class="m">save_id</span> <span class="m">int32</span>, an existing face to merge into, or 0 to use <span class="m">observed_id</span>; <span class="m">save_to_robot</span> <span class="m">bool</span>; <span class="m">say_name</span> <span class="m">bool</span>; <span class="m">use_music</span> <span class="m">bool</span>.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>The response comes from the SDK behaviour, so expect no answer without control.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Two of the flags have side effects the proto warns about in passing. <span class="m">save_to_robot</span> resaves every enrolled face, not only this one. <span class="m">use_music</span> starts special music and, in the proto's own words, will leave music playing.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">EnrollFace</h3><span class="call-req">EnrollFaceRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Runs the enrollment behaviour, which drives the robot to look at the person and gather enough views to learn the face. It blocks until the behaviour finishes.</dd></div>
+      <div><dt>Parameters</dt><dd>None. Everything comes from the preceding <span class="m">SetFaceToEnroll</span>.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>No answer expected; the response is produced by the activated SDK behaviour.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>It must follow <span class="m">SetFaceToEnroll</span>, and the reply is only a <span class="m">BehaviorResults</span>, so it will not tell you why enrollment failed. The detail arrives separately as a <span class="m">FaceEnrollmentCompleted</span> status on the event stream, whose <span class="m">result</span> distinguishes <span class="m">SAW_WRONG_FACE</span>, <span class="m">SAW_MULTIPLE_FACES</span>, <span class="m">TIMED_OUT</span>, <span class="m">SAVE_FAILED</span>, <span class="m">INCOMPLETE</span>, <span class="m">CANCELLED</span>, <span class="m">NAME_IN_USE</span> and <span class="m">NAMED_STORAGE_FULL</span>. Watch the event stream if you care which.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">CancelFaceEnrollment</h3><span class="call-req">CancelFaceEnrollmentRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Aborts an enrollment in progress. Travels as gateway CLAD.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd>Not needed for the message to be forwarded.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Fire and forget. The gateway writes the CLAD message and returns <span class="m">REQUEST_PROCESSING</span> without waiting for anything, so a success here means only that the message was written. Confirm with the <span class="m">FaceEnrollmentCompleted</span> status carrying <span class="m">CANCELLED</span>.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">UpdateEnrolledFaceByID</h3><span class="call-req">UpdateEnrolledFaceByIDRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Renames a known face.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">face_id</span> <span class="m">int32</span>; <span class="m">old_name</span> and <span class="m">new_name</span>, both <span class="m">string</span>. The old name is sent as well as the id.</dd></div>
+      <div><dt>Control</dt><dd>Not needed for the message to be forwarded.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Fire and forget, with a TODO in the gateway saying it should wait for <span class="m">RobotRenamedEnrolledFace</span> and does not. You get <span class="m">REQUEST_PROCESSING</span> whether or not the id existed. The confirmation is the <span class="m">robot_renamed_enrolled_face</span> event, or another <span class="m">RequestEnrolledNames</span>.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">EraseEnrolledFaceByID</h3><span class="call-req">EraseEnrolledFaceByIDRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Forgets one face.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">face_id</span> <span class="m">int32</span>.</dd></div>
+      <div><dt>Control</dt><dd>Not needed for the message to be forwarded.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Fire and forget, same TODO. Confirm with the <span class="m">robot_erased_enrolled_face</span> event, which carries both the id and the name that was erased.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">EraseAllEnrolledFaces</h3><span class="call-req">EraseAllEnrolledFacesRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Forgets every face the robot knows. There is no confirmation step and no undo.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd>Not needed for the message to be forwarded.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Fire and forget, so the call returns success before anything has been erased, and it takes no arguments at all, which makes it very easy to invoke by mistake from a REST client.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="yes" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">FindFaces</h3><span class="call-req">FindFacesRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-ctl">control</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Runs the robot's search behaviour: it turns and angles its head looking for a face. A behaviour, not an action, so there is no <span class="m">id_tag</span>.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div class="is-nc"><dt>Without control</dt><dd>No answer expected, since the response comes from the activated SDK behaviour.</dd></div>
+      <div><dt>Note</dt><dd>It does not enable face detection for you. Enable that first, or the robot will turn and look and report nothing. Stop it with <span class="m">CancelBehavior</span>, not <span class="m">CancelActionByIdTag</span>.</dd></div>
+    </dl>
+  </article>
+</section>
+
+
+<section class="panel" id="p-photos" data-tab="Photos" hidden>
+  <h2>Photos</h2>
+  <p class="lede">The photos the robot took itself, when someone asked it to. There is no RPC that makes it take one; that happens through a voice intent, and you learn about it from the <span class="m">photo_taken</span> event. The three read calls were confirmed ungated in the photography manager; <span class="m">DeletePhoto</span> sits on the same path but was not separately audited.</p>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">PhotosInfo</h3><span class="call-req">PhotosInfoRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Lists what is stored, without any image data. Start here; the ids are what the other three calls take.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd>Not needed.</dd></div>
+      <div><dt>What arrives</dt><dd><span class="m">PhotoInfo</span> records with <span class="m">photo_id</span>, <span class="m">timestamp_utc</span>, and two bookkeeping flags, <span class="m">photo_copied_to_app</span> and <span class="m">thumb_copied_to_app</span>, which record whether the phone app has already fetched them. Nothing sets those for you.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">Photo</h3><span class="call-req">PhotoRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Returns one full photo as bytes. The engine answers with a file path, and the gateway reads that file off the robot's disk and puts its contents in the reply.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">photo_id</span> <span class="m">uint32</span>.</dd></div>
+      <div><dt>Control</dt><dd>Not needed.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Two different failures both come back as status <span class="m">NOT_FOUND</span> with <span class="m">success = false</span>: the engine not knowing that id, and the gateway failing to read the file it was given. The whole image arrives in one message, so a large photo is one large frame rather than a stream, and it is subject to your client's maximum receive size.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">Thumbnail</h3><span class="call-req">ThumbnailRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>The same, for the thumbnail. Identical mechanism, a separate stored file.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">photo_id</span> <span class="m">uint32</span>, the same id as the full photo.</dd></div>
+      <div><dt>Control</dt><dd>Not needed.</dd></div>
+      <div><dt>Note</dt><dd>Use this for a gallery. It is the only call here whose payload is small enough to fetch for every photo at once.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">DeletePhoto</h3><span class="call-req">DeletePhotoRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Deletes one photo and its thumbnail. Unlike the face-erase calls, this one does wait for the engine's answer.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">photo_id</span> <span class="m">uint32</span>.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> Not among the seven refused requests, but this call was not separately audited for gating.</dd></div>
+      <div><dt>Note</dt><dd>The reply carries both a status and a <span class="m">success</span> bool. The status is overwritten to <span class="m">RESPONSE_RECEIVED</span> by the gateway, so <span class="m">success</span> is the field that means anything.</dd></div>
+    </dl>
+  </article>
+</section>
+
+
+<section class="panel" id="p-cubes" data-tab="Cubes" hidden>
+  <h2>Cubes</h2>
+  <p class="lede">The Bluetooth link to the light cube, its LEDs, and the custom objects you can teach the robot to see. Most of these return before the robot has done anything.</p>
+
+  <div class="note">
+    <h4>Gating here was not audited</h4>
+    <p>None of these calls is among the seven the engine refuses with <span class="m">FORBIDDEN</span>, and <span class="m">SetCubeLights</span> carries a TODO, VIC-4872, saying the light calls are not yet integrated with the SDK behaviour. That is suggestive but not proof, so treat the control column on this tab as not established rather than as a confirmed "no".</p>
+  </div>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">ConnectCube</h3><span class="call-req">ConnectCubeRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Opens the BLE link to a cube and waits for the engine's answer. If a cube is already connected the proto says this does nothing.</dd></div>
+      <div><dt>Parameters</dt><dd>None. You cannot name which cube; the robot connects to its preferred cube, or to the strongest signal if it has none.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> See the note above.</dd></div>
+      <div><dt>What arrives</dt><dd><span class="m">success</span> <span class="m">bool</span>, <span class="m">object_id</span> <span class="m">uint32</span>, which is the id the cube-handling actions take, and <span class="m">factory_id</span> <span class="m">string</span>, which is the cube's permanent identity.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>The status is overwritten to <span class="m">RESPONSE_RECEIVED</span> regardless, so read <span class="m">success</span>. The link can also drop later without any RPC failing; watch the <span class="m">object_event</span> stream for <span class="m">CubeConnectionLost</span> and <span class="m">ObjectConnectionState</span>.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">DisconnectCube</h3><span class="call-req">DisconnectCubeRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Asks the robot to drop the cube connection.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> See the note above.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Fire and forget. Unlike <span class="m">ConnectCube</span>, the gateway registers no listener and returns <span class="m">REQUEST_PROCESSING</span> at once, so the asymmetry between the two calls is real: one confirms and one does not.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">CubesAvailable</h3><span class="call-req">CubesAvailableRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Scans for cubes in range and waits for the result.</dd></div>
+      <div><dt>Parameters</dt><dd>None. There is no scan duration in the request.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> See the note above.</dd></div>
+      <div><dt>What arrives</dt><dd><span class="m">factory_ids</span>, a repeated string. These are the same identities <span class="m">SetPreferredCube</span> takes, so this is how you find one to pin.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">FlashCubeLights</h3><span class="call-req">FlashCubeLightsRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Plays the robot's own cube-connection flash animation. The proto is explicit that this is meant for surfacing connectivity in an app, not for controlling cube lights from a script.</dd></div>
+      <div><dt>Parameters</dt><dd>None. Colour, pattern and duration are all fixed.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> See the note above.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Fire and forget, and it does nothing at all if no cube is connected. Use <span class="m">SetCubeLights</span> if you want to choose the colours.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">SetCubeLights</h3><span class="call-req">SetCubeLightsRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Drives the cube's LEDs directly. Each LED gets an on colour and an off colour, how long to hold each, and how long to fade between them, which the engine wraps into a generated light animation.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">object_id</span> <span class="m">uint32</span>; seven repeated fields of <strong>exactly four entries each</strong>, one per LED: <span class="m">on_color</span>, <span class="m">off_color</span>, <span class="m">on_period_ms</span>, <span class="m">off_period_ms</span>, <span class="m">transition_on_period_ms</span>, <span class="m">transition_off_period_ms</span> and <span class="m">offset</span>; <span class="m">relative_to_x</span> and <span class="m">relative_to_y</span> <span class="m">float</span>; <span class="m">rotate</span> <span class="m">bool</span>; and <span class="m">make_relative</span>, one of <span class="m">UNKNOWN</span> (0), <span class="m">OFF</span> (1), <span class="m">BY_CORNER</span> (2), <span class="m">BY_SIDE</span> (3).</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> See the note above.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd><span class="m">make_relative</span> must not be 0. The engine logs "Got relative mode 0 (Unknown) from gateway, ignoring call" and drops the whole request, so an unset field means nothing happens. Send <span class="m">OFF</span> (1) if you do not want relative behaviour. Separately, the engine copies each repeated field into a fixed four-element array with no length check, so send exactly four of each. And the gateway returns <span class="m">REQUEST_PROCESSING</span> without waiting, so nothing here is confirmed.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">ForgetPreferredCube</h3><span class="call-req">ForgetPreferredCubeRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Clears the saved cube preference and writes that to disk. The next cube the robot connects to becomes the new preferred one, chosen by strongest signal.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> See the note above.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Fire and forget, and it persists across reboots. There is no call to read the current preference back.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">SetPreferredCube</h3><span class="call-req">SetPreferredCubeRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Pins the robot to one cube by factory id and saves it to disk.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">factory_id</span> <span class="m">string</span>, from <span class="m">CubesAvailable</span> or <span class="m">ConnectCube</span>.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> See the note above.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>The proto comment says this is only used in simulation for now. Whether it takes effect on real hardware is <span class="unconf">unconfirmed</span>. It is also fire and forget, so nothing tells you either way.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">DefineCustomObject</h3><span class="call-req">DefineCustomObjectRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Teaches the robot an object shape identified by printed markers, so that marker detection can then report it as a tracked object with a pose. It waits for the engine to confirm.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">custom_type</span>, one of <span class="m">CUSTOM_TYPE_00</span> through <span class="m">CUSTOM_TYPE_19</span>, so twenty slots; <span class="m">is_unique</span> <span class="m">bool</span>, which guarantees at most one of that type exists at a time; and a oneof of three shapes. A <span class="m">CustomBoxDefinition</span> gives a different marker for each of six faces plus the three side lengths and the marker size. A <span class="m">CustomCubeDefinition</span> gives one marker repeated on all faces, a single <span class="m">size_mm</span>, and the marker size. A <span class="m">CustomWallDefinition</span> gives one marker on front and back with a width and height; its thickness is fixed at 10&nbsp;mm by <span class="m">FIXED_CUSTOM_WALL_THICKNESS_MM</span>.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> See the note above.</dd></div>
+      <div><dt>Note</dt><dd>Markers come from a fixed set of sixteen: circles, diamonds, hexagons and triangles, in counts of two to five. Sending no oneof arm at all is rejected with <span class="m">InvalidArgument</span>. The reply carries a <span class="m">success</span> bool that is worth reading.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">CreateFixedCustomObject</h3><span class="call-req">CreateFixedCustomObjectRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Drops an invisible box into the robot's world at a pose you choose, with no connection to the vision system. Because nothing can ever observe it, it stays there as an obstacle until you delete it. This is how you fence the robot away from a table edge.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">pose</span>, a <span class="m">PoseStruct</span> with <span class="m">x</span>, <span class="m">y</span>, <span class="m">z</span>, a rotation quaternion <span class="m">q0</span> to <span class="m">q3</span>, and <span class="m">origin_id</span>; plus <span class="m">x_size_mm</span>, <span class="m">y_size_mm</span>, <span class="m">z_size_mm</span>.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> See the note above.</dd></div>
+      <div><dt>Note</dt><dd>The pose is in a coordinate frame, and <span class="m">origin_id</span> names which one. If the robot is delocalised and starts a new origin, your obstacle is in the old frame and no longer where you meant. Compare against the <span class="m">origin_id</span> in <span class="m">robot_state</span> or <span class="m">NavMapFeed</span>.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">DeleteCustomObjects</h3><span class="call-req">DeleteCustomObjectsRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Removes custom objects, in one of three senses, and waits for the engine to confirm.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">mode</span>: <span class="m">DELETION_MASK_FIXED_CUSTOM_OBJECTS</span> (1) removes the invisible obstacles, <span class="m">DELETION_MASK_CUSTOM_MARKER_OBJECTS</span> (2) removes observed marker objects, and <span class="m">DELETION_MASK_ARCHETYPES</span> (3) undefines the marker definitions themselves.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> See the note above.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Mode 0, <span class="m">DELETION_MASK_UNKNOWN</span>, is the proto default and the gateway's switch has no default case, so no branch is taken and the request is sent with nothing filled in. Always set the mode explicitly.</dd></div>
+    </dl>
+  </article>
+</section>
+
+
+<section class="panel" id="p-settings" data-tab="Settings and state" hidden>
+  <h2>Settings and state</h2>
+  <p class="lede">Reading and writing the robot's own jdocs, and asking it how it is. This is the tab where the vendored proto will quietly betray you, so read the settings warning before you send anything binary.</p>
+
+  <div class="note bad">
+    <h4>Never send UpdateSettings as binary protobuf from the vendored proto</h4>
+    <p>The robot's <span class="m">RobotSettingsConfig</span> has <span class="m">custom_eye_color</span> at field 3 and the vendored copy does not, so every field from 3 onwards is off by one on the wire. Your <span class="m">default_location</span> arrives as <span class="m">custom_eye_color</span>, your <span class="m">locale</span> arrives as <span class="m">dist_is_metric</span>, and so on. Use the REST mirror at <code>POST /v1/update_settings</code> with a JSON body instead, because grpc-gateway matches on field names rather than numbers. That is why wire-pod never calls this over gRPC.</p>
+  </div>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">PullJdocs</h3><span class="call-req">PullJdocsRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Returns the robot's own copies of the documents you name. This is how you read settings back, and it is also how a wire-pod-style server pokes a robot into creating a jdocs connection, which matters because the escape-pod CA only enters the robot's trust pool when that connection is made.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">jdoc_types</span>, repeated: <span class="m">ROBOT_SETTINGS</span> (0), <span class="m">ROBOT_LIFETIME_STATS</span> (1), <span class="m">ACCOUNT_SETTINGS</span> (2), <span class="m">USER_ENTITLEMENTS</span> (3).</dd></div>
+      <div><dt>Control</dt><dd>Not needed. Confirmed ungated in the settings communication manager.</dd></div>
+      <div><dt>What arrives</dt><dd><span class="m">NamedJdoc</span> entries, each with the type and a <span class="m">Jdoc</span> of <span class="m">doc_version</span>, <span class="m">fmt_version</span>, <span class="m">client_metadata</span> and <span class="m">json_doc</span>. The payload is a JSON string, not a nested message, so parse it yourself. <span class="m">vic.RobotSettings</span> is at <span class="m">fmt_version</span> 2 and the other three at 1.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">UpdateSettings</h3><span class="call-req">UpdateSettingsRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Writes robot settings and returns the resulting jdoc, so the reply tells you the new <span class="m">doc_version</span>.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">settings</span>, a <span class="m">RobotSettingsConfig</span>. Every field is wrapped in its own single-member oneof, which is how the robot tells "set this to false" from "leave it alone". Setting nothing is a no-op, not a reset. The fields are <span class="m">clock_24_hour</span>, <span class="m">eye_color</span>, <span class="m">custom_eye_color</span>, <span class="m">default_location</span>, <span class="m">dist_is_metric</span>, <span class="m">locale</span>, <span class="m">master_volume</span>, <span class="m">temp_is_fahrenheit</span>, <span class="m">time_zone</span>, <span class="m">button_wakeword</span>.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> Not among the seven refused requests, but not separately audited.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Besides the field renumbering above: this call takes a unique channel, so a second concurrent <span class="m">UpdateSettings</span> does not queue. It returns immediately with status <span class="m">ERROR_UPDATE_IN_PROGRESS</span> (102) and writes nothing. Over the REST mirror, <span class="m">DiscardUnknown</span> is on, so a misspelled key is silently dropped rather than rejected and you get a success with no change. The robot's <span class="m">eye_color</span> enum also runs to <span class="m">ROBOT_RED</span> (8), two values further than the vendored copy knows about.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">UpdateAccountSettings</h3><span class="call-req">UpdateAccountSettingsRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Writes the account-level document, which holds only two things.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">account_settings</span>, an <span class="m">AccountSettingsConfig</span> with <span class="m">data_collection</span> <span class="m">bool</span> and <span class="m">app_locale</span> <span class="m">string</span>, each in its own oneof.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> Not separately audited.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Same unique-channel behaviour as <span class="m">UpdateSettings</span>: a concurrent call returns <span class="m">ERROR_UPDATE_IN_PROGRESS</span> and writes nothing. Note that <span class="m">app_locale</span> here is a different setting from <span class="m">locale</span> in the robot settings document.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="yes" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">UpdateUserEntitlements</h3><span class="call-req">UpdateUserEntitlementsRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-absent">not in the vendored proto</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Writes the user entitlements document, which on this firmware holds exactly one flag.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">user_entitlements</span>, a <span class="m">UserEntitlementsConfig</span> whose only member is <span class="m">kickstarter_eyes</span> <span class="m">bool</span>.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> Not separately audited.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>This is one of the two RPCs the vendored proto does not declare, so your generated client has no method for it. The message types are present in the vendored <code>settings.proto</code>; only the service entry is missing. You can still reach it over the REST mirror at <code>POST /v1/update_user_entitlements</code>, or add the <code>rpc</code> line and record the change as a deviation. Same unique-channel concurrency behaviour as the other two writes.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">BatteryState</h3><span class="call-req">BatteryStateRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Reports the robot's battery and, if a cube is connected, the cube's. Confirmed ungated, which is why a status page can poll it on an idle robot.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd>Not needed.</dd></div>
+      <div><dt>What arrives</dt><dd><span class="m">battery_level</span>, one of <span class="m">UNKNOWN</span> (0), <span class="m">LOW</span> (1), <span class="m">NOMINAL</span> (2), <span class="m">FULL</span> (3); <span class="m">battery_volts</span> <span class="m">float</span>; <span class="m">is_charging</span> and <span class="m">is_on_charger_platform</span>, which are different things because the robot can sit on an unplugged charger; <span class="m">suggested_charger_sec</span> <span class="m">float</span>; and <span class="m">cube_battery</span> with its own level, factory id, voltage and <span class="m">time_since_last_reading_sec</span>.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">VersionState</h3><span class="call-req">VersionStateRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Returns the OS version and engine build id. Confirmed ungated.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd>Not needed.</dd></div>
+      <div><dt>Note</dt><dd>On WireOS <span class="m">os_version</span> is a 3.0.1-style string, so any code that branches on a <span class="m">1.8.</span> or <span class="m">2.0.</span> prefix will take the wrong path.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">GetLatestAttentionTransfer</h3><span class="call-req">LatestAttentionTransferRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Asks why the robot last broke off what it was doing and pointed the user at the app. Useful for diagnosing a robot that keeps giving up mid-interaction.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> Not separately audited.</dd></div>
+      <div><dt>What arrives</dt><dd>An <span class="m">AttentionTransfer</span> with <span class="m">reason</span>, one of <span class="m">NoCloudConnection</span> (1), <span class="m">NoWifi</span> (2) or <span class="m">UnmatchedIntent</span> (3), and <span class="m">seconds_ago</span> <span class="m">float</span>. If you are writing the voice server, <span class="m">UnmatchedIntent</span> is the one that means your intent name was not in the robot's map.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">GetFeatureFlag</h3><span class="call-req">FeatureFlagRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Asks whether one named feature exists and whether it is on.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">feature_name</span> <span class="m">string</span>.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> Not separately audited.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Two separate bools come back and you need both. <span class="m">valid_feature</span> says the name is known; <span class="m">feature_enabled</span> says it is on. A misspelled name gives you <span class="m">valid_feature = false</span> with <span class="m">feature_enabled = false</span>, which is indistinguishable from a real feature that is switched off unless you check the first field.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">GetFeatureFlagList</h3><span class="call-req">FeatureFlagListRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Returns a list of feature names.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">request_list</span>, a repeated string. The reply is a repeated string called <span class="m">list</span>.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> Not separately audited.</dd></div>
+      <div><dt>Note</dt><dd>What the robot does with a non-empty <span class="m">request_list</span>, as against sending it empty to list everything, is <span class="unconf">unconfirmed</span>. The gateway forwards the request unchanged and returns the engine's reply, so the filtering, if any, happens in the engine.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">CheckCloudConnection</h3><span class="call-req">CheckCloudRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Makes the robot run its own connection check against whatever server <span class="m">server_config.json</span> names, which includes a real bandwidth test over the chipper stream. If you are building the server side, this is how you ask the robot to grade you.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> Not separately audited.</dd></div>
+      <div><dt>What arrives</dt><dd><span class="m">code</span>: <span class="m">AVAILABLE</span> (1), <span class="m">BAD_CONNECTIVITY</span> (2), <span class="m">FAILED_TLS</span> (3), <span class="m">FAILED_AUTH</span> (4), <span class="m">INSUFFICIENT_BANDWIDTH</span> (5); plus <span class="m">status_message</span>, <span class="m">num_packets</span> and <span class="m">expected_packets</span>.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Rate limited at one call per ten seconds and three per minute, and when you exceed that it does not return an error. It returns the <em>last cached result</em>, with a TODO in the gateway saying the <span class="m">ResourceExhausted</span> error was removed because the app did not handle it. So a rapid poll will show you a stale answer that looks current. Also note that <span class="m">num_packets</span> and <span class="m">expected_packets</span> are narrowed to eight bits on the robot's side of the check, so a frame count above 255 wraps.</dd></div>
+    </dl>
+  </article>
+</section>
+
+
+<section class="panel" id="p-onboard" data-tab="Onboarding and updates" hidden>
+  <h2>Onboarding and updates</h2>
+  <p class="lede">The out-of-box flow, injecting an intent as if the app had sent it, and the OTA machinery. Several of these run <code>systemctl</code> and <code>reboot</code> on the robot, so treat them with more care than the rest of the surface.</p>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">GetOnboardingState</h3><span class="call-req">OnboardingStateRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Reports where the robot is in the out-of-box flow, and waits for the engine's answer.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> Not separately audited.</dd></div>
+      <div><dt>What arrives</dt><dd><span class="m">stage</span>, one of <span class="m">NotStarted</span> (0), <span class="m">TimedOut</span> (1), <span class="m">Complete</span> (3) or <span class="m">DevDoNothing</span> (4). Value 2 is deliberately skipped; the proto comment says the numbering is kept for backward compatibility.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">SendOnboardingInput</h3><span class="call-req">OnboardingInputRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Drives the out-of-box flow. One RPC covering nine different requests, dispatched on which arm of the oneof you set.</dd></div>
+      <div><dt>Parameters</dt><dd>A oneof of <span class="m">onboarding_complete_request</span>, <span class="m">onboarding_wake_up_request</span>, <span class="m">onboarding_skip_onboarding</span>, <span class="m">onboarding_restart</span>, <span class="m">onboarding_wake_up_started_request</span>, <span class="m">onboarding_set_phase_request</span>, <span class="m">onboarding_phase_progress_request</span>, <span class="m">onboarding_charge_info_request</span> and <span class="m">onboarding_mark_complete_and_exit</span>. <span class="m">OnboardingSetPhaseRequest</span> carries a phase: <span class="m">Default</span> (1), <span class="m">LookAtPhone</span> (2), <span class="m">WakeUp</span> (3), <span class="m">LookAtUser</span> (4), <span class="m">TeachWakeWord</span> (5), <span class="m">TeachComeHere</span> (6), <span class="m">TeachMeetVictor</span> (7).</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> Not separately audited.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>The nine arms do not behave alike. Some wait for a matching response and some return <span class="m">REQUEST_PROCESSING</span> with nothing filled in, notably <span class="m">onboarding_mark_complete_and_exit</span>, which writes and returns. Sending no arm at all is rejected with <span class="m">InvalidArgument</span>. The four arms marked "1p0 backward compatibility" in the proto exist for the old app and are not the current path.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">AppIntent</h3><span class="call-req">AppIntentRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Injects an intent into the behaviour tree as if the phone app had sent it. This is the shortest path to making the robot do something scripted without holding behaviour control, because you are asking the robot's own behaviours to run rather than driving the motors.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">intent</span> <span class="m">string</span> and <span class="m">param</span> <span class="m">string</span>. Both are free text; nothing validates them.</dd></div>
+      <div><dt>Control</dt><dd>Not needed for the message to be forwarded.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Fire and forget: converted to CLAD, written, and <span class="m">REQUEST_PROCESSING</span> returned. An intent name the engine does not recognise produces nothing and no error. The names the engine accepts come from its own intent map, not from this proto, so there is no list you can fetch over this API.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">StartUpdateEngine</h3><span class="call-req">CheckUpdateStatusRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Kicks the robot's update service into checking for an update, and starts a background stream of status events. It shells out: if <span class="m">update-engine.service</span> is not active it runs <code>systemctl stop update-engine.service</code> and then <code>systemctl restart update-engine-oneshot</code> under <code>sudo</code>.</dd></div>
+      <div><dt>Parameters</dt><dd>None. It shares <span class="m">CheckUpdateStatusRequest</span> with the next call.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> Not separately audited.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>It does not return the status. It returns <span class="m">RESPONSE_RECEIVED</span> and then pushes <span class="m">check_update_status_response</span> events onto the event stream, so open <span class="m">EventStream</span> before calling this or you will see nothing. If either <code>systemctl</code> call fails you get status <span class="m">ERROR_UPDATE_IN_PROGRESS</span> together with a non-nil gRPC error, which is an unusual combination to handle.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">CheckUpdateStatus</h3><span class="call-req">CheckUpdateStatusRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Reads the update state out of files under <code>/run/update-engine/</code> and answers immediately. It never touches the engine, so it is safe to poll.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd>Not needed; it does not reach the engine at all.</dd></div>
+      <div><dt>What arrives</dt><dd><span class="m">update_status</span>: <span class="m">NO_UPDATE</span> (0), <span class="m">READY_TO_REBOOT_INTO_NEW_OS_VERSION</span> (1), <span class="m">IN_PROGRESS_DOWNLOAD</span> (2), <span class="m">FAILURE_INTERRUPTED_DOWNLOAD</span> (3), <span class="m">IN_PROGRESS_STARTING</span> (4), <span class="m">IN_PROGRESS_OTHER</span> (5), <span class="m">FAILURE_OTHER</span> (6). Plus <span class="m">expected</span> and <span class="m">progress</span> as byte counts, <span class="m">update_version</span>, <span class="m">update_phase</span>, <span class="m">error</span> and <span class="m">exit_code</span>.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">UpdateAndRestart</h3><span class="call-req">UpdateAndRestartRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Reboots the robot so it applies a downloaded update on the way back up. It only acts if <code>/run/update-engine/done</code> exists.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd>Not needed; the handler is entirely in the gateway.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>The reboot is scheduled on a five-second delay in a background goroutine, so the RPC returns <span class="m">OK</span> and then the robot goes down a few seconds later. A response of <span class="m">NOT_FOUND</span> means there was no update staged and nothing happened, which is the only distinction you get.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="yes" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">UploadDebugLogs</h3><span class="call-req">UploadDebugLogsRequest</span><span class="badges"><span class="b b-unary">unary</span><span class="b b-absent">not in the vendored proto</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Nothing, on this firmware. The whole upload body is commented out with the note "disabling so we can build the gateway", so the handler returns status <span class="m">OK</span> and an empty <span class="m">url</span>. The rate limiter in front of it is still live.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd>Not needed; the handler is entirely in the gateway.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>This is the second of the two RPCs missing from the vendored proto, and the one you lose nothing by not having. It is rate limited at one call per minute and three per hour, returning <span class="m">ResourceExhausted</span> beyond that, so you can exhaust a limiter guarding a function that does nothing. Treat an empty <span class="m">url</span> with <span class="m">OK</span> as the normal answer, not a failure.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="no">
+    <header class="call-hd"><h3 class="call-name">GetAlexaAuthState</h3><span class="call-req">AlexaAuthStateRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Reports whether the robot is enrolled with Alexa, and waits for the engine's answer.</dd></div>
+      <div><dt>Parameters</dt><dd>None.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> Not separately audited.</dd></div>
+      <div><dt>Note</dt><dd>The corresponding event is <span class="m">alexa_auth_event</span>. Alexa animations are filtered out of <span class="m">ListAnimations</span> and <span class="m">ListAnimationTriggers</span>, so this is the only part of the Alexa surface visible through the SDK.</dd></div>
+    </dl>
+  </article>
+
+  <article class="call" data-control="no" data-stream="no" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">AlexaOptIn</h3><span class="call-req">AlexaOptInRequest</span><span class="badges"><span class="b b-unary">unary</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Starts or ends Alexa enrollment.</dd></div>
+      <div><dt>Parameters</dt><dd>Defined in <code>alexa.proto</code>.</dd></div>
+      <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> Not separately audited.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd>Fire and forget: the gateway writes and returns <span class="m">REQUEST_PROCESSING</span>. Enrollment takes a while and can fail, so watch the <span class="m">alexa_auth_event</span> stream rather than the reply.</dd></div>
+    </dl>
+  </article>
+</section>
+
+
+<section class="panel" id="p-events" data-tab="Events" hidden>
+  <h2>Events</h2>
+  <p class="lede">One RPC, and the only way to learn anything the robot was not asked. Most of what you will want from the robot arrives here rather than as an RPC reply.</p>
+
+  <article class="call" data-control="no" data-stream="yes" data-absent="no" data-trap="yes">
+    <header class="call-hd"><h3 class="call-name">EventStream</h3><span class="call-req">EventRequest</span><span class="badges"><span class="b b-stream">server stream</span></span></header>
+    <dl>
+      <div><dt>Does</dt><dd>Streams everything the engine broadcasts, each message an <span class="m">EventResponse</span> wrapping one <span class="m">Event</span>. The first message is always a <span class="m">ConnectionResponse</span> saying whether you won the single primary slot, and a <span class="m">KeepAlivePing</span> follows once a second for as long as the stream is open.</dd></div>
+      <div><dt>Parameters</dt><dd><span class="m">connection_id</span> <span class="m">string</span>, optional; and a oneof of <span class="m">white_list</span> or <span class="m">black_list</span>, each a <span class="m">FilterList</span> of strings. The strings are the protobuf field names of the <span class="m">Event</span> oneof in snake case, such as <span class="m">robot_state</span>, <span class="m">wake_word</span>, <span class="m">user_intent</span>, <span class="m">photo_taken</span>, <span class="m">jdocs_changed</span>, <span class="m">object_event</span>, <span class="m">stimulation_info</span>. With neither list set you get everything.</dd></div>
+      <div><dt>Control</dt><dd>Not needed to open the stream. Three groups of events need something else, below.</dd></div>
+      <div><dt>The whole vocabulary</dt><dd>Twenty-four event types: <span class="m">time_stamped_status</span>, <span class="m">onboarding</span>, <span class="m">wake_word</span>, <span class="m">attention_transfer</span>, <span class="m">robot_observed_face</span>, <span class="m">robot_changed_observed_face_id</span>, <span class="m">object_event</span>, <span class="m">stimulation_info</span>, <span class="m">photo_taken</span>, <span class="m">robot_state</span>, <span class="m">cube_battery</span>, <span class="m">keep_alive</span>, <span class="m">connection_response</span>, <span class="m">jdocs_changed</span>, <span class="m">alexa_auth_event</span>, <span class="m">mirror_mode_disabled</span>, <span class="m">vision_modes_auto_disabled</span>, <span class="m">check_update_status_response</span>, <span class="m">user_intent</span>, <span class="m">robot_observed_motion</span>, <span class="m">robot_erased_enrolled_face</span>, <span class="m">robot_renamed_enrolled_face</span>, <span class="m">camera_settings_update</span> and <span class="m">unexpected_movement</span>.</dd></div>
+      <div><dt>What needs enabling</dt><dd><strong>Vision events</strong> (<span class="m">robot_observed_face</span>, <span class="m">robot_observed_motion</span> and object observations inside <span class="m">object_event</span>) fire only while the matching vision mode is on, and those toggles need behaviour control. <strong><span class="m">user_intent</span></strong> is forwarded only while the SDK behaviour is activated, and only for whitelisted intents, below. <strong>Cube and face events</strong> arrive over the legacy CLAD socket and are converted in the gateway rather than produced as protobuf by the engine.</dd></div>
+      <div class="is-trap"><dt>Trap</dt><dd><span class="m">robot_state</span> is emitted every engine tick, so an unfiltered stream is very busy and will dominate your bandwidth. Filter it out unless you need it. Being non-primary does not reduce what you receive: a secondary connection gets the full stream, and primacy only decides who triggers the analytics connection events and whose disconnect tells the engine the app has gone. Because the keep-alive bypasses the filter, a stream that has gone completely silent is a dead stream rather than a quiet one.</dd></div>
+      <div><dt>user_intent, precisely</dt><dd>The engine forwards forty-two intent ids, 0 through 41, and nothing else. Non-whitelisted intents are not dropped from the robot's own behaviour tree, they are simply not relayed to you, so most ordinary voice commands never appear on this stream. The whitelist covers the timer intents, the volume intents, the movement intents, <span class="m">knowledge_question</span>, <span class="m">take_a_photo</span>, <span class="m">weather_response</span>, the greetings, the play and trick intents, and <span class="m">global_stop</span>. Ids 6 and 22 are special-cased by animation group name rather than intent tag. The event carries <span class="m">intent_id</span> and <span class="m">json_data</span>, which is the raw intent JSON.</dd></div>
+    </dl>
+  </article>
+</section>
+
+
+<section class="panel" id="p-traps" data-tab="Traps" hidden>
+  <h2>Traps</h2>
+  <p class="lede">The behaviours that cost a day. Each one is something the robot does that no status code, log line or error will tell you about.</p>
+
+  <div class="prose">
+    <h3 class="sec">Silence and hangs</h3>
+  </div>
+
+  <div class="note bad">
+    <h4>A sleeping robot never answers a camera call</h4>
+    <p><span class="m">EnableImageStreaming</span> blocks on a channel with no timeout and without consulting your request context. The engine does not reply until a processed camera frame confirms the mode changed, and a sleeping robot has paused its vision component and may have deleted the camera, so the confirmation never comes. <span class="m">CameraFeed</span> and <span class="m">CaptureSingleImage</span> both start by calling it, so they hang too, and their deferred disable waits on the same confirmation, so teardown can block as well. Take behaviour control first: requesting control is the only SDK message that counts as a wake reason.</p>
+  </div>
+
+  <div class="note bad">
+    <h4>Every action RPC hangs without behaviour control, and always will</h4>
+    <p>The twelve action calls are queued on the robot regardless of control, but their responses are produced only by <span class="m">SDKComponent::OnActionCompleted</span>, which runs only while the SDK behaviour is active. So the motion may be attempted and the reply never comes. Set a deadline on every call.</p>
+  </div>
+
+  <div class="note warn">
+    <h4>A ControlRequest with no priority is dropped in silence</h4>
+    <p>Priority zero is <span class="m">UNKNOWN</span> and the engine returns early through <span class="m">ANKI_VERIFY</span> before setting anything. The stream stays open, the keep-alives keep arriving, and you are simply never granted control.</p>
+  </div>
+
+  <div class="note warn">
+    <h4>RESERVE_CONTROL grants control that is not control</h4>
+    <p>Priority 30 takes the behaviour lock and returns before <span class="m">_sdkWantsControl</span> is set, so you receive <span class="m">ControlGrantedResponse</span> but the SDK behaviour never activates. All seven refusals stay armed, the motor commands stay dropped, and no action response is ever produced. It exists to keep the robot still between scripts, not to run them.</p>
+  </div>
+
+  <div class="note warn">
+    <h4>AssumeBehaviorControl does not release when the stream closes</h4>
+    <p>Only the bidirectional <span class="m">BehaviorControl</span> handler writes a <span class="m">ControlRelease</span> in a <code>defer</code>. Use the simpler call and exit, and you leave the SDK behaviour running, with cliff detection still disabled if you asked for priority 10.</p>
+  </div>
+
+  <div class="note warn">
+    <h4>You are never told your own release succeeded</h4>
+    <p>An explicit <span class="m">ControlRelease</span> clears the connection id before the behaviour deactivates, so the <span class="m">ControlLostResponse</span> that follows carries id 0 and the response handler filters it out. An involuntary loss is delivered correctly, so the absence of a message does not mean the absence of a change.</p>
+  </div>
+
+  <div class="prose">
+    <h3 class="sec">Success that is not success</h3>
+  </div>
+
+  <div class="note bad">
+    <h4>Refusals are usually invisible</h4>
+    <p>Of the seven requests the engine refuses with <span class="m">FORBIDDEN</span> when you lack control, five have their status overwritten by the gateway to <span class="m">RESPONSE_RECEIVED</span>: the four vision toggles and <span class="m">SetCameraSettings</span>. <span class="m">SetEyeColor</span> is worse, because the gateway registers no listener for its response at all and returns <span class="m">REQUEST_PROCESSING</span> immediately, so the refusal goes to nobody. <span class="m">SayText</span> is the only one that reports honestly, and only by accident: the refusal leaves <span class="m">state</span> at the invalid zero value and the gateway maps that to <span class="m">Internal</span> "Failed to say text".</p>
+    <p>The single useful exception is <span class="m">SetCameraSettings</span>, whose <span class="m">status_message</span> is left untouched by the rewrite. A non-empty message on a <span class="m">RESPONSE_RECEIVED</span> reply means the call was rejected, and the text names the permitted ranges.</p>
+  </div>
+
+  <div class="note bad">
+    <h4>The four motor calls return success and do nothing</h4>
+    <p><span class="m">DriveWheels</span>, <span class="m">MoveHead</span>, <span class="m">MoveLift</span> and <span class="m">StopAllMotors</span> reach <span class="m">MovementComponent</span>, whose handlers log a warning and return when <span class="m">_allowExternalMovementCommands</span> is unset. Nothing is sent back. You get <span class="m">REQUEST_PROCESSING</span> either way. Do not infer that a call worked from its status code; check the robot.</p>
+  </div>
+
+  <div class="note warn">
+    <h4>An out-of-range volume reads as success</h4>
+    <p><span class="m">SetMasterVolume</span> above level 4 is refused by the engine with <span class="m">FORBIDDEN</span> and nothing is written, but the gateway overwrites the status to <span class="m">RESPONSE_RECEIVED</span>. The engine also adds one to your value on the way in, because it deliberately skips <span class="m">MUTE</span>, so you cannot mute the robot through this call at all.</p>
+  </div>
+
+  <div class="note warn">
+    <h4>Six calls confirm nothing at all</h4>
+    <p><span class="m">CancelFaceEnrollment</span>, <span class="m">UpdateEnrolledFaceByID</span>, <span class="m">EraseEnrolledFaceByID</span>, <span class="m">EraseAllEnrolledFaces</span>, <span class="m">DisconnectCube</span> and <span class="m">SetCubeLights</span> are written and answered with <span class="m">REQUEST_PROCESSING</span> before the engine has seen them. Three of the face calls carry a TODO in the gateway saying they should wait for a confirmation and do not. Watch the corresponding event instead.</p>
+  </div>
+
+  <div class="note warn">
+    <h4>A rate-limited CheckCloudConnection returns a stale answer</h4>
+    <p>Beyond one call per ten seconds or three per minute, the handler returns the previous result rather than an error, because a TODO records that the <span class="m">ResourceExhausted</span> error was removed for the app's benefit. A polling loop will happily show you a connection state from several minutes ago.</p>
+  </div>
+
+  <div class="prose">
+    <h3 class="sec">Wire format and shape</h3>
+  </div>
+
+  <div class="note bad">
+    <h4>Settings sent as binary protobuf land on the wrong fields</h4>
+    <p>The robot's <span class="m">RobotSettingsConfig</span> has <span class="m">custom_eye_color</span> at field 3, which the vendored copy lacks, so everything from field 3 down shifts by one on the wire. Use the JSON REST mirror for settings, where grpc-gateway matches on field names. The vendored <span class="m">EyeColor</span> enum is also two values short, missing <span class="m">RAINBOW_EYES</span> (7) and <span class="m">ROBOT_RED</span> (8).</p>
+  </div>
+
+  <div class="note warn">
+    <h4>The REST surface ignores unknown JSON keys</h4>
+    <p><span class="m">DiscardUnknown</span> is on, so a typo in a settings key is silently a no-op rather than an error. A test that asserts a 400 on a bad field will never pass.</p>
+  </div>
+
+  <div class="note bad">
+    <h4>The face image is not RGB565 and not little-endian</h4>
+    <p>Three things have to be right at once for <span class="m">DisplayFaceImageRGB</span>. The buffer must be exactly 17,664 pixels at two bytes each, which is 35,328 bytes, because the gateway slices by computed offsets with a TODO admitting it will "implode on empty". The packing is <span class="m">000bbbbbrrrrrggg</span>, five bits of blue, five of red and three of green, so a wrong guess swaps channels rather than failing. And the byte order is contested: the robot's gateway reads each pixel with <span class="m">binary.BigEndian.Uint16</span> while wire-pod writes its computed <span class="m">uint16</span> little-endian, so the two disagree by a swap and only a test on the robot settles it.</p>
+  </div>
+
+  <div class="note warn">
+    <h4>NavMapFeed frequency is seconds, not hertz</h4>
+    <p>The gateway logs it as seconds and sends the CLAD message <span class="m">SetMemoryMapBroadcastFrequency_sec</span>. Asking for 30 gets you one map every thirty seconds.</p>
+  </div>
+
+  <div class="note warn">
+    <h4>SetCubeLights needs exactly four of everything, and a non-zero mode</h4>
+    <p>The engine copies each repeated field into a fixed four-element array with no length check. It also rejects <span class="m">make_relative</span> of 0 outright, logging "Got relative mode 0 (Unknown) from gateway, ignoring call" and dropping the request. Since 0 is the proto default, an unset field means nothing happens and nothing is reported.</p>
+  </div>
+
+  <div class="note warn">
+    <h4>id_tag must be in a narrow range, and zero is outside it</h4>
+    <p>The twelve action RPCs reject any tag outside 2000001 to 3000000 with <span class="m">InvalidArgument</span> "Invalid Action tag_id", so leaving the field at its default fails. <span class="m">CancelActionByIdTag</span> does not validate the tag at all, so an out-of-range cancel is accepted and matches nothing.</p>
+  </div>
+
+  <div class="prose">
+    <h3 class="sec">The surface itself</h3>
+  </div>
+
+  <div class="note bad">
+    <h4>Engine responses are matched by message type, not by request</h4>
+    <p><span class="m">CreateChannel</span> keys listeners on the response type's name and fans each message out to every listener registered for it. Only <span class="m">BehaviorControl</span> and <span class="m">AssumeBehaviorControl</span> filter on the connection id as well. Two clients making the same call against one robot can receive each other's answers. Serialise per robot.</p>
+  </div>
+
+  <div class="note warn">
+    <h4>AudioFeed returns a test tone</h4>
+    <p>The only producer of <span class="m">external_interface::AudioChunk</span> in the engine synthesises a 1&nbsp;kHz sine wave at amplitude 1000, with a comment saying so and a TODO to replace it. The metadata is hard-coded: twelve zero bytes of direction strength, zero confidence, zero noise floor, and <span class="m">source_direction</span> of 12, which the proto documents as the invalid value. The transport is entirely correct, frames arrive on schedule, and nothing reports an error.</p>
+  </div>
+
+  <div class="note warn">
+    <h4>Several calls do less than their names promise</h4>
+    <ul class="prose" style="margin:0;padding-left:20px">
+      <li><span class="m">CaptureSingleImage</span> never reaches the engine; its subscription there is a commented-out line.</li>
+      <li><span class="m">CameraFeed</span> ignores high resolution by design, with a comment saying the video stream uses only the default.</li>
+      <li><span class="m">SetPreferredCube</span> carries a proto comment saying it is only used in simulation for now.</li>
+      <li><span class="m">UploadDebugLogs</span> has its upload body commented out on this firmware and returns <span class="m">OK</span> with an empty URL.</li>
+      <li><span class="m">AudioSendMode</span> has no RPC at all. The messages exist and the engine consumes the request, but nothing on the service takes them and the handler only flips a boolean.</li>
+      <li><span class="m">RobotStatusHistory</span> has a handler in the gateway but no <span class="m">rpc</span> entry in the service, with a comment explaining that a hundred-entry result is too large for the domain socket to the engine. No client can reach it.</li>
+      <li><span class="m">ProtocolVersion</span> checks nothing, because the minimum version is 0.</li>
+    </ul>
+  </div>
+
+  <div class="note warn">
+    <h4>Basic authorization is broken, not merely unsupported</h4>
+    <p>The gateway accepts the <code>Basic&nbsp;</code> prefix, base64-decodes the value, throws the result away with a <code>// todo</code>, and then slices the header at offset 7 anyway, which is one character into the payload because <code>Basic&nbsp;</code> is six characters long. Use <code>Bearer</code>.</p>
+  </div>
+
+  <div class="note warn">
+    <h4>A newly written token is not accepted immediately</h4>
+    <p>The robot caches the <span class="m">vic.AppTokens</span> hash list at <code>/data/vic-gateway/token-hashes.json</code> and refreshes it at most once a minute, three times in fifteen minutes and six times an hour, and only when the cache is over an hour old. A GUID your server has just written can be rejected for a long time. <span class="m">UserAuthentication</span> forces a refresh on success, which is the only way to make one live at once.</p>
+  </div>
+
+  <div class="note warn">
+    <h4>The animation lists are filtered and deadlined, differently from each other</h4>
+    <p><span class="m">ListAnimations</span> drops every name containing <span class="m">_avs_</span> and times out after five seconds with <span class="m">DeadlineExceeded</span> and no partial list. <span class="m">ListAnimationTriggers</span> lowercases each name and drops any containing <span class="m">deprecated</span> or <span class="m">alexa</span>, and its deadline is ten seconds. The sentinel <span class="m">EndOfListAnimationsResponses</span> exists on the engine-to-gateway path only; the gateway consumes it and you never see it.</p>
+  </div>
+
+  <div class="note warn">
+    <h4>A concurrent settings write is refused, not queued</h4>
+    <p><span class="m">UpdateSettings</span>, <span class="m">UpdateAccountSettings</span> and <span class="m">UpdateUserEntitlements</span> each take a unique channel. A second call while one is in flight returns at once with status <span class="m">ERROR_UPDATE_IN_PROGRESS</span> (102) and writes nothing.</p>
+  </div>
+</section>
+
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p>Written from the robot's own sources. Every behaviour on this page was read out of one of these files; anything that could not be confirmed is marked <span class="unconf">unconfirmed</span> rather than guessed at.</p>
+    <p class="srcs">
+      wire-os-victor/tools/protobuf/gateway/public/*.proto<br>
+      wire-os-victor/cloud/cloud/message_handler.go, gateway.go, config_linux.go<br>
+      wire-os-victor/engine/components/sdkComponent.cpp, movementComponent.cpp<br>
+      wire-os-victor/engine/components/cubes/cubeLights/cubeLightComponent.cpp<br>
+      wire-os-victor/engine/aiComponent/behaviorComponent/behaviors/sdkBehaviors/behaviorSDKInterface.cpp<br>
+      wire-pod-rs/crates/wirepod-proto/proto/vector/*.proto, wire-pod-rs/docs/robot-api.md
+    </p>
+  </div>
+</footer>
+
+<script>
+(function(){
+  "use strict";
+
+  // ---- theme ----
+  var root = document.documentElement, tbtn = document.getElementById('theme');
+  function darkNow(){
+    var t = root.getAttribute('data-theme');
+    if (t) return t === 'dark';
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  }
+  function paintBtn(){
+    var d = darkNow();
+    tbtn.textContent = d ? 'Light' : 'Dark';
+    tbtn.setAttribute('aria-pressed', d ? 'true' : 'false');
+  }
+  tbtn.addEventListener('click', function(){
+    root.setAttribute('data-theme', darkNow() ? 'light' : 'dark');
+    paintBtn();
+  });
+  try{ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', paintBtn); }catch(e){}
+  paintBtn();
+
+  // ---- tabs, built from the panels in the document ----
+  var main = document.getElementById('main'), rail = document.getElementById('rail');
+  var panels = [].slice.call(main.querySelectorAll('.panel'));
+  var tabs = [];
+  panels.forEach(function(p, i){
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.setAttribute('role','tab');
+    b.id = 'tab-' + p.id;
+    b.setAttribute('aria-controls', p.id);
+    var n = p.querySelectorAll('.call').length;
+    b.innerHTML = p.dataset.tab + (n ? ' <span class="n">' + n + '</span>' : '');
+    b.addEventListener('click', function(){ select(i); });
+    b.addEventListener('keydown', function(e){
+      var d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+      if (!d) return;
+      e.preventDefault();
+      var j = (i + d + tabs.length) % tabs.length;
+      select(j); tabs[j].focus();
+    });
+    p.setAttribute('role','tabpanel');
+    p.setAttribute('aria-labelledby', b.id);
+    rail.appendChild(b);
+    tabs.push(b);
+  });
+  var active = 0;
+  function select(i){
+    active = i;
+    tabs.forEach(function(b, j){
+      b.setAttribute('aria-selected', j === i ? 'true' : 'false');
+      b.tabIndex = j === i ? 0 : -1;
+    });
+    if (!filtering()) applyTabView();
+  }
+  function applyTabView(){
+    panels.forEach(function(p, j){ p.hidden = (j !== active); });
+    rail.setAttribute('data-locked','false');
+  }
+
+  // ---- filtering ----
+  var q = document.getElementById('q'),
+      clear = document.getElementById('clear'),
+      count = document.getElementById('count'),
+      chips = [].slice.call(document.querySelectorAll('.chip'));
+  var calls = [].slice.call(main.querySelectorAll('.call'));
+  calls.forEach(function(c){ c._hay = (c.textContent || '').toLowerCase(); });
+
+  function activeFlags(){
+    return chips.filter(function(c){ return c.getAttribute('aria-pressed') === 'true'; })
+                .map(function(c){ return c.dataset.flag; });
+  }
+  function filtering(){ return q.value.trim() !== '' || activeFlags().length > 0; }
+
+  function apply(){
+    var term = q.value.trim().toLowerCase(), flags = activeFlags();
+    if (!term && !flags.length){
+      calls.forEach(function(c){ c.hidden = false; });
+      panels.forEach(function(p){ [].forEach.call(p.querySelectorAll('.empty'), function(e){ e.hidden = true; }); });
+      applyTabView();
+      count.textContent = '';
+      return;
+    }
+    var total = 0;
+    calls.forEach(function(c){
+      var ok = (!term || c._hay.indexOf(term) !== -1);
+      if (ok) for (var i = 0; i < flags.length; i++){
+        if (c.dataset[flags[i]] !== 'yes'){ ok = false; break; }
+      }
+      c.hidden = !ok;
+      if (ok) total++;
+    });
+    panels.forEach(function(p){
+      var hasCalls = p.querySelectorAll('.call').length > 0;
+      var shown = p.querySelectorAll('.call:not([hidden])').length;
+      p.hidden = hasCalls ? shown === 0 : true;
+      var e = p.querySelector('.empty');
+      if (e) e.hidden = true;
+    });
+    rail.setAttribute('data-locked','true');
+    count.textContent = total + (total === 1 ? ' call' : ' calls');
+  }
+  q.addEventListener('input', apply);
+  clear.addEventListener('click', function(){
+    q.value = '';
+    chips.forEach(function(c){ c.setAttribute('aria-pressed','false'); });
+    apply(); q.focus();
+  });
+  chips.forEach(function(c){
+    c.addEventListener('click', function(){
+      c.setAttribute('aria-pressed', c.getAttribute('aria-pressed') === 'true' ? 'false' : 'true');
+      apply();
+    });
+  });
+
+  select(0);
+})();
+</script>
+</body>
+</html>

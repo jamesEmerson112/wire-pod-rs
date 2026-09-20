@@ -9,6 +9,7 @@ dump.txt
 docs/*
 !docs/translation.md
 !docs/robot-api.md
+!docs/robot-api.html
 !docs/pending-upstream.md
 !docs/archive/
 .gstack/
