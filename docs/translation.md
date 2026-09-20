@@ -32,31 +32,31 @@ The Go source is `E:/GitHub/wire-pod/chipper`, 12,130 non-test lines in 67 files
 
 ## File table
 
-Status is one of: done, partial, M1 in progress, or the milestone that will translate it.
+Status is one of: done, partial, or the milestone that will translate it.
 
 | Go file | Lines | Rust module | Status |
 |---|---|---|---|
-| `cmd/vosk/main.go` | 10 | `wirepod-app/src/serve.rs` | M1 |
+| `cmd/vosk/main.go` | 10 | `wirepod-app/src/serve.rs` | done, with no voice processor until M2 |
 | `cmd/coqui/main.go`, `cmd/leopard/main.go`, `cmd/experimental/{houndify,whisper,whisper.cpp}/main.go` | 49 | `wirepod-app` engine selection | M5 |
-| `pkg/initwirepod/startserver.go` | 231 | `wirepod-server/src/startserver.rs` | M1 in progress |
-| `pkg/initwirepod/web.go` | 56 | `wirepod-server/src/initweb.rs` | M1 in progress |
+| `pkg/initwirepod/startserver.go` | 231 | `wirepod-server/src/startserver.rs` | done |
+| `pkg/initwirepod/web.go` | 56 | `wirepod-server/src/initweb.rs` | done |
 | `pkg/logger/logger.go` | 248 | `wirepod-core/src/logger.rs` | done |
 | `pkg/logger/msg-and.go`, `msg-winmac.go` | 40 | `wirepod-app` | M6 |
-| `pkg/mdnshandler/mdns.go` | 90 | `wirepod-server/src/mdns.rs` | M1 in progress |
+| `pkg/mdnshandler/mdns.go` | 90 | `wirepod-server/src/mdns.rs` | done |
 | `pkg/scripting/scripting.go` | 317 | `wirepod-plugins/src/scripting.rs` | M5 |
 | `pkg/scripting/bcontrol.go` | 92 | `wirepod-plugins/src/bcontrol.rs` | M5 |
 | `pkg/scripting/display.go` | 36 | `wirepod-plugins/src/display.rs` | M5 |
-| `pkg/servers/chipper/*.go` (seven files) | 296 | `wirepod-server/src/chipper/*.rs` | M1 in progress |
-| `pkg/servers/jdocs/server.go` | 200 | `wirepod-server/src/jdocs/server.rs` | M1 in progress |
-| `pkg/servers/jdocs/botInfoStorer.go` | 153 | `wirepod-core/src/store/bot_info.rs` | M1 in progress |
+| `pkg/servers/chipper/*.go` (seven files) | 296 | `wirepod-server/src/chipper/*.rs` | done |
+| `pkg/servers/jdocs/server.go` | 200 | `wirepod-server/src/jdocs/server.rs` | done |
+| `pkg/servers/jdocs/botInfoStorer.go` | 153 | `wirepod-core/src/store/bot_info.rs` | done |
 | `pkg/servers/token/hashing.go` | 136 | `wirepod-core/src/token/hash.rs` | done |
-| `pkg/servers/token/token.go` | 300 | `wirepod-core/src/token/{jwt,stores}.rs` and `wirepod-server/src/token.rs` | partial; the handlers are M1 in progress |
+| `pkg/servers/token/token.go` | 300 | `wirepod-core/src/token/{jwt,stores}.rs` and `wirepod-server/src/token.rs` | done |
 | `pkg/vars/config.go` | 158 | `wirepod-core/src/config.rs` | done |
-| `pkg/vars/vars.go` | 465 | `wirepod-core/src/{paths,state}.rs` and `store/*.rs` | done apart from the loaders later milestones need |
-| `pkg/vtt/*.go` (three files) | 79 | `wirepod-server/src/vtt.rs` | M1 in progress |
+| `pkg/vars/vars.go` | 465 | `wirepod-core/src/{paths,state,intents}.rs` and `store/*.rs` | done; `RememberedChats` comes with M3 |
+| `pkg/vtt/*.go` (three files) | 79 | `wirepod-server/src/vtt.rs` | done |
 | `pkg/wirepod/config-ws/webserver.go` | 545 | `wirepod-server/src/api/*.rs` | partial, 1 of 22 routes; M4 |
-| `pkg/wirepod/localization/localization.go` | 259 | `wirepod-intent/src/localization.rs` | M2 |
-| `pkg/wirepod/localization/download.go` | 192 | `wirepod-intent/src/download.rs` | M2 |
+| `pkg/wirepod/localization/localization.go` | 259 | `wirepod-intent/src/localization.rs` | done apart from `ReloadVosk` |
+| `pkg/wirepod/localization/download.go` | 192 | `wirepod-intent/src/download.rs` | done |
 | `pkg/wirepod/preqs/server.go` | 76 | `wirepod-ttr/src/preqs/server.rs` | M2 |
 | `pkg/wirepod/preqs/intent.go` | 63 | `wirepod-ttr/src/preqs/intent.rs` | M2 |
 | `pkg/wirepod/preqs/intent_graph.go` | 95 | `wirepod-ttr/src/preqs/intent_graph.rs` | M2 |
@@ -64,7 +64,7 @@ Status is one of: done, partial, M1 in progress, or the milestone that will tran
 | `pkg/wirepod/preqs/stream_houndify.go` | 61 | `wirepod-ttr/src/preqs/stream_houndify.rs` | M5 |
 | `pkg/wirepod/sdkapp/robot.go` | 515 | `wirepod-core/src/robot/*.rs` and `wirepod-vector` | mostly done; the remainder is M4 |
 | `pkg/wirepod/sdkapp/server.go` | 886 | `wirepod-server/src/sdkapp/*.rs` | partial, 10 of 45 routes; M4 |
-| `pkg/wirepod/sdkapp/jdocspinger.go` | 269 | `wirepod-server/src/jdocspinger.rs` | M1 in progress |
+| `pkg/wirepod/sdkapp/jdocspinger.go` | 269 | `wirepod-server/src/jdocspinger.rs` | done |
 | `pkg/wirepod/sdkapp/batterywatchdog.go` | 290 | `wirepod-server/src/sdkapp/batterywatchdog.rs` | M4 |
 | `pkg/wirepod/sdkapp/bcassume.go` | 91 | `wirepod-server/src/sdkapp/bcassume.rs` | M4 |
 | `pkg/wirepod/sdkapp/urlreqs.go` | 67 | `wirepod-vector/src/urlreqs.rs` | M4 |
@@ -77,13 +77,13 @@ Status is one of: done, partial, M1 in progress, or the milestone that will tran
 | `pkg/wirepod/stt/{coqui,houndify,leopard,whisper,whisper.cpp}` | 525 | `wirepod-stt/src/<engine>.rs` behind features | M5, last; the user decides then |
 | `pkg/wirepod/ttr/intentparam.go` | 719 | `wirepod-intent/src/intentparam.rs` | M2 |
 | `pkg/wirepod/ttr/matchIntentSend.go` | 337 | `wirepod-intent/src/match_intent_send.rs` | M2 |
-| `pkg/wirepod/ttr/words2num.go` | 169 | `wirepod-intent/src/words2num.rs` | M2 |
-| `pkg/wirepod/ttr/convert.go` | 92 | `wirepod-ttr/src/convert.rs` | M2 |
+| `pkg/wirepod/ttr/words2num.go` | 169 | `wirepod-intent/src/words2num.rs` | done |
+| `pkg/wirepod/ttr/convert.go` | 92 | `wirepod-ttr/src/convert.rs` | done |
 | `pkg/wirepod/ttr/bcontrol.go` | 141 | `wirepod-ttr/src/bcontrol.rs` | M2 |
 | `pkg/wirepod/ttr/kgsim.go` | 713 | `wirepod-ttr/src/kgsim.rs` | M3 |
 | `pkg/wirepod/ttr/kgsim_cmds.go` | 730 | `wirepod-ttr/src/kgsim_cmds.rs` | M3 |
 | `pkg/wirepod/ttr/kgsim_interrupt.go` | 92 | `wirepod-ttr/src/kgsim_interrupt.rs` | M3 |
-| `pkg/wirepod/ttr/weather.go` | 432 | `wirepod-ttr/src/weather.rs` | M3 |
+| `pkg/wirepod/ttr/weather.go` | 432 | `wirepod-ttr/src/weather.rs` | done |
 | `pkg/wirepod/ttr/plugins.go` | 81 | `wirepod-ttr/src/plugins.rs` | M5, last; the user decides then |
 
 ## Progress
@@ -91,6 +91,7 @@ Status is one of: done, partial, M1 in progress, or the milestone that will tran
 | Date | Go lines translated | Server can |
 |---|---|---|
 | 2026-09-19 | about 2,300 of 12,130 (19%) | nothing the robot can use yet; the SDK dashboard slice runs beside Go |
+| 2026-09-19, after M1 | about 4,800 of 12,130 (40%) | M1 translated: `chipper serve` starts the TLS listener with the chipper, jdocs and token services, mDNS, the `/ok` side effects and `/api-chipper/`; proven on loopback, not yet run against the robot |
 
 ## Facts worth keeping from the old plan
 
@@ -111,3 +112,9 @@ Nothing here is acted on until translation is 100%.
 - Session-certificate writes build a fresh write gate per call.
 - `ApiConfig` and `BotInfo` derive a full `Debug` and could leak keys into a log line.
 - The live listener test against the robot has never been confirmed. The first robot session starts there.
+- An unrouted gRPC path on the TLS listener answers the router's 404 rather than tonic's `Unimplemented`, because `/ok:80` is matched in the fallback.
+- `pingJdocs` retries on the cached robot connection where Go dials a second one.
+- The mDNS browse in `jdocspinger.rs` sits behind `set_mdns_enabled`, which no boot path turns on yet.
+- Log lines with ANSI colour codes print the escape as text under the `tracing` formatter.
+- `/api-chipper` without the trailing slash has no redirect to `/api-chipper/`.
+- `download.rs` skips zip entries that would leave the destination, and ignores file modes.
