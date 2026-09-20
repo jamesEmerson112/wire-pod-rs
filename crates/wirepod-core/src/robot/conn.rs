@@ -458,6 +458,10 @@ pub trait CameraControl: Send + Sync {
 /// holding an `Arc<dyn RobotConn>` still has the switch.
 #[async_trait]
 pub trait RobotConn: CameraControl + Send + Sync {
+    /// The concrete connection. `wirepod-vector` downcasts it to hand a handler
+    /// the generated SDK client, so this crate never has to know tonic.
+    fn as_any(&self) -> &dyn std::any::Any;
+
     /// The liveness call. Go uses it as the connect-time check
     /// (`robot.go:365`) and `/api-sdk/get_battery` reads it for real.
     async fn battery_state(&self) -> Result<BatteryReading, ConnError>;

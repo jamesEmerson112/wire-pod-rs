@@ -237,6 +237,10 @@ impl CameraControl for FakeRobotConn {
 
 #[async_trait]
 impl RobotConn for FakeRobotConn {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     async fn battery_state(&self) -> Result<BatteryReading, ConnError> {
         let delay = {
             let mut state = self.lock();

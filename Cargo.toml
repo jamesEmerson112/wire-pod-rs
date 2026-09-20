@@ -27,6 +27,7 @@ hyper = { version = "1", features = ["http1", "http2", "server"] }
 # TLS connector hands back to tonic. `tonic` already enables exactly that one
 # feature, so turning it on here adds no package.
 hyper-util = { version = "0.1", features = ["tokio"] }
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 # `localtime_r` for the local UTC offset, and `chmod` for the file modes Go
 # applies. Unix only.
 libc = "0.2"
@@ -57,6 +58,7 @@ tonic-build = "0.12"
 # every package it pulls is in `Cargo.lock` already and turning it on here adds
 # none.
 tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.5", features = ["fs"] }
 tracing = "0.1"
 # The trial binary's log sink. Default features plus `env-filter` is exactly the
 # feature set already resolved in `Cargo.lock`, where `extism` pulls the same

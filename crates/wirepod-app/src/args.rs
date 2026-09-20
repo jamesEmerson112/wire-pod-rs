@@ -43,7 +43,7 @@ usage: chipper sdk-trial [--bot-info <path>] [--bind <addr>] [--port <u16>]
   --liveness-deadline-ms <n>   bound the connect-time liveness call
                                (default: none, which is what the Go server does)
 
-usage: chipper serve [--packaged | --data-dir <path>] [--asset-dir <path>]
+usage: chipper serve [--packaged | --data-dir <path>] [--asset-dir <path>] [--web-only]
                      [--sdk-ini-dir <path>] [--bind <addr>] [--web-port <u16>]
                      [--http-port <u16>] [--tls-port <u16>]
 
@@ -56,6 +56,8 @@ usage: chipper serve [--packaged | --data-dir <path>] [--asset-dir <path>]
   --web-port <u16>       the web port (default: 8080)
   --http-port <u16>      the conn-check port (default: 80)
   --tls-port <u16>       override the configured gRPC port, in memory only
+  --web-only             serve HTTP only: no TLS listeners, no port 8084, no mDNS,
+                         so it can run beside the production Go server
 ";
 
 /// The parsed `sdk-trial` arguments.
@@ -88,6 +90,7 @@ impl Default for TrialArgs {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServeArgs {
     pub packaged: bool,
+    pub web_only: bool,
     pub data_dir: Option<PathBuf>,
     pub asset_dir: Option<PathBuf>,
     pub sdk_ini_dir: Option<PathBuf>,
@@ -101,6 +104,7 @@ impl Default for ServeArgs {
     fn default() -> Self {
         Self {
             packaged: false,
+            web_only: false,
             data_dir: None,
             asset_dir: None,
             sdk_ini_dir: None,
@@ -233,6 +237,7 @@ fn parse_serve(mut args: impl Iterator<Item = String>) -> Result<Command, ParseE
     while let Some(flag) = args.next() {
         match flag.as_str() {
             "--packaged" => serve.packaged = true,
+            "--web-only" => serve.web_only = true,
             "--data-dir" => serve.data_dir = path(&mut args, "--data-dir")?,
             "--asset-dir" => serve.asset_dir = path(&mut args, "--asset-dir")?,
             "--sdk-ini-dir" => serve.sdk_ini_dir = path(&mut args, "--sdk-ini-dir")?,

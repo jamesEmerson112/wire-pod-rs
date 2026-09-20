@@ -21,8 +21,9 @@ pub mod stream;
 #[cfg(feature = "test-util")]
 pub mod test_support;
 pub mod tls;
+pub mod urlreqs;
 
-pub use crate::conn::TonicRobotConn;
+pub use crate::conn::{SdkClient, TonicRobotConn, sdk_client};
 pub use crate::error::{dial_error, endpoint_error, status_code, status_error};
 pub use crate::factory::{EndpointBuilder, TonicConnFactory, plaintext_builder};
 pub use crate::stream::{TonicEventReceiver, TonicFrameStream};

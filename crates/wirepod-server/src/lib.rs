@@ -45,6 +45,7 @@ pub mod startserver;
 pub mod test_support;
 pub mod token;
 pub mod vtt;
+pub mod webroot;
 
 pub use crate::form::Form;
 pub use crate::router::{

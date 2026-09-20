@@ -75,6 +75,18 @@ impl Interceptor for BearerAuth {
 /// `&self`, so each method clones the client. That is the cheap clone tonic
 /// documents: the `Channel` underneath is an `Arc` over one connection pool, so
 /// no new socket is opened.
+/// The generated SDK client, carrying the bearer credential. This is what Go
+/// reaches as `robot.Conn`.
+pub type SdkClient = ExternalInterfaceClient<InterceptedService<Channel, BearerAuth>>;
+
+/// The SDK client behind a connection, or `None` for a connection that is not a
+/// tonic one, which only a test fake is.
+pub fn sdk_client(conn: &dyn RobotConn) -> Option<SdkClient> {
+    conn.as_any()
+        .downcast_ref::<TonicRobotConn>()
+        .map(TonicRobotConn::client)
+}
+
 pub struct TonicRobotConn {
     client: ExternalInterfaceClient<InterceptedService<Channel, BearerAuth>>,
 }
@@ -87,7 +99,7 @@ impl TonicRobotConn {
         })
     }
 
-    fn client(&self) -> ExternalInterfaceClient<InterceptedService<Channel, BearerAuth>> {
+    fn client(&self) -> SdkClient {
         self.client.clone()
     }
 }
@@ -110,6 +122,10 @@ impl CameraControl for TonicRobotConn {
 
 #[async_trait]
 impl RobotConn for TonicRobotConn {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     async fn battery_state(&self) -> Result<BatteryReading, ConnError> {
         let response = self
             .client()

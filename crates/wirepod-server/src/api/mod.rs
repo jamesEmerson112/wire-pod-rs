@@ -17,6 +17,15 @@
 //! asserts them.
 
 pub mod bot_status;
+pub mod certs;
+pub mod config;
+pub mod intents;
+pub mod kg;
+pub mod logs;
+pub mod ota;
+pub mod stt;
+pub mod version;
+pub mod weather;
 
 use std::sync::Arc;
 

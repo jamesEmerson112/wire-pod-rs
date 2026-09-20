@@ -143,13 +143,14 @@ macro_rules! unimplemented_rpcs {
         $(
             fn $u_name<'life, 'fut>(
                 &'life self,
-                _request: Request<$u_req>,
+                request: Request<$u_req>,
             ) -> Pin<Box<dyn Future<Output = Result<Response<$u_resp>, Status>> + Send + 'fut>>
             where
                 'life: 'fut,
                 Self: 'fut,
             {
-                Box::pin(async { Err(Status::unimplemented(stringify!($u_name))) })
+                self.record(stringify!($u_name), &request);
+                Box::pin(async { Ok(Response::new(<$u_resp>::default())) })
             }
         )*
         $(

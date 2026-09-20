@@ -126,7 +126,11 @@ pub async fn run(args: ServeArgs) -> Result<(), ServeError> {
 
     // TODO(M3): wp.New(stt.Init, stt.STT, stt.Name) builds the voice processor
     // these options carry.
-    startserver::start_from_program_init(Arc::clone(&state), Server::new(Options::new())).await;
+    if args.web_only {
+        println!("serve: web only, the chipper listeners and mDNS stay off");
+    } else {
+        startserver::start_from_program_init(Arc::clone(&state), Server::new(Options::new())).await;
+    }
 
     for task in plain {
         match task.await {

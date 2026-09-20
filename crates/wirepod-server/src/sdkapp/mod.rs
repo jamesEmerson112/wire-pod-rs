@@ -14,10 +14,18 @@
 //! [`crate::router`]'s middleware has already unescaped each segment, so
 //! `GET /api-sdk/deb%75g` reaches the `debug` arm rather than the catch-all.
 
+pub mod batterywatchdog;
+pub mod bcassume;
 pub mod cam;
+pub mod cam_stream;
 pub mod disconnect;
+pub mod faces;
+pub mod motion;
 pub mod net_probe;
+pub mod photos;
 pub mod sdk_info;
+pub mod settings;
+pub mod speech;
 pub mod stim;
 
 use std::sync::Arc;
