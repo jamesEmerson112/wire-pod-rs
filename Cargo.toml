@@ -32,6 +32,10 @@ image = { version = "0.25", default-features = false, features = ["jpeg"] }
 # applies. Unix only.
 libc = "0.2"
 mdns-sd = "0.11"
+# Go embeds gopher-lua, which implements Lua 5.1, so a script written for the Go
+# server needs a 5.1 host rather than a newer one. `vendored` compiles that Lua
+# from source with the same C toolchain the vendored libopus already needs.
+mlua = { version = "0.10", features = ["lua51", "vendored"] }
 ogg = "0.9"
 opus = "0.3"
 prost = "0.13"
