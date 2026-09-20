@@ -28,7 +28,7 @@ The user reordered these on 2026-09-19, after M1: the web UI moved ahead of voic
 | M1 | the robot can connect: listeners, the three gRPC services, mDNS, the `/ok` side effects, a `serve` subcommand | about 1,200 |
 | M2 | the web UI's API and the rest of the SDK app | about 2,000 |
 | M3 | voice commands: audio, Vosk, intent matching, the request processors | about 3,100 |
-| M4 | LLM, knowledge graph, weather | about 2,000 |
+| M4 | LLM and knowledge graph. NOT TRANSLATED, by the user's decision on 2026-09-20. Weather, which shared the milestone, is done. | 1,535 not translated |
 | M5 | Lua scripting, certificates and SSH setup, then the parts the Windows install does not use (five other speech engines, BLE, the Go plugin loader) | about 1,900 |
 | M6 | debug against the robot, the optimization list, tray shell, packaging, cutover | none |
 
@@ -82,9 +82,9 @@ Status is one of: done, partial, or the milestone that will translate it.
 | `pkg/wirepod/ttr/words2num.go` | 169 | `wirepod-intent/src/words2num.rs` | done |
 | `pkg/wirepod/ttr/convert.go` | 92 | `wirepod-ttr/src/convert.rs` | done |
 | `pkg/wirepod/ttr/bcontrol.go` | 141 | `wirepod-ttr/src/bcontrol.rs` | done |
-| `pkg/wirepod/ttr/kgsim.go` | 713 | `wirepod-ttr/src/kgsim.rs` | M4 |
-| `pkg/wirepod/ttr/kgsim_cmds.go` | 730 | `wirepod-ttr/src/kgsim_cmds.rs` | M4 |
-| `pkg/wirepod/ttr/kgsim_interrupt.go` | 92 | `wirepod-ttr/src/kgsim_interrupt.rs` | M4 |
+| `pkg/wirepod/ttr/kgsim.go` | 713 | none | not translated, by decision |
+| `pkg/wirepod/ttr/kgsim_cmds.go` | 730 | none | not translated, by decision |
+| `pkg/wirepod/ttr/kgsim_interrupt.go` | 92 | none | not translated, by decision |
 | `pkg/wirepod/ttr/weather.go` | 432 | `wirepod-ttr/src/weather.rs` | done |
 | `pkg/wirepod/ttr/plugins.go` | 81 | `wirepod-ttr/src/plugins.rs` | M5, last; the user decides then |
 
@@ -97,6 +97,12 @@ Status is one of: done, partial, or the milestone that will translate it.
 | 2026-09-20, M3 | about 9,100 of 12,130 (75%) | the voice pipeline is translated: audio decode and VAD, the Vosk engine behind a feature, intent matching and parameter extraction, behaviour control, and the three request processors wired into `chipper serve`. Not yet run against the robot. |
 | 2026-09-19, M2 | about 6,800 of 12,130 (56%) | the web UI runs on the Rust server: every page, all 22 `/api` routes and all 45 `/api-sdk` routes, the static mounts, the camera route, the battery watchdog and the idle sweeper. Checked against the Go server side by side. |
 | 2026-09-19, robot session | unchanged | M1 confirmed on the real robot: Vector completed TLS with the Rust listener, called `Jdocs/ReadDocs`, held his heartbeat on port 80, and the server pulled his jdocs. No token or voice request arrived during the session |
+
+## M4 is not being translated
+
+On 2026-09-20 the user decided not to translate the LLM and knowledge-graph work: `kgsim.go`, `kgsim_cmds.go` and `kgsim_interrupt.go`, 1,535 Go lines. They are not interested in the feature. The `wirepod-llm` crate stays a stub and the prep commit for the milestone was reverted, so the tree carries no scaffolding for it.
+
+What this costs, so that the decision is reversible with open eyes. A voice command the intent list does not match reaches `intent_system_unmatched` instead of an answer, which is where the port already stood. The dashboard's talk panel and the knowledge-graph RPC have nothing behind them. `preqs` carries three `TODO(M4)` markers at the exact call sites, so picking the work up later means filling those three holes rather than finding them. Weather shared the milestone and is translated.
 
 ## The robot's own API
 
