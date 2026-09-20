@@ -8,5 +8,7 @@ dump.txt
 # directory and the negations can take effect.
 docs/*
 !docs/translation.md
+!docs/robot-api.md
 !docs/pending-upstream.md
 !docs/archive/
+.gstack/

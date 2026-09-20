@@ -98,6 +98,10 @@ Status is one of: done, partial, or the milestone that will translate it.
 | 2026-09-19, M2 | about 6,800 of 12,130 (56%) | the web UI runs on the Rust server: every page, all 22 `/api` routes and all 45 `/api-sdk` routes, the static mounts, the camera route, the battery watchdog and the idle sweeper. Checked against the Go server side by side. |
 | 2026-09-19, robot session | unchanged | M1 confirmed on the real robot: Vector completed TLS with the Rust listener, called `Jdocs/ReadDocs`, held his heartbeat on port 80, and the server pulled his jdocs. No token or voice request arrived during the session |
 
+## The robot's own API
+
+`docs/robot-api.md` is the reference for what the robot exposes and expects, read out of the WireOS sources at `E:/GitHub/wire-os-victor`. Read it before translating anything that talks to the robot. Two findings from it change how the port should behave, and both are on the list below: taking behaviour control is the only SDK message that wakes a sleeping robot, and the robot's own `settings.proto` numbers its fields differently from the copy this port vendors.
+
 ## Facts worth keeping from the old plan
 
 - Ports 80 and 8080 serve the same mux in Go, with every route on both. There is no method checking. `/api/` responses carry CORS `*`.
@@ -115,6 +119,10 @@ Nothing here is acted on until translation is 100%.
 From the browser session of 2026-09-19, with the robot attached to the Rust server:
 
 - `/cam-stream` gives nothing while the robot is asleep on its charger, on the Go server as well as on this one: `EnableImageStreaming` times out after five seconds and `CameraFeed` never sends headers, so the request hangs until the client gives up. Awake, the Go server streams normally. Measured on the Go server on 2026-09-20 with the robot awake: first frame 0.98 s after the request, then 71 frames in 20.0 s, which is 3.55 frames per second or about 282 ms between frames, 7.7 kB per frame, 547 kB in total, against a robot round trip of 12 to 22 ms. That frame rate is well under what the camera can do and is worth investigating. The same measurement has not yet been taken against the Rust server.
+- The camera hang has a real fix rather than a deadline: requesting behaviour control is the only SDK message registered as a wake reason, so taking control first wakes a sleeping robot and the camera calls then answer. Go papers over it with a five-second client deadline instead.
+- `UpdateSettings` over binary gRPC would write the wrong fields. The robot's `settings.proto` carries `custom_eye_color = 3` and shifts every field after it by one, and both the vendored proto and the SDK wire-pod links have the unshifted numbering. The port is safe only because, like Go, it sends settings as JSON over the REST mirror, where the gateway matches on field names. Do not switch those routes to gRPC.
+- Every action RPC hangs forever without behaviour control, because the robot only produces the completion response while the SDK behaviour is active. Every such call needs a deadline.
+- Refusals are usually invisible: the robot's gateway overwrites the engine's `FORBIDDEN` with `RESPONSE_RECEIVED` on the vision toggles, `SetEyeColor` has no response path at all, and the four direct motor calls report success while doing nothing.
 - Neither server reads the timestamp the robot sends on each camera frame, so glass-to-glass latency cannot be measured. Reading it would be an addition rather than a translation.
 - Go's `get_ota` indexes a path segment that the only matching route cannot have, so the handler panics on every call. The port answers Go's own `failed to parse URL` 500 instead, and the proxy below it is unreachable in both.
 - `print_robot_info` prints the robot's GUID in Go. The port leaves it out.
