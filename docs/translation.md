@@ -39,7 +39,7 @@ Status is one of: done, partial, or the milestone that will translate it.
 | Go file | Lines | Rust module | Status |
 |---|---|---|---|
 | `cmd/vosk/main.go` | 10 | `wirepod-app/src/serve.rs` | done, with no voice processor until M3 |
-| `cmd/coqui/main.go`, `cmd/leopard/main.go`, `cmd/experimental/{houndify,whisper,whisper.cpp}/main.go` | 49 | `wirepod-app` engine selection | M5 |
+| `cmd/coqui/main.go`, `cmd/leopard/main.go`, `cmd/experimental/{houndify,whisper,whisper.cpp}/main.go` | 49 | none | cut, by decision |
 | `pkg/initwirepod/startserver.go` | 231 | `wirepod-server/src/startserver.rs` | done |
 | `pkg/initwirepod/web.go` | 56 | `wirepod-server/src/initweb.rs` | done |
 | `pkg/logger/logger.go` | 248 | `wirepod-core/src/logger.rs` | done |
@@ -63,7 +63,7 @@ Status is one of: done, partial, or the milestone that will translate it.
 | `pkg/wirepod/preqs/intent.go` | 63 | `wirepod-ttr/src/preqs/intent.rs` | done |
 | `pkg/wirepod/preqs/intent_graph.go` | 95 | `wirepod-ttr/src/preqs/intent_graph.rs` | done |
 | `pkg/wirepod/preqs/knowledgegraph.go` | 159 | `wirepod-ttr/src/preqs/knowledgegraph.rs` | done |
-| `pkg/wirepod/preqs/stream_houndify.go` | 61 | `wirepod-ttr/src/preqs/stream_houndify.rs` | M5 |
+| `pkg/wirepod/preqs/stream_houndify.go` | 61 | none | cut, by decision |
 | `pkg/wirepod/sdkapp/robot.go` | 515 | `wirepod-core/src/robot/*.rs` and `wirepod-vector` | mostly done; the remainder is M2 |
 | `pkg/wirepod/sdkapp/server.go` | 886 | `wirepod-server/src/sdkapp/*.rs` | partial, 10 of 45 routes; M2 |
 | `pkg/wirepod/sdkapp/jdocspinger.go` | 269 | `wirepod-server/src/jdocspinger.rs` | done |
@@ -72,11 +72,11 @@ Status is one of: done, partial, or the milestone that will translate it.
 | `pkg/wirepod/sdkapp/urlreqs.go` | 67 | `wirepod-vector/src/urlreqs.rs` | M2 |
 | `pkg/wirepod/setup/certs.go` | 124 | `wirepod-setup/src/certs.rs` | M5 |
 | `pkg/wirepod/setup/ssh.go` | 254 | `wirepod-setup/src/ssh.rs` | M5 |
-| `pkg/wirepod/setup/ble.go`, `ble_other.go` | 530 | `wirepod-setup/src/ble.rs` | M5, last; the user decides then |
+| `pkg/wirepod/setup/ble.go`, `ble_other.go` | 530 | `wirepod-setup/src/ble.rs` | deferred; the user wants it upgraded rather than translated |
 | `pkg/wirepod/speechrequest/speechrequest.go` | 365 | `wirepod-audio/src/speechrequest.rs` | done |
 | `pkg/wirepod/stt/vosk/Vosk.go` | 223 | `wirepod-stt/src/vosk.rs` | done, behind the `stt-vosk` feature |
 | `pkg/wirepod/stt/vosk/context.go` | 79 | `wirepod-stt/src/vosk_context.rs` | done |
-| `pkg/wirepod/stt/{coqui,houndify,leopard,whisper,whisper.cpp}` | 525 | `wirepod-stt/src/<engine>.rs` behind features | M5, last; the user decides then |
+| `pkg/wirepod/stt/{coqui,houndify,leopard,whisper,whisper.cpp}` | 525 | none | cut, by decision |
 | `pkg/wirepod/ttr/intentparam.go` | 719 | `wirepod-intent/src/intentparam.rs` | done |
 | `pkg/wirepod/ttr/matchIntentSend.go` | 337 | `wirepod-intent/src/match_intent_send.rs` | done |
 | `pkg/wirepod/ttr/words2num.go` | 169 | `wirepod-intent/src/words2num.rs` | done |
@@ -86,7 +86,7 @@ Status is one of: done, partial, or the milestone that will translate it.
 | `pkg/wirepod/ttr/kgsim_cmds.go` | 730 | none | not translated, by decision |
 | `pkg/wirepod/ttr/kgsim_interrupt.go` | 92 | none | not translated, by decision |
 | `pkg/wirepod/ttr/weather.go` | 432 | `wirepod-ttr/src/weather.rs` | done |
-| `pkg/wirepod/ttr/plugins.go` | 81 | `wirepod-ttr/src/plugins.rs` | M5, last; the user decides then |
+| `pkg/wirepod/ttr/plugins.go` | 81 | none | cut; Rust cannot load Go `.so` plugins at all |
 
 ## Progress
 
@@ -97,6 +97,16 @@ Status is one of: done, partial, or the milestone that will translate it.
 | 2026-09-20, M3 | about 9,100 of 12,130 (75%) | the voice pipeline is translated: audio decode and VAD, the Vosk engine behind a feature, intent matching and parameter extraction, behaviour control, and the three request processors wired into `chipper serve`. Not yet run against the robot. |
 | 2026-09-19, M2 | about 6,800 of 12,130 (56%) | the web UI runs on the Rust server: every page, all 22 `/api` routes and all 45 `/api-sdk` routes, the static mounts, the camera route, the battery watchdog and the idle sweeper. Checked against the Go server side by side. |
 | 2026-09-19, robot session | unchanged | M1 confirmed on the real robot: Vector completed TLS with the Rust listener, called `Jdocs/ReadDocs`, held his heartbeat on port 80, and the server pulled his jdocs. No token or voice request arrived during the session |
+
+## What is deliberately not being translated
+
+Three decisions the user made on 2026-09-20, all reversible, all recorded so nobody rediscovers them by accident.
+
+**The five speech engines other than Vosk are cut**, 635 lines counting their entry points and the Houndify streaming glue: Coqui, Leopard, Whisper over the network, whisper.cpp, and Houndify. The user runs Vosk and wants none of the others. Houndify is the one worth a second line, because it is not a transcriber: it answers a spoken question outright, and it was wire-pod's original route for the knowledge graph. Cutting it follows from cutting M4 rather than being a separate judgement.
+
+**The Go plugin loader is cut**, 81 lines. It opens `.so` files built by the Go toolchain, which Rust cannot do at all, so a translation would be a loader that finds nothing. The Lua host is the extensibility path this port has.
+
+**Bluetooth onboarding is deferred**, 530 lines. The user wants it upgraded rather than translated. It is worth knowing that the Go server on their Windows machine does not have this feature either: the code sits behind a build tag that the Windows build does not set, so the seventeen Bluetooth routes on the web UI are stubs today. Translating it would add something rather than reach parity, and the Rust crate for it is weakest on Windows.
 
 ## M4 is not being translated
 
