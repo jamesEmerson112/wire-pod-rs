@@ -47,9 +47,8 @@ pub const PREFIX: &str = "/api-sdk/";
 /// the two paths the preamble exempts, which is what makes it the test that
 /// pins the ordering between the preamble and the fallback.
 ///
-/// The other 36 `/api-sdk/*` arms Go has are deferred to P4 and answer the same
-/// 404 as a stub. That stub is not a contract: `deviations.md` lists them by
-/// name and no test asserts their status.
+/// The list is kept now that the other arms are translated too, because
+/// `tests/lifecycle.rs` walks it to prove the idle timer is reset.
 pub const SLICE_ROUTES: [&str; 10] = [
     "conn_test",
     "net_probe",
@@ -132,44 +131,54 @@ async fn dispatch(state: &Arc<AppState>, path: &str, form: &Form) -> Response {
             reply::not_found()
         }
 
-        // The four routes that read the connected robot. None of them is
+        // Every remaining arm reads the connected robot. None of them is
         // preamble-exempt, so the `Err` arm is unreachable: an unresolvable
         // serial or a failed dial has already been written and returned above.
         // It answers the dispatch default rather than panicking, because an
         // unreachable arm that cannot be reached by a request is not worth a
         // way to take the process down.
-        "net_probe" | "begin_event_stream" | "stop_event_stream" | "get_stim_status" => {
-            match &robot {
-                Ok(entry) => connected_route(state, route, entry).await,
-                Err(_) => reply::not_found(),
-            }
-        }
-
-        // `as_deref().ok()` is `Ok` for both of these: neither path is
-        // preamble-exempt, so a failed connect was answered above and never
-        // reaches the switch. Each handler documents the unreachable `None`.
-        "stop_cam_stream" => cam::stop(robot.as_deref().ok()),
-        "disconnect" => disconnect::handle(state, robot.as_deref().ok()).await,
-
-        // Go's `default`, which is also where its other 36 arms land while they
-        // are deferred.
-        _ => reply::not_found(),
+        _ => match robot.as_deref() {
+            Ok(entry) => connected_route(state, route, entry, form).await,
+            Err(_) => reply::not_found(),
+        },
     }
 }
 
-/// The four routes behind a connected robot.
+/// The routes behind a connected robot, in Go's `switch` order.
 ///
 /// Split out so that [`dispatch`]'s `match` stays one flat list of route names
 /// rather than nesting the `Ok`/`Err` on every one of them. Go reads
 /// `robotObj` in each arm directly, because its preamble left a zero value
 /// there rather than an error.
-async fn connected_route(state: &AppState, route: &str, entry: &RobotEntry) -> Response {
+async fn connected_route(
+    state: &AppState,
+    route: &str,
+    entry: &RobotEntry,
+    form: &Form,
+) -> Response {
     match route {
         "net_probe" => net_probe::handle(state, entry).await,
+        "eye_color" => settings::eye_color(entry, form.get("color")).await,
+        "custom_eye_color" => {
+            settings::custom_eye_color(entry, form.get("hue"), form.get("sat")).await
+        }
+        "volume" => settings::set_intbool(entry, "master_volume", form.get("volume")).await,
+        "locale" => settings::set_string(entry, "locale", form.get("locale")).await,
+        "location" => settings::set_string(entry, "default_location", form.get("location")).await,
+        "timezone" => settings::set_string(entry, "time_zone", form.get("timezone")).await,
+        "get_sdk_settings" => settings::get_sdk_settings(state, entry).await,
+        "time_format_12" => settings::set_intbool(entry, "clock_24_hour", "false").await,
+        "time_format_24" => settings::set_intbool(entry, "clock_24_hour", "true").await,
+        "temp_c" => settings::set_intbool(entry, "temp_is_fahrenheit", "false").await,
+        "temp_f" => settings::set_intbool(entry, "temp_is_fahrenheit", "true").await,
+        "button_hey_vector" => settings::set_intbool(entry, "button_wakeword", "0").await,
+        "button_alexa" => settings::set_intbool(entry, "button_wakeword", "1").await,
         "begin_event_stream" => stim::begin(entry),
         "stop_event_stream" => stim::stop(entry),
         "get_stim_status" => stim::status(entry),
-        // Unreachable: the caller matched this same list before it called.
+        "stop_cam_stream" => cam::stop(Some(entry)),
+        "disconnect" => disconnect::handle(state, Some(entry)).await,
+        // Go's `default`.
         _ => reply::not_found(),
     }
 }
