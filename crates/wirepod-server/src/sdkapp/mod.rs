@@ -37,6 +37,16 @@ use wirepod_core::{AppState, Esn, RobotEntry};
 use crate::form::{self, Form};
 use crate::{literals, reply};
 
+/// What a route needing the generated SDK client answers when the connection
+/// is not a tonic one, which only a test fake is.
+pub(crate) const NO_SDK_CLIENT: &str = "rpc error: code = Unavailable desc = no SDK client";
+
+/// The generated SDK client behind a connected robot, which is what Go reaches
+/// as `robot.Conn`.
+pub(crate) fn sdk_client(entry: &RobotEntry) -> Option<wirepod_vector::SdkClient> {
+    wirepod_vector::sdk_client(entry.conn.as_ref())
+}
+
 /// The subtree prefix, registered with its trailing slash (`server.go:806`).
 pub const PREFIX: &str = "/api-sdk/";
 
@@ -173,10 +183,30 @@ async fn connected_route(
         "temp_f" => settings::set_intbool(entry, "temp_is_fahrenheit", "true").await,
         "button_hey_vector" => settings::set_intbool(entry, "button_wakeword", "0").await,
         "button_alexa" => settings::set_intbool(entry, "button_wakeword", "1").await,
+        "move_wheels" => motion::move_wheels(entry, form.get("lw"), form.get("rw")).await,
+        "move_lift" => motion::move_lift(entry, form.get("speed")).await,
+        "move_head" => motion::move_head(entry, form.get("speed")).await,
+        "get_faces" => faces::get_faces(entry).await,
+        "rename_face" => {
+            faces::rename_face(
+                entry,
+                form.get("id"),
+                form.get("oldname"),
+                form.get("newname"),
+            )
+            .await
+        }
+        "delete_face" => faces::delete_face(entry, form.get("id")).await,
+        "add_face" => faces::add_face(entry, form.get("name")).await,
+        "mirror_mode" => motion::mirror_mode(entry, form.get("enable")).await,
         "begin_event_stream" => stim::begin(entry),
         "stop_event_stream" => stim::stop(entry),
         "get_stim_status" => stim::status(entry),
         "stop_cam_stream" => cam::stop(Some(entry)),
+        "get_image_ids" => photos::get_image_ids(entry).await,
+        "get_image" => photos::get_image(entry, form.get("id")).await,
+        "get_image_thumb" => photos::get_image_thumb(entry, form.get("id")).await,
+        "delete_image" => photos::delete_image(entry, form.get("id")).await,
         "disconnect" => disconnect::handle(state, Some(entry)).await,
         // Go's `default`.
         _ => reply::not_found(),
