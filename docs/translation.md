@@ -59,10 +59,10 @@ Status is one of: done, partial, or the milestone that will translate it.
 | `pkg/wirepod/config-ws/webserver.go` | 545 | `wirepod-server/src/api/*.rs` | partial, 1 of 22 routes; M2 |
 | `pkg/wirepod/localization/localization.go` | 259 | `wirepod-intent/src/localization.rs` | done apart from `ReloadVosk` |
 | `pkg/wirepod/localization/download.go` | 192 | `wirepod-intent/src/download.rs` | done |
-| `pkg/wirepod/preqs/server.go` | 76 | `wirepod-ttr/src/preqs/server.rs` | M3 |
-| `pkg/wirepod/preqs/intent.go` | 63 | `wirepod-ttr/src/preqs/intent.rs` | M3 |
-| `pkg/wirepod/preqs/intent_graph.go` | 95 | `wirepod-ttr/src/preqs/intent_graph.rs` | M3 |
-| `pkg/wirepod/preqs/knowledgegraph.go` | 159 | `wirepod-ttr/src/preqs/knowledgegraph.rs` | M3 |
+| `pkg/wirepod/preqs/server.go` | 76 | `wirepod-ttr/src/preqs/server.rs` | done |
+| `pkg/wirepod/preqs/intent.go` | 63 | `wirepod-ttr/src/preqs/intent.rs` | done |
+| `pkg/wirepod/preqs/intent_graph.go` | 95 | `wirepod-ttr/src/preqs/intent_graph.rs` | done |
+| `pkg/wirepod/preqs/knowledgegraph.go` | 159 | `wirepod-ttr/src/preqs/knowledgegraph.rs` | done |
 | `pkg/wirepod/preqs/stream_houndify.go` | 61 | `wirepod-ttr/src/preqs/stream_houndify.rs` | M5 |
 | `pkg/wirepod/sdkapp/robot.go` | 515 | `wirepod-core/src/robot/*.rs` and `wirepod-vector` | mostly done; the remainder is M2 |
 | `pkg/wirepod/sdkapp/server.go` | 886 | `wirepod-server/src/sdkapp/*.rs` | partial, 10 of 45 routes; M2 |
@@ -73,15 +73,15 @@ Status is one of: done, partial, or the milestone that will translate it.
 | `pkg/wirepod/setup/certs.go` | 124 | `wirepod-setup/src/certs.rs` | M5 |
 | `pkg/wirepod/setup/ssh.go` | 254 | `wirepod-setup/src/ssh.rs` | M5 |
 | `pkg/wirepod/setup/ble.go`, `ble_other.go` | 530 | `wirepod-setup/src/ble.rs` | M5, last; the user decides then |
-| `pkg/wirepod/speechrequest/speechrequest.go` | 365 | `wirepod-audio/src/speechrequest.rs` | M3 |
-| `pkg/wirepod/stt/vosk/Vosk.go` | 223 | `wirepod-stt/src/vosk.rs` | M3 |
-| `pkg/wirepod/stt/vosk/context.go` | 79 | `wirepod-stt/src/vosk_context.rs` | M3 |
+| `pkg/wirepod/speechrequest/speechrequest.go` | 365 | `wirepod-audio/src/speechrequest.rs` | done |
+| `pkg/wirepod/stt/vosk/Vosk.go` | 223 | `wirepod-stt/src/vosk.rs` | done, behind the `stt-vosk` feature |
+| `pkg/wirepod/stt/vosk/context.go` | 79 | `wirepod-stt/src/vosk_context.rs` | done |
 | `pkg/wirepod/stt/{coqui,houndify,leopard,whisper,whisper.cpp}` | 525 | `wirepod-stt/src/<engine>.rs` behind features | M5, last; the user decides then |
-| `pkg/wirepod/ttr/intentparam.go` | 719 | `wirepod-intent/src/intentparam.rs` | M3 |
-| `pkg/wirepod/ttr/matchIntentSend.go` | 337 | `wirepod-intent/src/match_intent_send.rs` | M3 |
+| `pkg/wirepod/ttr/intentparam.go` | 719 | `wirepod-intent/src/intentparam.rs` | done |
+| `pkg/wirepod/ttr/matchIntentSend.go` | 337 | `wirepod-intent/src/match_intent_send.rs` | done |
 | `pkg/wirepod/ttr/words2num.go` | 169 | `wirepod-intent/src/words2num.rs` | done |
 | `pkg/wirepod/ttr/convert.go` | 92 | `wirepod-ttr/src/convert.rs` | done |
-| `pkg/wirepod/ttr/bcontrol.go` | 141 | `wirepod-ttr/src/bcontrol.rs` | M3 |
+| `pkg/wirepod/ttr/bcontrol.go` | 141 | `wirepod-ttr/src/bcontrol.rs` | done |
 | `pkg/wirepod/ttr/kgsim.go` | 713 | `wirepod-ttr/src/kgsim.rs` | M4 |
 | `pkg/wirepod/ttr/kgsim_cmds.go` | 730 | `wirepod-ttr/src/kgsim_cmds.rs` | M4 |
 | `pkg/wirepod/ttr/kgsim_interrupt.go` | 92 | `wirepod-ttr/src/kgsim_interrupt.rs` | M4 |
@@ -94,6 +94,7 @@ Status is one of: done, partial, or the milestone that will translate it.
 |---|---|---|
 | 2026-09-19 | about 2,300 of 12,130 (19%) | nothing the robot can use yet; the SDK dashboard slice runs beside Go |
 | 2026-09-19, after M1 | about 4,800 of 12,130 (40%) | M1 translated: `chipper serve` starts the TLS listener with the chipper, jdocs and token services, mDNS, the `/ok` side effects and `/api-chipper/`; proven on loopback, not yet run against the robot |
+| 2026-09-20, M3 | about 9,100 of 12,130 (75%) | the voice pipeline is translated: audio decode and VAD, the Vosk engine behind a feature, intent matching and parameter extraction, behaviour control, and the three request processors wired into `chipper serve`. Not yet run against the robot. |
 | 2026-09-19, M2 | about 6,800 of 12,130 (56%) | the web UI runs on the Rust server: every page, all 22 `/api` routes and all 45 `/api-sdk` routes, the static mounts, the camera route, the battery watchdog and the idle sweeper. Checked against the Go server side by side. |
 | 2026-09-19, robot session | unchanged | M1 confirmed on the real robot: Vector completed TLS with the Rust listener, called `Jdocs/ReadDocs`, held his heartbeat on port 80, and the server pulled his jdocs. No token or voice request arrived during the session |
 

@@ -20,6 +20,18 @@ The Go server and the Rust server cannot run at the same time in this mode, beca
 
    Stop the server by its process id, never by its image name. The installed Go server is also called `chipper.exe`, so `taskkill /F /IM chipper.exe` takes both down.
 
+## Voice commands
+
+The speech engine links against libvosk, whose import library is not in this repository, so it is behind a Cargo feature that is off by default. A plain build therefore answers the three streaming voice RPCs as unimplemented. To build it in, from Git Bash:
+
+```bash
+export VOSK_LIB_DIR=E:/GitHub/wire-pod-rs/spikes/s2-vosk/vendor/vosk-win64-0.3.45
+export PATH="$PATH:/e/GitHub/wire-pod-rs/spikes/s2-vosk/vendor/vosk-win64-0.3.45"
+cargo build -p wirepod-app --features stt-vosk
+```
+
+`VOSK_LIB_DIR` is needed at link time and the same directory has to be on `PATH` at run time for `libvosk.dll`. The engine also needs a model under `<data dir>/vosk/models/<language>/model`, which the copied data directory already carries.
+
 ## What a healthy start looks like
 
 Within a few seconds the log shows the four listeners, `Registering escapepod.local on network`, then from the robot:
