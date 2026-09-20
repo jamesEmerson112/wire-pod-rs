@@ -17,6 +17,10 @@ const REPO: &str = "WirePod";
 /// Go's `vars.CommitSHA`, which a build-time ldflag sets and nothing here does.
 const COMMIT_SHA: &str = "";
 
+// Go's HTTP client sends a user agent of its own; reqwest sends none, and
+// GitHub answers 403 to a request without one.
+const USER_AGENT: &str = "wire-pod-rs";
+
 #[derive(Serialize)]
 struct VersionInfo {
     fromsource: bool,
@@ -80,6 +84,7 @@ pub async fn get_version_info(state: &AppState) -> Response {
 pub async fn get_latest_commit_sha(api: &str) -> Result<String, String> {
     let response = reqwest::Client::new()
         .get(format!("{api}/repos/kercre123/wire-pod/commits"))
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
         .send()
         .await
         .map_err(|err| err.to_string())?;
@@ -100,7 +105,10 @@ pub async fn get_latest_commit_sha(api: &str) -> Result<String, String> {
 }
 
 pub async fn get_latest_release_tag(api: &str, owner: &str, repo: &str) -> Result<String, String> {
-    let response = reqwest::get(format!("{api}/repos/{owner}/{repo}/releases/latest"))
+    let response = reqwest::Client::new()
+        .get(format!("{api}/repos/{owner}/{repo}/releases/latest"))
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
+        .send()
         .await
         .map_err(|err| err.to_string())?;
     let body = response.bytes().await.map_err(|err| err.to_string())?;
