@@ -318,6 +318,12 @@ impl AssetDir {
         self.root.join("weather-map.json")
     }
 
+    /// The warm-up sample every speech engine transcribes at startup,
+    /// `"./stttest.pcm"` (`stt/vosk/Vosk.go:116`).
+    pub fn stttest_path(&self) -> PathBuf {
+        self.root.join("stttest.pcm")
+    }
+
     /// The version file the web UI reads, `"./version"` (`vars.go:46`, read at
     /// `config-ws/webserver.go:358`).
     ///
