@@ -113,7 +113,8 @@ Nothing here is acted on until translation is 100%.
 
 From the browser session of 2026-09-19, with the robot attached to the Rust server:
 
-- `/cam-stream` produces no frames. The robot lets `EnableImageStreaming` time out after five seconds and then `CameraFeed` never sends headers, so the handler hangs until the client gives up. Every other SDK call works on the same connection, including `SayText`, `BatteryState`, `PullJdocs` and `ProtocolVersion`. Not yet compared against the Go server, which is the test that would say whether this is the robot's state or a difference in the port.
+- `/cam-stream` gives nothing while the robot is asleep on its charger, on the Go server as well as on this one: `EnableImageStreaming` times out after five seconds and `CameraFeed` never sends headers, so the request hangs until the client gives up. Awake, the Go server streams normally. Measured on the Go server on 2026-09-20 with the robot awake: first frame 0.98 s after the request, then 71 frames in 20.0 s, which is 3.55 frames per second or about 282 ms between frames, 7.7 kB per frame, 547 kB in total, against a robot round trip of 12 to 22 ms. That frame rate is well under what the camera can do and is worth investigating. The same measurement has not yet been taken against the Rust server.
+- Neither server reads the timestamp the robot sends on each camera frame, so glass-to-glass latency cannot be measured. Reading it would be an addition rather than a translation.
 - Go's `get_ota` indexes a path segment that the only matching route cannot have, so the handler panics on every call. The port answers Go's own `failed to parse URL` 500 instead, and the proxy below it is unreachable in both.
 - `print_robot_info` prints the robot's GUID in Go. The port leaves it out.
 - The `sdkapp` log target is not in the default filter, so lines logged to it at debug never appear. Either add it to `DEFAULT_FILTER` or move those lines to a crate target.
