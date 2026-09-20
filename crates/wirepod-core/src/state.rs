@@ -41,12 +41,13 @@
 //! [`ApiConfig`] a redacting `Debug` is the real fix and belongs to a later
 //! commit, which will own `config.rs`.
 
-use std::sync::{Arc, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::time::Duration;
 
 use crate::clock::{Clock, SystemClock};
 use crate::config::ApiConfig;
 use crate::esn::Esn;
+use crate::intents::CustomIntent;
 use crate::logger::{LogClock, LogInstant, LogRing};
 use crate::paths::{AssetDir, DEFAULT_SDK_INI_DIR, DataDir};
 use crate::persist::WriteGate;
@@ -187,6 +188,9 @@ pub struct AppState {
     /// they all hold this one, which is why it is state rather than something
     /// a writer builds.
     config_gate: WriteGate,
+    /// Go's `vars.CustomIntents` and `vars.CustomIntentsExist` (`vars.go:63`,
+    /// `:67`) as one value: `None` is `CustomIntentsExist == false`.
+    custom_intents: Mutex<Option<Vec<CustomIntent>>>,
     /// Go's `vars.BotJdocs` (`vars.go:61`).
     jdocs: JdocsStore,
     /// Go's `vars.RecurringInfo` (`vars.go:80`).
@@ -350,6 +354,12 @@ impl AppState {
     /// Two gates over one file order nothing, so every writer takes this one.
     pub fn config_gate(&self) -> &WriteGate {
         &self.config_gate
+    }
+
+    /// The custom intents the web UI edits. `None` is Go's
+    /// `CustomIntentsExist == false`.
+    pub fn custom_intents(&self) -> &Mutex<Option<Vec<CustomIntent>>> {
+        &self.custom_intents
     }
 
     /// The jdocs file.
@@ -611,6 +621,7 @@ impl AppStateBuilder {
             paths: self.paths,
             config: RwLock::new(Arc::new(self.config)),
             config_gate,
+            custom_intents: Mutex::new(None),
             jdocs,
             session_certs: self.session_certs,
             sdk_ini,
