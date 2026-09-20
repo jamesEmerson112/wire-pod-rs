@@ -151,12 +151,10 @@ pub async fn run(args: ServeArgs) -> Result<(), ServeError> {
         )));
     }
 
-    // TODO(M3): wp.New(stt.Init, stt.STT, stt.Name) builds the voice processor
-    // these options carry.
     if args.web_only {
         println!("serve: web only, the chipper listeners and mDNS stay off");
     } else {
-        startserver::start_from_program_init(Arc::clone(&state), Server::new(Options::new())).await;
+        startserver::start_from_program_init(Arc::clone(&state), voice_processor(&state)).await;
     }
 
     for task in plain {
@@ -180,4 +178,62 @@ fn install_logging(logs: Arc<LogRing>) {
         .with(tracing_subscriber::fmt::layer())
         .with(LogLayer::new(logs))
         .init();
+}
+
+/// Go's `wp.New(stt.Init, stt.STT, stt.Name)`, which builds the voice processor
+/// and hands it to the chipper service as all three request processors.
+///
+/// The engine links against libvosk, so it is compiled in only under the
+/// `stt-vosk` feature. Without it the service is built with no processor at all
+/// and answers the three streaming RPCs as unimplemented, which is what the
+/// Go server does when its engine fails to start.
+#[cfg(feature = "stt-vosk")]
+fn voice_processor(state: &Arc<AppState>) -> Server {
+    use wirepod_server::vtt::{IntentGraphProcessor, IntentProcessor, KgProcessor};
+    use wirepod_stt::vosk::{Vosk, VoskConfig};
+
+    let config = state.config();
+    let data = state.paths().data();
+    let assets = state.paths().assets();
+    let intent_list = wirepod_core::intents::load_intents(assets, &config.stt.language)
+        .inspect_err(|err| tracing::info!(comp = "", "{err}"))
+        .unwrap_or_default();
+    let engine = Arc::new(Vosk::new(VoskConfig {
+        past_initial_setup: config.past_initial_setup,
+        stt_language: config.stt.language.clone(),
+        intent_graph: config.knowledge.intentgraph,
+        vosk_model_path: data.vosk_model_dir(),
+        stttest_path: assets.stttest_path(),
+        intent_list,
+        custom_intents: wirepod_core::intents::load_custom_intents(data).unwrap_or_default(),
+    }));
+
+    match wirepod_ttr::preqs::server::Server::new(Arc::clone(state), engine) {
+        Ok(processor) => {
+            // Go hands the same `*preqs.Server` to all three option functions.
+            let processor = Arc::new(processor);
+            // Each binding is what coerces the concrete type to its trait
+            // object; `Arc::clone` on its own cannot.
+            let intent: Arc<dyn IntentProcessor> = processor.clone();
+            let kg: Arc<dyn KgProcessor> = processor.clone();
+            let intent_graph: Arc<dyn IntentGraphProcessor> = processor;
+            Server::new(
+                Options::new()
+                    .with_intent_processor(intent)
+                    .with_knowledge_graph_processor(kg)
+                    .with_intent_graph_processor(intent_graph),
+            )
+        }
+        Err(err) => {
+            tracing::info!(comp = "", "{err}");
+            Server::new(Options::new())
+        }
+    }
+}
+
+/// The same entry point with no engine compiled in.
+#[cfg(not(feature = "stt-vosk"))]
+fn voice_processor(_state: &Arc<AppState>) -> Server {
+    println!("serve: built without a speech engine, so voice commands are off");
+    Server::new(Options::new())
 }

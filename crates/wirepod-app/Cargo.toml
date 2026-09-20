@@ -8,6 +8,12 @@ license.workspace = true
 name = "chipper"
 path = "src/main.rs"
 
+[features]
+default = []
+# Builds the Vosk engine into the binary, which links against libvosk. Off by
+# default so a plain `cargo build` needs no native library.
+stt-vosk = ["wirepod-stt/stt-vosk"]
+
 [dependencies]
 serde_json.workspace = true
 # `signal` is on top of the workspace list, for the Ctrl-C that stops the trial
@@ -19,5 +25,7 @@ tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 wirepod-core.workspace = true
+wirepod-stt.workspace = true
+wirepod-ttr.workspace = true
 wirepod-server.workspace = true
 wirepod-vector.workspace = true

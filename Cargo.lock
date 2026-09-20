@@ -4357,6 +4357,8 @@ dependencies = [
  "tracing-subscriber",
  "wirepod-core",
  "wirepod-server",
+ "wirepod-stt",
+ "wirepod-ttr",
  "wirepod-vector",
 ]
 
