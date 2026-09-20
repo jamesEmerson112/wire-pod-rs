@@ -51,6 +51,9 @@ rcgen = { version = "0.14", default-features = false, features = ["pem"] }
 # 1028-bit RSA key generation and PKCS#1 signing, which no TLS-oriented crate
 # offers at that size.
 rsa = "0.9"
+# The SSH client `ssh.go` gets from `golang.org/x/crypto/ssh`. Pure Rust, on
+# `ring` rather than the default `aws-lc-rs`, so no C toolchain is needed.
+russh = { version = "0.63", default-features = false, features = ["flate2", "ring", "rsa"] }
 # The feature set spike S1 resolved with: the ring provider only, no aws-lc-rs,
 # and `tls12` because Vector's gateway is old enough to need it.
 regex = "1"

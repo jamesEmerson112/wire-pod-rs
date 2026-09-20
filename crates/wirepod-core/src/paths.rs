@@ -291,6 +291,12 @@ impl AssetDir {
         self.root.join("epod").join("ep.key")
     }
 
+    /// The script SSH onboarding copies to the robot, Go's `SetupScriptPath`
+    /// (`setup/ssh.go:20`, rewritten at `:52` and `:55`).
+    pub fn pod_bot_install_path(&self) -> PathBuf {
+        self.root.join("pod-bot-install.sh")
+    }
+
     /// The web UI's document root, `"./webroot"`
     /// (`config-ws/webserver.go:437`).
     pub fn webroot_dir(&self) -> PathBuf {
