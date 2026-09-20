@@ -30,8 +30,11 @@ pub mod stim;
 
 use std::sync::Arc;
 
+use axum::body::Body;
 use axum::extract::{Request, State};
 use axum::response::Response;
+use http::header;
+use http_body_util::BodyExt;
 use wirepod_core::{AppState, Esn, RobotEntry};
 
 use crate::form::{self, Form};
@@ -87,9 +90,29 @@ pub fn is_preamble_exempt(path: &str) -> bool {
 }
 
 /// The one handler behind `/api-sdk/` and everything under it.
+///
+/// `play_sound` is the one route whose body is a multipart upload rather than
+/// a form, and Go's `FormValue` merge does not read one, so the bytes are
+/// taken here and the request is rebuilt before the merge runs.
 pub async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Response {
+    let mut req = req;
+    let mut sound = None;
+    if req.uri().path() == speech::PLAY_SOUND_PATH {
+        let (parts, body) = req.into_parts();
+        let bytes = match body.collect().await {
+            Ok(collected) => collected.to_bytes().to_vec(),
+            Err(_) => Vec::new(),
+        };
+        let content_type = parts
+            .headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        sound = speech::form_file(content_type.as_deref(), &bytes, "sound");
+        req = Request::from_parts(parts, Body::from(bytes));
+    }
     let (parts, form) = form::read(req).await;
-    dispatch(&state, parts.uri.path(), &form).await
+    dispatch(&state, parts.uri.path(), &form, sound).await
 }
 
 /// The preamble, then the switch.
@@ -109,7 +132,12 @@ pub async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Respons
 /// two named paths are exempt only from the error write and from the timer
 /// reset, and that timer reset is the only thing anywhere that keeps a robot
 /// out of the 300 second idle sweep.
-async fn dispatch(state: &Arc<AppState>, path: &str, form: &Form) -> Response {
+async fn dispatch(
+    state: &Arc<AppState>,
+    path: &str,
+    form: &Form,
+    sound: Option<Vec<u8>>,
+) -> Response {
     let serial = Esn::new(form.get("serial"));
     let exempt = is_preamble_exempt(path);
 
@@ -148,7 +176,7 @@ async fn dispatch(state: &Arc<AppState>, path: &str, form: &Form) -> Response {
         // unreachable arm that cannot be reached by a request is not worth a
         // way to take the process down.
         _ => match robot.as_deref() {
-            Ok(entry) => connected_route(state, route, entry, form).await,
+            Ok(entry) => connected_route(state, route, entry, form, sound).await,
             Err(_) => reply::not_found(),
         },
     }
@@ -165,9 +193,13 @@ async fn connected_route(
     route: &str,
     entry: &RobotEntry,
     form: &Form,
+    sound: Option<Vec<u8>>,
 ) -> Response {
     match route {
         "net_probe" => net_probe::handle(state, entry).await,
+        "alexa_sign_in" => speech::alexa_opt_in(entry, true).await,
+        "alexa_sign_out" => speech::alexa_opt_in(entry, false).await,
+        "cloud_intent" => speech::cloud_intent(entry, form.get("intent")).await,
         "eye_color" => settings::eye_color(entry, form.get("color")).await,
         "custom_eye_color" => {
             settings::custom_eye_color(entry, form.get("hue"), form.get("sat")).await
@@ -177,12 +209,15 @@ async fn connected_route(
         "location" => settings::set_string(entry, "default_location", form.get("location")).await,
         "timezone" => settings::set_string(entry, "time_zone", form.get("timezone")).await,
         "get_sdk_settings" => settings::get_sdk_settings(state, entry).await,
+        "play_sound" => speech::play_sound(entry, sound).await,
+        "get_battery" => speech::get_battery(entry).await,
         "time_format_12" => settings::set_intbool(entry, "clock_24_hour", "false").await,
         "time_format_24" => settings::set_intbool(entry, "clock_24_hour", "true").await,
         "temp_c" => settings::set_intbool(entry, "temp_is_fahrenheit", "false").await,
         "temp_f" => settings::set_intbool(entry, "temp_is_fahrenheit", "true").await,
         "button_hey_vector" => settings::set_intbool(entry, "button_wakeword", "0").await,
         "button_alexa" => settings::set_intbool(entry, "button_wakeword", "1").await,
+        "say_text" => speech::say_text(entry, form.get("text")).await,
         "move_wheels" => motion::move_wheels(entry, form.get("lw"), form.get("rw")).await,
         "move_lift" => motion::move_lift(entry, form.get("speed")).await,
         "move_head" => motion::move_head(entry, form.get("speed")).await,
@@ -207,7 +242,10 @@ async fn connected_route(
         "get_image" => photos::get_image(entry, form.get("id")).await,
         "get_image_thumb" => photos::get_image_thumb(entry, form.get("id")).await,
         "delete_image" => photos::delete_image(entry, form.get("id")).await,
+        "get_robot_stats" => speech::get_robot_stats(entry).await,
+        "print_robot_info" => speech::print_robot_info(entry),
         "disconnect" => disconnect::handle(state, Some(entry)).await,
+        "trigger_wake_word" => speech::trigger_wake_word(entry).await,
         // Go's `default`.
         _ => reply::not_found(),
     }
