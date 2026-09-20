@@ -204,15 +204,13 @@ pub async fn start_cam_stream(
         displaced.cancel();
         tokio::time::sleep(timings.settle).await;
     }
-    let enabled = enable_image_streaming(camera.as_ref(), timings, true).await;
-    drop(op);
-    match enabled {
-        Ok(()) => Ok(guard),
-        Err(err) => {
-            guard.finish().await;
-            Err(err)
-        }
+    // Go discards what this call answers, a timeout included, and opens the
+    // feed regardless. The real robot does let it time out.
+    if let Err(err) = enable_image_streaming(camera.as_ref(), timings, true).await {
+        tracing::debug!(target: "sdkapp", "enable image streaming: {err}");
     }
+    drop(op);
+    Ok(guard)
 }
 
 /// Why [`cam_stream_pump`] returned.

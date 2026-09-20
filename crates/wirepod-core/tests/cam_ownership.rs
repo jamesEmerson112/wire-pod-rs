@@ -585,11 +585,10 @@ async fn a_replacement_that_queues_behind_a_disable_keeps_the_camera_on() {
 }
 
 /// The enable is bounded, standing in for the `context.WithTimeout` Go wraps
-/// the RPC in (`server.go:671`), and the expiry reads exactly like grpc-go's.
-/// A start that fails hands the feed back through the guard rather than leaving
-/// it claimed with nothing to release it.
+/// the RPC in. Go discards what the call answers and opens the feed anyway, and
+/// the real robot does let it time out, so an expiry must not stop the start.
 #[tokio::test]
-async fn an_enable_that_never_answers_maps_to_the_go_deadline_error() {
+async fn an_enable_that_never_answers_still_starts_the_stream_as_go_does() {
     let session = session();
     let camera = RecordingCamera::new();
     let control = control(&camera);
@@ -599,30 +598,17 @@ async fn an_enable_that_never_answers_maps_to_the_go_deadline_error() {
     };
     let _gate = camera.arm_enable_gate();
 
-    let err = within(start_cam_stream(
+    let guard = within(start_cam_stream(
         Arc::clone(&session),
         control,
         &timings,
         CancellationToken::new(),
     ))
     .await
-    .expect_err("a parked enable did not time out");
+    .expect("Go opens the feed whatever the enable answered");
 
-    assert_eq!(
-        err.to_string(),
-        "rpc error: code = DeadlineExceeded desc = context deadline exceeded"
-    );
-    assert_eq!(
-        session.cam.current(),
-        None,
-        "a failed start left the feed claimed with nobody to release it"
-    );
-    assert!(!session.cam.is_streaming());
-    assert_eq!(
-        camera.calls(),
-        vec![false],
-        "the failed start did not hand the feed back the way a finish would"
-    );
+    assert!(session.cam.is_streaming());
+    drop(guard);
 }
 
 /// The browser aborting during the settle drops the whole handler future, and
