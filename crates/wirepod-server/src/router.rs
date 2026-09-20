@@ -20,7 +20,7 @@ use std::borrow::Cow;
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::Request;
+use axum::extract::{Request, State};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::routing::any;
@@ -203,9 +203,9 @@ async fn moved_to_api(req: Request) -> Response {
 /// serving itself is P4 work; until then every path that would have hit a file
 /// gets the same 404 a missing file gets, which is the one thing about this
 /// fallback that is a stub rather than a contract.
-async fn fallback(req: Request) -> Response {
+async fn fallback(state: State<Arc<AppState>>, req: Request) -> Response {
     if req.uri().path() == OK_COLON_80 {
-        return conncheck::handle(req).await;
+        return conncheck::handle(state, req).await;
     }
     reply::file_not_found()
 }
