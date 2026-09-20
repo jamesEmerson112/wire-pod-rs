@@ -19,8 +19,13 @@ wirepod-vector = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
+tonic = { workspace = true }
+regex = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
 wirepod-core = { workspace = true, features = ["test-util"] }
 wirepod-vector = { workspace = true, features = ["test-util"] }
+bytes = { workspace = true }
+http-body-util = { workspace = true }
+prost = { workspace = true }

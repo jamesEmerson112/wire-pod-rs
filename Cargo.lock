@@ -4485,12 +4485,17 @@ dependencies = [
 name = "wirepod-ttr"
 version = "0.1.0"
 dependencies = [
+ "bytes",
+ "http-body-util",
+ "prost 0.13.5",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
  "tokio",
  "tokio-stream",
  "tokio-util",
+ "tonic",
  "tracing",
  "wirepod-audio",
  "wirepod-core",
