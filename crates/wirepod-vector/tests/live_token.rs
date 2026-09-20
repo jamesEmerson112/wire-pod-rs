@@ -97,7 +97,7 @@
 //! chipper is that it answered TLS on `127.0.0.1:443`.
 //!
 //! That is acceptable here for two reasons. Binding 443 on this machine needs
-//! the Go server stopped first, which is the whole of `RUNBOOK-S1.md`, so a
+//! the Go server stopped first, which is the whole of `RUNBOOK-SERVE.md`, so a
 //! second listener on that port is not something that can quietly be there.
 //! And a wrong peer cannot make this test pass by accident: it would have to
 //! answer `tokenpb.Token/RefreshToken` with a bundle whose claim keys, key

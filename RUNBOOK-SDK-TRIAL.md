@@ -35,7 +35,7 @@ It does not prove:
   `stop_cam_stream` are in the diff, but they are the two cheap routes either
   side of a feed that is not there.
 - TLS, port 80, mDNS, the jdocs pinger, the tonic services, or the restart
-  supervisor. All of those are P1, and `RUNBOOK-S1.md` is the procedure for the
+  supervisor. All of those are P1, and `RUNBOOK-SERVE.md` is the procedure for the
   TLS and mDNS half.
 
 ## Prerequisites

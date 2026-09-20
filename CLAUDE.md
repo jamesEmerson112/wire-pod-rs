@@ -49,6 +49,15 @@ cargo xtask sync-assets --from ../wire-pod --check   # report drift, exit 1 if a
 cargo xtask sync-assets --from ../wire-pod           # copy drifted files, rewrite assets/MANIFEST.sha256
 ```
 
+Running the server against the real robot, and running only its web UI beside the Go server, are both in `RUNBOOK-SERVE.md`:
+
+```bash
+cargo run -p wirepod-app -- serve --data-dir <copy> --asset-dir assets --sdk-ini-dir <scratch>
+cargo run -p wirepod-app -- serve --web-only --bind 127.0.0.1 --web-port 18080 --http-port 18082 --data-dir <copy> --asset-dir assets --sdk-ini-dir <scratch>
+```
+
+While that server runs its binary is locked, so build and test with `CARGO_TARGET_DIR=E:/GitHub/wire-pod-rs-target-gate`.
+
 The SDK-app trial serves the router on `127.0.0.1:18080` beside the production Go server; `RUNBOOK-SDK-TRIAL.md` is the procedure:
 
 ```bash
