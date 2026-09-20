@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
-use http::{Method, StatusCode, header};
+use http::{Method, StatusCode};
 use tokio_util::sync::CancellationToken;
 use wirepod_core::test_support::{FakeConnFactory, FakeRobotConn, RobotCall};
 use wirepod_core::{
@@ -526,9 +526,7 @@ async fn a_request_whose_preamble_fails_touches_nothing() {
 /// Go's `camStreamHandler` runs its own preamble and throws the robot index
 /// away (`server.go:710`), so `/cam-stream` never writes
 /// `robots[robotIndex].ConnTimer = 0`, and a page showing only the camera is
-/// dropped after 300 seconds while frames are still flowing. The route is P4
-/// work; this pins the rule while it is still absent, so that whatever lands
-/// keeps it deliberately rather than by accident.
+/// dropped after 300 seconds while frames are still flowing.
 #[tokio::test]
 async fn the_cam_stream_route_is_outside_the_prefix_and_touches_nothing() {
     // The path is not under `/api-sdk/`, so nothing the shared preamble does
@@ -541,16 +539,19 @@ async fn the_cam_stream_route_is_outside_the_prefix_and_touches_nothing() {
     let entry = fixture.connect().await;
     fixture.clock.advance_secs(11);
 
-    // Today it reaches the router fallback, which is the file server's 404.
+    // The fixture robot has no camera feed queued, so the handler answers the
+    // feed's own error at 200 with the content type still sniffed, which is the
+    // one exit path that writes a body rather than a stream.
     let reply = fixture
         .get(&format!("{CAM_STREAM_PATH}?serial={SERIAL}"))
         .await;
-    assert_eq!(reply.status, StatusCode::NOT_FOUND);
-    assert_eq!(reply.body, literals::FILE_NOT_FOUND);
-    assert_eq!(
-        reply.header(header::X_CONTENT_TYPE_OPTIONS),
-        Some(literals::NOSNIFF)
+    assert_eq!(reply.status, StatusCode::OK);
+    assert!(
+        reply.body.starts_with(literals::ERROR_PREFIX),
+        "{}",
+        reply.body
     );
+    assert_eq!(reply.content_type(), Some(literals::CONTENT_TYPE_TEXT));
 
     assert_eq!(
         entry.last_touch(),
