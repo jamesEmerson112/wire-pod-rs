@@ -2,7 +2,7 @@
 //! serve the HTTP surface.
 //!
 //! Go's `main` hands `StartFromProgramInit` the speech engine's three functions.
-//! The engine is M2 work, so the chipper service starts here with no voice
+//! The engine is M3 work, so the chipper service starts here with no voice
 //! processor and answers the three streaming RPCs as unimplemented.
 
 use std::fmt;
@@ -92,7 +92,7 @@ async fn load_state(args: &ServeArgs) -> Result<Arc<AppState>, ServeError> {
 
 pub async fn run(args: ServeArgs) -> Result<(), ServeError> {
     install_logging();
-    // TODO(M4): logger.Init(), the log ring the web UI reads.
+    // TODO(M2): logger.Init(), the log ring the web UI reads.
     let state = load_state(&args).await?;
     wirepod_server::jdocspinger::init_jdocs_pinger(&state);
 
@@ -124,7 +124,7 @@ pub async fn run(args: ServeArgs) -> Result<(), ServeError> {
         )));
     }
 
-    // TODO(M2): wp.New(stt.Init, stt.STT, stt.Name) builds the voice processor
+    // TODO(M3): wp.New(stt.Init, stt.STT, stt.Name) builds the voice processor
     // these options carry.
     startserver::start_from_program_init(Arc::clone(&state), Server::new(Options::new())).await;
 

@@ -243,7 +243,7 @@ pub fn get_text(language: &str, key: &str) -> &'static str {
     }
 }
 
-// TODO(M2): ReloadVosk, which needs vars.LoadIntents and vars.SttInitFunc.
+// TODO(M3): ReloadVosk, which needs vars.LoadIntents and vars.SttInitFunc.
 
 #[cfg(test)]
 mod tests {

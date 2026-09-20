@@ -21,7 +21,7 @@ impl Options {
         Self::default()
     }
 
-    // TODO(M2): WithLogger(log.Logger), a hugh logger `Server` never reads.
+    // TODO(M3): WithLogger(log.Logger), a hugh logger `Server` never reads.
 
     /// WithIntentProcessor sets the intent processor
     pub fn with_intent_processor(mut self, s: Arc<dyn IntentProcessor>) -> Self {

@@ -151,10 +151,12 @@ async fn serve_conn(acceptor: TlsAcceptor, tcp: TcpStream, peer: SocketAddr, rou
             return;
         }
     };
+    tracing::debug!("tls connection from {peer}");
     let service =
         hyper::service::service_fn(move |mut req: http::Request<hyper::body::Incoming>| {
             // Go reads the peer with `peer.FromContext`; here the accept loop is
             // the only place that knows it, so it goes into the extensions.
+            tracing::debug!("{peer} {} {}", req.method(), req.uri().path());
             req.extensions_mut().insert(PeerAddr(peer));
             let router = router.clone();
             async move { router.oneshot(req).await }
@@ -168,11 +170,9 @@ async fn serve_conn(acceptor: TlsAcceptor, tcp: TcpStream, peer: SocketAddr, rou
 pub fn begin_wirepod_specific() -> io::Result<()> {
     // TODO(M2): logger.Init()
     // TODO(M2): vars.Init()
-    // TODO(M2): wp.New(sttInitFunc, sttHandlerFunc, voiceProcessorName)
-    // TODO(M2): wpweb.SttInitFunc = sttInitFunc
+    // TODO(M3): wp.New(sttInitFunc, sttHandlerFunc, voiceProcessorName)
+    // TODO(M3): wpweb.SttInitFunc = sttInitFunc
     // TODO(M2): go sdkWeb.BeginServer()
-    // TODO(M2): http.HandleFunc("/api-chipper/", ChipperHTTPApi), whose handler
-    // is `initweb::chipper_http_api` and whose mount `router.rs` owns.
     Ok(())
 }
 

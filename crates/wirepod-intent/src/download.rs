@@ -73,7 +73,7 @@ pub async fn download_vosk_model(state: &AppState, status: &DownloadStatus, lang
         destpath.join("model"),
     );
     let _ = std::fs::remove_file(&filep);
-    // TODO(M2): vars.DownloadedVoskModels = append(vars.DownloadedVoskModels, language)
+    // TODO(M3): vars.DownloadedVoskModels = append(vars.DownloadedVoskModels, language)
     status.set("Reloading voice processor");
     state.update_config(|config| {
         config.stt.language = language.to_string();
@@ -82,7 +82,7 @@ pub async fn download_vosk_model(state: &AppState, status: &DownloadStatus, lang
     if let Err(err) = write_config_to_disk(&state.config(), state.config_gate()).await {
         tracing::info!(comp = "", "{err}");
     }
-    // TODO(M2): ReloadVosk()
+    // TODO(M3): ReloadVosk()
     tracing::info!(comp = "", "Reloaded voice processor successfully");
     status.set("success");
 }
