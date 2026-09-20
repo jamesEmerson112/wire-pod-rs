@@ -3,3 +3,19 @@ name = "wirepod-setup"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[dependencies]
+rand = { workspace = true }
+rcgen = { workspace = true }
+rsa = { workspace = true }
+serde = { workspace = true }
+# `oid` is what lets `rsa` name SHA-256 in a PKCS#1 v1.5 signature.
+sha2 = { workspace = true, features = ["oid"] }
+thiserror = { workspace = true }
+time = { workspace = true }
+tracing = { workspace = true }
+wirepod-core = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+x509-parser = { workspace = true }

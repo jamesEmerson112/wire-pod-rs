@@ -41,6 +41,16 @@ opus = "0.3"
 prost = "0.13"
 prost-types = "0.13"
 protox = "0.7"
+# The RNG `rsa` takes for key generation; `rsa` 0.9 speaks rand_core 0.6, which
+# is what `rand` 0.8 provides.
+rand = "0.8"
+# The X.509 writer for the pair `CreateCertCombo` generates. Its own crypto is
+# switched off: `ring` will not sign with Go's 1028-bit key, so the signing key
+# is the `rsa` crate's, handed to rcgen through its `SigningKey` seam.
+rcgen = { version = "0.14", default-features = false, features = ["pem"] }
+# 1028-bit RSA key generation and PKCS#1 signing, which no TLS-oriented crate
+# offers at that size.
+rsa = "0.9"
 # The feature set spike S1 resolved with: the ring provider only, no aws-lc-rs,
 # and `tls12` because Vector's gateway is old enough to need it.
 regex = "1"
@@ -53,6 +63,9 @@ sha2 = "0.10"
 # The constant time compare Go does with `subtle.ConstantTimeCompare`.
 subtle = "2"
 thiserror = "2"
+# `OffsetDateTime`, which is how rcgen states a validity window, and the
+# calendar arithmetic Go's `Time.AddDate` does.
+time = "0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging", "tls12"] }
 tokio-stream = "0.1"
@@ -73,6 +86,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 vosk = "0.3"
 walkdir = "2"
 webrtc-vad = "0.4"
+# Reading a generated certificate back, in the cert tests only.
+x509-parser = "0.18"
 # `SystemTimeToTzSpecificLocalTime` for the local UTC offset at a given instant,
 # which is what Go resolves through the timezone database. Features are cfg
 # gates over generated bindings inside the one crate and pull no package.
@@ -85,4 +100,5 @@ wirepod-stt = { path = "crates/wirepod-stt" }
 wirepod-ttr = { path = "crates/wirepod-ttr" }
 wirepod-proto = { path = "crates/wirepod-proto" }
 wirepod-server = { path = "crates/wirepod-server" }
+wirepod-setup = { path = "crates/wirepod-setup" }
 wirepod-vector = { path = "crates/wirepod-vector" }
