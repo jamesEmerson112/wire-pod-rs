@@ -10,7 +10,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 wirepod-core = { workspace = true }
-wirepod-intent = { path = "../wirepod-intent" }
+wirepod-audio = { workspace = true }
+wirepod-intent = { workspace = true }
+wirepod-proto = { workspace = true }
+wirepod-server = { workspace = true }
+wirepod-stt = { workspace = true }
+wirepod-vector = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

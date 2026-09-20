@@ -3,3 +3,19 @@ name = "wirepod-stt"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[features]
+default = []
+# The engine links against libvosk, whose import library is not in this
+# repository, so it is off unless asked for. `build.rs` reads VOSK_LIB_DIR.
+stt-vosk = ["dep:vosk"]
+
+[dependencies]
+async-trait.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+vosk = { workspace = true, optional = true }
+wirepod-audio.workspace = true
+wirepod-core.workspace = true
+wirepod-intent.workspace = true

@@ -32,6 +32,8 @@ image = { version = "0.25", default-features = false, features = ["jpeg"] }
 # applies. Unix only.
 libc = "0.2"
 mdns-sd = "0.11"
+ogg = "0.9"
+opus = "0.3"
 prost = "0.13"
 prost-types = "0.13"
 protox = "0.7"
@@ -64,13 +66,19 @@ tracing = "0.1"
 # feature set already resolved in `Cargo.lock`, where `extism` pulls the same
 # crate in, so declaring it here activates no package the lock does not carry.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+vosk = "0.3"
 walkdir = "2"
+webrtc-vad = "0.4"
 # `SystemTimeToTzSpecificLocalTime` for the local UTC offset at a given instant,
 # which is what Go resolves through the timezone database. Features are cfg
 # gates over generated bindings inside the one crate and pull no package.
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Time"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
+wirepod-audio = { path = "crates/wirepod-audio" }
 wirepod-core = { path = "crates/wirepod-core" }
+wirepod-intent = { path = "crates/wirepod-intent" }
+wirepod-stt = { path = "crates/wirepod-stt" }
+wirepod-ttr = { path = "crates/wirepod-ttr" }
 wirepod-proto = { path = "crates/wirepod-proto" }
 wirepod-server = { path = "crates/wirepod-server" }
 wirepod-vector = { path = "crates/wirepod-vector" }

@@ -4363,6 +4363,14 @@ dependencies = [
 [[package]]
 name = "wirepod-audio"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "ogg",
+ "opus",
+ "tracing",
+ "webrtc-vad",
+ "wirepod-core",
+]
 
 [[package]]
 name = "wirepod-core"
@@ -4389,11 +4397,15 @@ dependencies = [
 name = "wirepod-intent"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "regex",
  "reqwest",
+ "serde",
+ "serde_json",
  "tokio",
  "tracing",
  "wirepod-core",
+ "wirepod-proto",
  "zip",
 ]
 
@@ -4458,6 +4470,16 @@ version = "0.1.0"
 [[package]]
 name = "wirepod-stt"
 version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "serde",
+ "serde_json",
+ "tracing",
+ "vosk",
+ "wirepod-audio",
+ "wirepod-core",
+ "wirepod-intent",
+]
 
 [[package]]
 name = "wirepod-ttr"
@@ -4468,8 +4490,13 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "wirepod-audio",
  "wirepod-core",
  "wirepod-intent",
+ "wirepod-proto",
+ "wirepod-server",
+ "wirepod-stt",
+ "wirepod-vector",
 ]
 
 [[package]]

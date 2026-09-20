@@ -3,3 +3,11 @@ name = "wirepod-audio"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+ogg.workspace = true
+opus.workspace = true
+tracing.workspace = true
+webrtc-vad.workspace = true
+wirepod-core.workspace = true
