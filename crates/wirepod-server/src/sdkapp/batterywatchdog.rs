@@ -346,7 +346,7 @@ mod tests {
     use super::*;
     use std::net::SocketAddr;
 
-    use wirepod_core::{BotInfo, Clock, RobotConnFactory};
+    use wirepod_core::{BotInfo, RobotConnFactory};
     use wirepod_vector::test_support::{FakeRobotHandle, spawn_fake_robot};
     use wirepod_vector::{TonicConnFactory, plaintext_builder};
 

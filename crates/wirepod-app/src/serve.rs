@@ -12,9 +12,13 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::prelude::*;
+use wirepod_core::logger::{LogLayer, LogRing};
 use wirepod_core::paths::{AssetDir, DataDir, sdk_ini_dir};
+use wirepod_core::wallclock::{SystemWallClock, WallClock};
 use wirepod_core::{
-    AppState, Env, JdocsStore, Paths, SdkIniStore, SessionCertStore, read_bot_info, read_config,
+    AppState, Env, JdocsStore, Paths, SdkIniStore, SessionCertStore, WallLogClock, read_bot_info,
+    read_config,
 };
 use wirepod_server::chipper::{Options, Server};
 use wirepod_server::{CONN_CHECK_PORT, DEFAULT_WEB_PORT, startserver};
@@ -48,7 +52,11 @@ impl fmt::Display for ServeError {
 impl std::error::Error for ServeError {}
 
 /// The part of Go's `vars.Init` that reads the state files.
-async fn load_state(args: &ServeArgs) -> Result<Arc<AppState>, ServeError> {
+async fn load_state(
+    args: &ServeArgs,
+    logs: Arc<LogRing>,
+    wall: Arc<dyn WallClock>,
+) -> Result<Arc<AppState>, ServeError> {
     let data = match (&args.data_dir, args.packaged) {
         (Some(dir), _) => DataDir::rooted(dir),
         (None, true) => DataDir::packaged(&PathBuf::from(
@@ -86,14 +94,19 @@ async fn load_state(args: &ServeArgs) -> Result<Arc<AppState>, ServeError> {
             .jdocs(jdocs)
             .session_certs(session_certs)
             .sdk_ini(sdk_ini)
+            .logs(logs)
+            .wall(wall)
             .build(),
     )
 }
 
 pub async fn run(args: ServeArgs) -> Result<(), ServeError> {
-    install_logging();
-    // TODO(M2): logger.Init(), the log ring the web UI reads.
-    let state = load_state(&args).await?;
+    // Go's `logger.Init`: the ring the web UI's log page reads, fed by every
+    // `tracing` event alongside the console.
+    let wall: Arc<dyn WallClock> = Arc::new(SystemWallClock::new());
+    let logs = Arc::new(LogRing::new(Arc::new(WallLogClock::new(Arc::clone(&wall)))));
+    install_logging(Arc::clone(&logs));
+    let state = load_state(&args, logs, wall).await?;
     wirepod_server::jdocspinger::init_jdocs_pinger(&state);
 
     let cancel = CancellationToken::new();
@@ -104,6 +117,16 @@ pub async fn run(args: ServeArgs) -> Result<(), ServeError> {
         }
         stopper.cancel();
     });
+
+    // Go's `BeginServer` starts both of these beside the HTTP surface.
+    // Beside the Go server its own watchdog is already sending Vector home.
+    if !args.web_only {
+        wirepod_server::sdkapp::batterywatchdog::start(Arc::clone(&state), cancel.clone());
+    }
+    {
+        let (state, cancel) = (Arc::clone(&state), cancel.clone());
+        tokio::spawn(async move { state.registry().run_conn_timer(cancel).await });
+    }
 
     // Go serves one mux on the web port and on port 80.
     let router = wirepod_server::build_router(Arc::clone(&state));
@@ -143,10 +166,14 @@ pub async fn run(args: ServeArgs) -> Result<(), ServeError> {
     Ok(())
 }
 
-fn install_logging() {
+fn install_logging(logs: Arc<LogRing>) {
     let filter = match std::env::var(FILTER_ENV) {
         Ok(value) => EnvFilter::new(value),
         Err(_) => EnvFilter::new(DEFAULT_FILTER),
     };
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer())
+        .with(LogLayer::new(logs))
+        .init();
 }
