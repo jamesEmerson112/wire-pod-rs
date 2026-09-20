@@ -15,6 +15,7 @@ wirepod-intent = { workspace = true }
 wirepod-proto = { workspace = true }
 wirepod-server = { workspace = true }
 wirepod-stt = { workspace = true }
+wirepod-llm = { path = "../wirepod-llm" }
 wirepod-vector = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }

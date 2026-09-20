@@ -3,3 +3,13 @@ name = "wirepod-llm"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+axum.workspace = true
+tokio = { workspace = true, features = ["io-util"] }

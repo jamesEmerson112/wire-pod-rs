@@ -4414,6 +4414,14 @@ dependencies = [
 [[package]]
 name = "wirepod-llm"
 version = "0.1.0"
+dependencies = [
+ "axum",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "wirepod-plugin-api"
@@ -4502,6 +4510,7 @@ dependencies = [
  "wirepod-audio",
  "wirepod-core",
  "wirepod-intent",
+ "wirepod-llm",
  "wirepod-proto",
  "wirepod-server",
  "wirepod-stt",
