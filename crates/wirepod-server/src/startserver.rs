@@ -19,9 +19,13 @@ use tonic::service::Routes;
 use tower::ServiceExt;
 use wirepod_core::AppState;
 use wirepod_proto::chippergrpc2::chipper_grpc_server::ChipperGrpcServer;
+use wirepod_proto::jdocspb::jdocs_server::JdocsServer;
+use wirepod_proto::tokenpb::token_server::TokenServer;
 
 use crate::chipper::Server;
+use crate::jdocs::server::new_jdocs_server;
 use crate::peer::PeerAddr;
+use crate::token::new_token_server;
 use crate::{literals, mdns, reply};
 
 /// Go's second listener, for 2.0.1 compatibility.
@@ -41,6 +45,9 @@ const NOT_SETUP: &str = concat!(
 /// Go's `serverOne`, `serverTwo`, `listenerOne`, `listenerTwo` and
 /// `chipperServing` globals, which are one running server here.
 static SERVING: Mutex<Option<Serving>> = Mutex::new(None);
+
+/// The service `RestartServer` starts again, which Go rebuilds from globals.
+static CHIPPER: Mutex<Option<Server>> = Mutex::new(None);
 
 struct Serving {
     cancel: CancellationToken,
@@ -65,16 +72,16 @@ async fn fallback(req: Request) -> Response {
 }
 
 /// Go's `grpcServe`.
-fn grpc_serve(chipper: Server) -> Router {
-    let routes = Routes::new(ChipperGrpcServer::new(chipper));
-    // TODO(M2): jdocspb.RegisterJdocsServer and tokenpb.RegisterTokenServer go
-    // here, as `routes.add_service(JdocsServer::new(..)).add_service(TokenServer::new(..))`.
-    routes.into_axum_router()
+fn grpc_serve(state: Arc<AppState>, chipper: Server) -> Router {
+    Routes::new(ChipperGrpcServer::new(chipper))
+        .add_service(JdocsServer::new(new_jdocs_server(Arc::clone(&state))))
+        .add_service(TokenServer::new(new_token_server(state)))
+        .into_axum_router()
 }
 
 /// The one router both listeners serve.
-pub fn build_router(chipper: Server) -> Router {
-    http_serve(grpc_serve(chipper))
+pub fn build_router(state: Arc<AppState>, chipper: Server) -> Router {
+    http_serve(grpc_serve(state, chipper))
 }
 
 /// The key pair Go hands `tls.Listen`.
@@ -172,6 +179,7 @@ pub fn begin_wirepod_specific() -> io::Result<()> {
 /// Go's android and ios branches are dropped throughout: this port builds for
 /// Windows and Linux.
 pub async fn start_from_program_init(state: Arc<AppState>, chipper: Server) {
+    *CHIPPER.lock().unwrap_or_else(|err| err.into_inner()) = Some(chipper.clone());
     let config = state.config();
     if begin_wirepod_specific().is_err() {
         tracing::info!("{NOT_SETUP}");
@@ -192,9 +200,18 @@ pub async fn start_from_program_init(state: Arc<AppState>, chipper: Server) {
     // TODO(M2): wpweb.StartWebServer()
 }
 
-pub async fn restart_server(state: &Arc<AppState>, chipper: Server) -> io::Result<()> {
+pub async fn restart_server(state: &Arc<AppState>) -> io::Result<()> {
     stop_server().await;
-    start_chipper(state, chipper).await
+    let chipper = CHIPPER
+        .lock()
+        .unwrap_or_else(|err| err.into_inner())
+        .clone();
+    match chipper {
+        Some(chipper) => start_chipper(state, chipper).await,
+        None => Err(io::Error::other(
+            "the chipper service was never initialised",
+        )),
+    }
 }
 
 pub async fn stop_server() {
@@ -241,7 +258,7 @@ pub async fn start_chipper(state: &Arc<AppState>, chipper: Server) -> io::Result
     let task = tokio::spawn(serve_listeners(
         listeners,
         tls,
-        build_router(chipper),
+        build_router(Arc::clone(state), chipper),
         cancel.clone(),
     ));
     *SERVING.lock().unwrap_or_else(|err| err.into_inner()) = Some(Serving { cancel, task });

@@ -27,7 +27,7 @@ use axum::routing::any;
 use http::Uri;
 use wirepod_core::AppState;
 
-use crate::{api, conncheck, mux, reply, sdkapp};
+use crate::{api, conncheck, initweb, mux, reply, sdkapp};
 
 /// The port `BeginServer` serves the mux from, for the robot's conn check
 /// (`server.go:824`).
@@ -111,6 +111,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route(api::PREFIX, any(api::handle))
         .route("/api/*rest", any(api::handle))
         .route("/api", any(moved_to_api))
+        .route("/api-chipper/", any(initweb::chipper_http_api))
+        .route("/api-chipper/*rest", any(initweb::chipper_http_api))
         .route(OK, any(conncheck::handle))
         .fallback(fallback)
         .with_state(state);

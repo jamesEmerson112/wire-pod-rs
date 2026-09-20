@@ -16,8 +16,11 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
+use wirepod_core::test_support::FakeConnFactory;
+use wirepod_core::{AppState, RobotConnFactory};
 use wirepod_server::chipper::{Options, Server};
 use wirepod_server::startserver::{build_router, load_tls, serve_listeners};
+use wirepod_server::test_support::unreachable_error;
 
 const CERT: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/epod/ep.crt");
 const KEY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/epod/ep.key");
@@ -25,6 +28,13 @@ const KEY: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/epod/ep.key
 /// A real-clock bound on the waits. Nothing here sleeps, so it only fires on a
 /// regression.
 const CEILING: Duration = Duration::from_secs(5);
+
+/// No test here reaches a store, so the default paths are never touched.
+fn state() -> Arc<AppState> {
+    let factory: Arc<dyn RobotConnFactory> =
+        Arc::new(FakeConnFactory::failing(unreachable_error()));
+    AppState::builder(factory).build()
+}
 
 async fn body_of(router: axum::Router, path: &str) -> (StatusCode, String) {
     let request = Request::builder()
@@ -44,7 +54,7 @@ async fn body_of(router: axum::Router, path: &str) -> (StatusCode, String) {
 
 #[tokio::test]
 async fn both_conn_check_paths_answer_ok_and_anything_else_is_a_404() {
-    let router = build_router(Server::new(Options::new()));
+    let router = build_router(state(), Server::new(Options::new()));
 
     assert_eq!(
         body_of(router.clone(), "/ok").await,
@@ -76,7 +86,7 @@ async fn a_tls_request_reaches_the_router_and_a_cancel_frees_the_port() {
     let serving = tokio::spawn(serve_listeners(
         vec![listener],
         tls,
-        build_router(Server::new(Options::new())),
+        build_router(state(), Server::new(Options::new())),
         cancel.clone(),
     ));
 

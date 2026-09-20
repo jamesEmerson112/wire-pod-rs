@@ -11,6 +11,7 @@ use crate::chipper::{connectioncheck, intent, intent_graph, knowledgegraph, text
 use crate::vtt::{IntentGraphProcessor, IntentProcessor, KgProcessor, ResponseStream};
 
 /// Server defines the service used.
+#[derive(Clone)]
 pub struct Server {
     pub(crate) intent: Option<Arc<dyn IntentProcessor>>,
     pub(crate) kg: Option<Arc<dyn KgProcessor>>,
