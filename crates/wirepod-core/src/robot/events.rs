@@ -66,7 +66,9 @@ pub async fn run_event_stream(
                     owner.write_stim(generation, StimSample::new(stim.value, stim.velocity));
                 }
             }
-            Ok(Some(EventItem::Other)) => {}
+            // The stim whitelist never asks for robot state, so a state item
+            // cannot arrive here; it is matched only to keep the arm total.
+            Ok(Some(EventItem::State(_) | EventItem::Other)) => {}
             Ok(None) => break EventLoopExit::StreamEnded,
             Err(err) => {
                 // Go's only visibility into teardown, at `server.go:652`.

@@ -308,13 +308,17 @@ pub struct StimEvent {
 
 /// One item off the robot's event stream.
 ///
-/// The whitelist asks for stimulation events only, but the robot is free to
-/// send anything, and Go handles that by reading a nil `StimulationInfo` whose
-/// text rendering contains no `"velocity"`. [`EventItem::Other`] is that case.
+/// Go's whitelist asks for stimulation events only, and it handles anything
+/// else by reading a nil `StimulationInfo` whose text rendering contains no
+/// `"velocity"`. [`EventItem::Other`] is that case. A second stream, which
+/// asks for `robot_state` alone, is the only source of [`EventItem::State`];
+/// the stim stream never receives one.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum EventItem {
     /// A stimulation event.
     Stim(StimEvent),
+    /// The robot's own account of what it is doing.
+    State(crate::robot::robotstate::RobotStateSample),
     /// Anything else, which the stim loop ignores.
     Other,
 }

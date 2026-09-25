@@ -7,7 +7,9 @@
 
 use async_trait::async_trait;
 use tonic::Streaming;
-use wirepod_core::{CameraFrame, ConnError, EventItem, EventReceiver, FrameStream, StimEvent};
+use wirepod_core::{
+    CameraFrame, ConnError, EventItem, EventReceiver, FrameStream, RobotStateSample, StimEvent,
+};
 use wirepod_proto::anki::vector::external_interface as pb;
 
 use crate::error::status_error;
@@ -26,14 +28,26 @@ impl TonicEventReceiver {
 
 /// The [`EventItem`] one `EventResponse` carries.
 ///
-/// Anything that is not a stimulation event becomes [`EventItem::Other`]. Go
-/// reaches the same place by calling `resp.Event.GetStimulationInfo()`, which
-/// answers a nil pointer for every other event type (`server.go:655-659`).
+/// Anything that is neither a stimulation nor a state event becomes
+/// [`EventItem::Other`]. Go reaches the same place by calling
+/// `resp.Event.GetStimulationInfo()`, which answers a nil pointer for every
+/// other event type (`server.go:655-659`); it never asks for state at all.
 fn classify(response: pb::EventResponse) -> EventItem {
     match response.event.and_then(|event| event.event_type) {
         Some(pb::event::EventType::StimulationInfo(info)) => EventItem::Stim(StimEvent {
             value: info.value,
             velocity: info.velocity,
+        }),
+        Some(pb::event::EventType::RobotState(state)) => EventItem::State(RobotStateSample {
+            status: state.status,
+            // The pose is a message, so prost makes it optional. A state event
+            // without one is a robot that has no frame to report in, which
+            // reads the same as the origin-zero default.
+            x_mm: state.pose.as_ref().map_or(0.0, |pose| pose.x),
+            y_mm: state.pose.as_ref().map_or(0.0, |pose| pose.y),
+            angle_rad: state.pose_angle_rad,
+            origin_id: state.pose.as_ref().map_or(0, |pose| pose.origin_id),
+            localized_to_object_id: state.localized_to_object_id,
         }),
         _ => EventItem::Other,
     }

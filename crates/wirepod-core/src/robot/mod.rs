@@ -6,6 +6,7 @@ pub mod conn;
 pub mod events;
 pub mod meter;
 pub mod registry;
+pub mod robotstate;
 pub mod session;
 
 pub use crate::robot::cam::{CamGuard, PumpExit, cam_stream_pump, start_cam_stream};
@@ -19,4 +20,5 @@ pub use crate::robot::events::{
 };
 pub use crate::robot::meter::{CamMeter, CamMeters};
 pub use crate::robot::registry::{GetRobotError, RobotEntry, RobotRegistry};
+pub use crate::robot::robotstate::{RobotStateSample, StateChange, StateTracker};
 pub use crate::robot::session::{CamOwner, EventOwner, SdkSession, StimSample};

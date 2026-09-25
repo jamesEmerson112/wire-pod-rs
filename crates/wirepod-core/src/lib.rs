@@ -66,8 +66,8 @@ pub use crate::robot::{
     CameraFrame, ConnError, ConnTarget, EVENT_CONNECTION_ID, EVENT_WHITELIST, EventItem,
     EventLoopExit, EventOwner, EventReceiver, FrameOutcome, FrameSink, FrameStream, GetRobotError,
     JdocKind, NamedJdoc, ProtocolResult, ProtocolVerdict, PumpExit, RobotConn, RobotConnFactory,
-    RobotEntry, RobotRegistry, SdkSession, StatusCode, StimEvent, StimSample, cam_stream_pump,
-    run_event_stream, start_cam_stream,
+    RobotEntry, RobotRegistry, RobotStateSample, SdkSession, StateChange, StateTracker, StatusCode,
+    StimEvent, StimSample, cam_stream_pump, run_event_stream, start_cam_stream,
 };
 pub use crate::state::{AppState, AppStateBuilder, Paths, WallLogClock};
 pub use crate::store::{
