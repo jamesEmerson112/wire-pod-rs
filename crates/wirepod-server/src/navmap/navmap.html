@@ -1,0 +1,808 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Vector nav map</title>
+<style>
+:root {
+  --bg: #0D1317; --panel: #161E23; --text: #E7EAEC; --muted: #5F7078; --line: #26323A;
+  --teal: #0FB6C2; --amber: #E8A322; --red: #D9503F;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--bg); color: var(--text); font: 14px/1.45 var(--sans); display: flex; flex-direction: column; }
+header { display: flex; align-items: center; gap: 8px 16px; flex-wrap: wrap; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+h1 { margin: 0; font-size: 16px; font-weight: 600; }
+#head-serial { font: 13px var(--mono); color: var(--muted); }
+#status { margin: 0; font-size: 13px; }
+#status::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 7px; border-radius: 50%; background: var(--teal); }
+#status.warn::before { background: var(--amber); }
+#status.err { color: var(--red); }
+#status.err::before { background: var(--red); }
+main { flex: 1; display: flex; min-height: 0; }
+#stage { position: relative; flex: 1; min-width: 0; }
+canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+canvas.dragging { cursor: grabbing; }
+#bars { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; flex-direction: column; align-items: flex-start; gap: 8px; pointer-events: none; }
+.bar { max-width: 640px; padding: 8px 12px; border-radius: 6px; font-size: 13px; box-shadow: 0 2px 12px rgba(0, 0, 0, 0.45); }
+.bar.err { background: var(--red); color: #fff; font-weight: 600; }
+.bar.warn { background: var(--amber); color: #1B1405; font-weight: 600; }
+.bar.note { background: var(--panel); color: var(--amber); border: 1px solid rgba(232, 163, 34, 0.45); }
+#overlay { position: absolute; inset: 0; display: grid; place-items: center; padding: 16px; }
+.card { max-width: 440px; padding: 20px 22px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; text-align: center; }
+.card h2 { margin: 0 0 8px; font-size: 16px; }
+.card p { margin: 6px 0 0; }
+#ov-status { font: 13px var(--mono); color: var(--muted); }
+.pick { display: block; width: 100%; margin-top: 8px; padding: 8px 12px; text-align: left; font: 13px var(--mono); color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+#tools { position: absolute; right: 12px; bottom: 12px; display: flex; align-items: center; gap: 10px; }
+.hint { font-size: 12px; color: var(--muted); }
+#fit { padding: 6px 14px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; cursor: pointer; }
+button:hover { border-color: var(--teal); }
+button:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+aside { width: 310px; flex: none; padding: 4px 16px 16px; overflow-y: auto; background: var(--panel); border-left: 1px solid var(--line); }
+aside h2 { margin: 16px 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0; }
+dt { color: var(--muted); }
+dd { margin: 0; font: 13px/1.45 var(--mono); overflow-wrap: anywhere; }
+dd.err { color: var(--red); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.chip { padding: 2px 8px; font: 12px var(--mono); border-radius: 999px; background: #22303A; }
+.chip.good { color: var(--teal); background: rgba(15, 182, 194, 0.14); }
+.chip.bad { color: var(--red); background: rgba(217, 80, 63, 0.16); }
+#legend { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
+#legend li { display: grid; grid-template-columns: 18px 16px 1fr auto; align-items: center; gap: 8px; }
+.sw { width: 18px; height: 18px; overflow: hidden; background: var(--bg); border: 1px solid #3A4952; border-radius: 3px; }
+.sw i { display: block; width: 100%; height: 100%; }
+.sw.none { border-style: dashed; }
+.num, .count { font: 12px var(--mono); color: var(--muted); }
+.count { text-align: right; }
+@media (max-width: 720px) {
+  html, body { height: auto; }
+  main { flex-direction: column; }
+  #stage { flex: none; height: min(70vh, 105vw); }
+  aside { width: auto; border-left: 0; border-top: 1px solid var(--line); }
+  .hint { display: none; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Vector nav map</h1>
+  <span id="head-serial"></span>
+  <p id="status" role="status" aria-live="polite">Connecting</p>
+</header>
+<main>
+  <div id="stage">
+    <canvas id="map" role="img" aria-label="Vector's nav map, drawn nose-up: screen-up is his +x, screen-left is his +y"></canvas>
+    <div id="bars">
+      <div id="error-bar" class="bar err" hidden></div>
+      <div id="banner" class="bar warn" role="status" hidden></div>
+      <div id="frame-note" class="bar note" hidden></div>
+    </div>
+    <div id="overlay" hidden>
+      <div class="card">
+        <h2 id="ov-title"></h2>
+        <p id="ov-text"></p>
+        <p id="ov-status"></p>
+        <div id="picker"></div>
+      </div>
+    </div>
+    <div id="tools">
+      <span class="hint">Scroll to zoom, drag to pan</span>
+      <button id="fit" type="button">Fit</button>
+    </div>
+  </div>
+  <aside>
+    <section>
+      <h2>Robot</h2>
+      <dl>
+        <dt>Serial</dt><dd id="f-serial">–</dd>
+        <dt>Status</dt><dd id="f-status">–</dd>
+        <dt>Localization</dt><dd id="f-loc">–</dd>
+        <dt>Pose</dt><dd id="f-pose">–</dd>
+        <dt>Pose frame</dt><dd id="f-frame">–</dd>
+      </dl>
+      <div id="flags" class="chips"></div>
+    </section>
+    <section>
+      <h2>Map</h2>
+      <dl>
+        <dt>Origin</dt><dd id="f-origin">–</dd>
+        <dt>Root</dt><dd id="f-root">–</dd>
+        <dt>Quads</dt><dd id="f-quads">–</dd>
+        <dt>Last map</dt><dd id="f-age">–</dd>
+      </dl>
+    </section>
+    <section>
+      <h2>Legend</h2>
+      <ul id="legend"></ul>
+    </section>
+  </aside>
+</main>
+<script>
+"use strict";
+(() => {
+  const CONTENT = ["unknown", "clear_of_obstacle", "clear_of_cliff", "obstacle_cube",
+    "obstacle_proximity", "obstacle_proximity_explored", "obstacle_unrecognized",
+    "cliff", "interesting_edge", "non_interesting_edge"];
+  const STATUS_TEXT = { starting: "Starting the map feed", streaming: "Streaming", waiting_for_map: "Waiting for a map" };
+  const FLAG_TONE = { picked_up: "bad", cliff_detected: "bad", on_charger: "good", charging: "good" };
+  const POLL_MS = 1000, MAX_BACKOFF_MS = 10000, FETCH_TIMEOUT_MS = 8000, BANNER_MS = 9000;
+  const MIN_SCALE = 0.02, MAX_SCALE = 40; // CSS pixels per millimetre
+  const BG = "#0D1317", TEXT = "#E7EAEC", TEAL = "#0FB6C2", AMBER = "#E8A322", NEUTRAL = "#2A363D";
+  const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+
+  const $ = (id) => document.getElementById(id);
+  const canvas = $("map"), ctx = canvas.getContext("2d"), statusEl = $("status");
+  const params = new URLSearchParams(location.search);
+  const demo = params.get("demo");
+  let serial = demo ? "demo" : (params.get("serial") || "");
+
+  const state = {
+    map: null, robot: null, status: "", serial: "", gotReply: false, picking: false,
+    groups: [], swatches: [], lastReceived: null, lastOrigin: null, rootKey: "", robotKey: "",
+    flagsKey: null, error: null, retryMs: 0,
+  };
+  const view = { cx: 0, cy: 0, s: 1, userMoved: false };
+  let cssW = 1, cssH = 1, dpr = 1;
+
+  class PollError extends Error {
+    constructor(message, detail = "") { super(message); this.detail = detail; }
+  }
+
+  const setText = (el, text) => { if (el.textContent !== text) el.textContent = text; };
+  const statusLabel = (s) => (Object.hasOwn(STATUS_TEXT, s) ? STATUS_TEXT[s] : s || "no status");
+  const mm = (v) => `${Math.round(v)} mm`;
+
+  // rgba is packed 0xRRGGBBAA. Values reach 2^32, so shift with >>> to stay unsigned.
+  function rgbaCss(c) {
+    const r = (c >>> 24) & 255, g = (c >>> 16) & 255, b = (c >>> 8) & 255, a = c & 255;
+    return `rgba(${r},${g},${b},${(a / 255).toFixed(3)})`;
+  }
+
+  // ---- data ----
+
+  async function getJson(url) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), FETCH_TIMEOUT_MS);
+    try {
+      let res;
+      try {
+        res = await fetch(url, { cache: "no-store", signal: ctl.signal });
+      } catch {
+        throw new PollError("Server unreachable");
+      }
+      if (!res.ok) {
+        const body = (await res.text().catch(() => "")).trim().slice(0, 160);
+        throw new PollError(`HTTP ${res.status}`, body.startsWith("<") ? res.statusText : body);
+      }
+      try {
+        return await res.json();
+      } catch {
+        throw new PollError("Bad reply from server", "The response was not JSON.");
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function resolveSerial() {
+    let info;
+    try {
+      info = await getJson("/api-sdk/get_sdk_info");
+    } catch (err) {
+      throw new PollError(`${err.message} while listing robots`, err.detail);
+    }
+    // Read esn and ip_address only. guid and global_guid are credentials: never shown,
+    // logged or kept, so the parsed reply is dropped when this function returns.
+    const robots = Array.isArray(info && info.robots) ? info.robots : [];
+    const bots = robots
+      .map((r) => ({ esn: String((r && r.esn) || ""), ip: String((r && r.ip_address) || "") }))
+      .filter((b) => b.esn);
+    if (bots.length === 0) throw new PollError("No robots", "The server lists no authenticated robots.");
+    if (bots.length === 1) {
+      useSerial(bots[0].esn);
+      return true;
+    }
+    showPicker(bots);
+    return false;
+  }
+
+  function useSerial(esn) {
+    serial = esn;
+    state.picking = false;
+    try { history.replaceState(null, "", `?serial=${encodeURIComponent(esn)}`); } catch { /* file: URLs may refuse */ }
+  }
+
+  function showPicker(bots) {
+    state.picking = true;
+    const box = $("picker");
+    box.replaceChildren(...bots.map((b) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "pick";
+      btn.textContent = b.ip ? `${b.esn} at ${b.ip}` : b.esn;
+      btn.addEventListener("click", () => { useSerial(b.esn); refreshChrome(); schedule(0); });
+      return btn;
+    }));
+    refreshChrome();
+  }
+
+  function fetchSnapshot() {
+    if (demo) return Promise.resolve().then(demoSnapshot);
+    return getJson(`/api-navmap/snapshot?serial=${encodeURIComponent(serial)}`);
+  }
+
+  // ---- polling: one request at a time, the next scheduled after the last settles ----
+
+  const poll = { timer: 0, busy: false, failures: 0 };
+
+  function schedule(ms) {
+    clearTimeout(poll.timer);
+    poll.timer = setTimeout(pollOnce, ms);
+  }
+
+  async function pollOnce() {
+    poll.timer = 0;
+    if (document.hidden || poll.busy || state.picking) return;
+    poll.busy = true;
+    let next = POLL_MS;
+    try {
+      if (serial || (await resolveSerial())) applySnapshot(await fetchSnapshot());
+      else next = -1;
+      poll.failures = 0;
+      setError(null, 0);
+    } catch (err) {
+      poll.failures += 1;
+      next = Math.min(MAX_BACKOFF_MS, POLL_MS * 2 ** poll.failures);
+      setError(err instanceof PollError ? err : new PollError("Page error", String(err)), next);
+    } finally {
+      poll.busy = false;
+    }
+    if (next >= 0 && !document.hidden) schedule(next);
+    updateStatusLine();
+  }
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      clearTimeout(poll.timer);
+      poll.timer = 0;
+    } else if (!poll.busy) {
+      schedule(0);
+    }
+    updateStatusLine();
+  });
+
+  function setError(err, retryMs) {
+    state.error = err;
+    state.retryMs = retryMs;
+    refreshChrome();
+  }
+
+  // ---- snapshot ----
+
+  function applySnapshot(snap) {
+    if (!snap || typeof snap !== "object") throw new PollError("Bad reply from server", "Expected a JSON object.");
+    state.gotReply = true;
+    state.status = typeof snap.status === "string" ? snap.status : "";
+    state.serial = String(snap.serial || serial);
+    applyMap(snap.map && snap.map.root ? snap.map : null);
+    applyRobot(snap.robot || null);
+    refreshChrome();
+  }
+
+  function applyMap(map) {
+    if (!map) {
+      if (state.map) {
+        state.map = null;
+        state.groups = [];
+        state.swatches = [];
+        updateLegend();
+        requestDraw();
+      }
+      return;
+    }
+    const originChanged = state.lastOrigin !== null && map.origin_id !== state.lastOrigin;
+    if (originChanged) {
+      showOriginBanner(state.lastOrigin, map.origin_id);
+      view.userMoved = false;
+    }
+    state.lastOrigin = map.origin_id;
+    const fresh = !state.map || originChanged || map.received_ms !== state.lastReceived;
+    state.map = map;
+    if (fresh) {
+      state.lastReceived = map.received_ms;
+      indexQuads(Array.isArray(map.quads) ? map.quads : []);
+      updateLegend();
+      requestDraw();
+    }
+    const rootKey = `${map.root.cx},${map.root.cy},${map.root.size_mm}`;
+    if (rootKey !== state.rootKey) {
+      state.rootKey = rootKey;
+      if (!view.userMoved) fitView();
+      requestDraw();
+    }
+  }
+
+  function applyRobot(robot) {
+    state.robot = robot;
+    const key = robot ? JSON.stringify(robot) : "";
+    if (key !== state.robotKey) {
+      state.robotKey = key;
+      requestDraw();
+    }
+  }
+
+  // Groups quads by colour for one fill per group, and finds each content type's most common colour.
+  function indexQuads(quads) {
+    const groups = new Map();
+    const tallies = CONTENT.map(() => new Map());
+    for (const q of quads) {
+      if (!Array.isArray(q) || q.length < 5 || !(q[2] > 0)) continue;
+      const [cx, cy, side, content, rgba] = q;
+      let g = groups.get(rgba);
+      if (!g) groups.set(rgba, (g = []));
+      g.push(cx, cy, side);
+      const t = tallies[content];
+      if (t) t.set(rgba, (t.get(rgba) || 0) + 1);
+    }
+    state.groups = [];
+    for (const [rgba, coords] of groups) {
+      if ((rgba & 255) > 0) state.groups.push({ css: rgbaCss(rgba), coords });
+    }
+    state.swatches = tallies.map((t) => {
+      let best = null, most = 0;
+      for (const [rgba, n] of t) if (n > most) { best = rgba; most = n; }
+      return best;
+    });
+  }
+
+  // A pick-up and put-down changes the origin twice; while the banner shows, changes accumulate.
+  let bannerTimer = 0, bannerChain = [];
+  function showOriginBanner(from, to) {
+    const b = $("banner");
+    bannerChain = b.hidden ? [from, to] : [...bannerChain, to];
+    const path = `${bannerChain[0]} to ${bannerChain.slice(1).join(", then to ")}`;
+    b.textContent = `Origin changed from ${path} — he lost his coordinate frame (usually picked up or put down), so the map was reset.`;
+    b.hidden = false;
+    clearTimeout(bannerTimer);
+    bannerTimer = setTimeout(() => { b.hidden = true; }, BANNER_MS);
+  }
+
+  // ---- page chrome ----
+
+  function refreshChrome() {
+    updatePanel();
+    updateBars();
+    updateOverlay();
+    updateStatusLine();
+  }
+
+  function updateStatusLine() {
+    let text, cls = "";
+    if (document.hidden) { text = "Paused while this tab is hidden"; cls = "warn"; }
+    else if (state.error) { text = `${state.error.message}, retrying in ${Math.round(state.retryMs / 1000)} s`; cls = "err"; }
+    else if (state.picking) { text = "Choose a robot"; cls = "warn"; }
+    else if (!state.gotReply) { text = "Connecting"; cls = "warn"; }
+    else {
+      text = statusLabel(state.status);
+      if (!Object.hasOwn(STATUS_TEXT, state.status)) cls = "err";
+      else if (state.status !== "streaming") cls = "warn";
+    }
+    setText(statusEl, text);
+    statusEl.className = cls;
+  }
+
+  function updateBars() {
+    const { error, map, robot } = state;
+    const eb = $("error-bar");
+    eb.hidden = !(error && map);
+    if (!eb.hidden) {
+      const detail = error.detail ? `: ${error.detail}` : "";
+      setText(eb, `${error.message}${detail}. Retrying in ${Math.round(state.retryMs / 1000)} s; showing the last map received.`);
+    }
+    const note = $("frame-note");
+    const mismatch = Boolean(map && robot && robot.origin_id !== map.origin_id);
+    note.hidden = !mismatch;
+    if (mismatch) setText(note, `Robot pose is in frame ${robot.origin_id}, map is in frame ${map.origin_id}, so he cannot be placed on this map.`);
+  }
+
+  function updateOverlay() {
+    const ov = $("overlay");
+    $("tools").hidden = !state.map;
+    ov.hidden = Boolean(state.map) && !state.picking;
+    if (ov.hidden) return;
+    $("picker").hidden = !state.picking;
+    let title, text, status = "";
+    if (state.picking) {
+      title = "Choose a robot";
+      text = "Several robots are authenticated with this server.";
+    } else if (state.error) {
+      title = state.error.message;
+      text = `${state.error.detail ? state.error.detail + ". " : ""}Retrying in ${Math.round(state.retryMs / 1000)} s; the page recovers by itself once the server answers.`;
+    } else {
+      title = "Waiting for the first map.";
+      text = "Vector only sends his map when it changes, so drive him a little.";
+      status = `Status: ${state.gotReply ? statusLabel(state.status) : "connecting"}`;
+    }
+    setText($("ov-title"), title);
+    setText($("ov-text"), text);
+    setText($("ov-status"), status);
+  }
+
+  function updatePanel() {
+    const { map, robot } = state;
+    const shownSerial = state.serial || serial;
+    setText($("head-serial"), shownSerial);
+    setText($("f-serial"), shownSerial || "–");
+    setText($("f-status"), state.gotReply ? state.status || "–" : "–");
+    $("f-status").classList.toggle("err", state.gotReply && !Object.hasOwn(STATUS_TEXT, state.status));
+    setText($("f-loc"), !robot ? "no pose yet"
+      : robot.localized_to ? `localized to object ${robot.localized_to}` : "odometry only (dead reckoning)");
+    setText($("f-pose"), robot
+      ? `x ${mm(robot.x)}, y ${mm(robot.y)}, heading ${Math.round(((robot.angle || 0) * 180) / Math.PI)}°` : "–");
+    setText($("f-frame"), robot ? `origin ${robot.origin_id}` : "–");
+    renderFlags(robot ? robot.flags : null);
+    setText($("f-origin"), map ? String(map.origin_id) : "–");
+    setText($("f-root"), map ? rootText(map.root) : "–");
+    setText($("f-quads"), map && Array.isArray(map.quads) ? map.quads.length.toLocaleString() : "–");
+    updateAge();
+  }
+
+  function rootText(root) {
+    const cell = root.size_mm / 2 ** root.depth;
+    return `${root.size_mm} mm at (${Math.round(root.cx)}, ${Math.round(root.cy)}), depth ${root.depth}, ${+cell.toFixed(1)} mm cells`;
+  }
+
+  function renderFlags(flags) {
+    const list = Array.isArray(flags) ? flags.map(String) : [];
+    const key = flags ? list.join() : null;
+    if (key === state.flagsKey) return;
+    state.flagsKey = key;
+    const chips = list.map((f) => {
+      const s = document.createElement("span");
+      s.className = `chip ${FLAG_TONE[f] || ""}`;
+      s.textContent = f;
+      return s;
+    });
+    if (flags && !list.length) {
+      const s = document.createElement("span");
+      s.className = "chip";
+      s.textContent = "no flags";
+      chips.push(s);
+    }
+    $("flags").replaceChildren(...chips);
+  }
+
+  function updateAge() {
+    const m = state.map;
+    if (!m || !Number.isFinite(m.received_ms)) return setText($("f-age"), "–");
+    const s = Math.max(0, (Date.now() - m.received_ms) / 1000);
+    setText($("f-age"), s < 2 ? "just now" : s < 90 ? `${Math.round(s)} s ago`
+      : s < 5400 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`);
+  }
+
+  function buildLegend() {
+    $("legend").replaceChildren(...CONTENT.map((name, i) => {
+      const li = document.createElement("li");
+      li.innerHTML = '<span class="sw"><i></i></span><span class="num"></span><span class="name"></span><span class="count"></span>';
+      li.querySelector(".num").textContent = String(i);
+      li.querySelector(".name").textContent = name;
+      return li;
+    }));
+  }
+
+  function updateLegend() {
+    const counts = (state.map && state.map.counts) || {};
+    [...$("legend").children].forEach((li, i) => {
+      const rgba = state.swatches[i];
+      const sw = li.querySelector(".sw");
+      sw.classList.toggle("none", rgba == null);
+      sw.firstChild.style.background = rgba == null ? NEUTRAL : rgbaCss(rgba);
+      const n = counts[CONTENT[i]];
+      setText(li.querySelector(".count"), state.map ? String(Number.isFinite(n) ? n : 0) : "–");
+    });
+  }
+
+  // ---- view and drawing ----
+
+  // Nose-up: screen-up is world +x and screen-left is world +y. The canvas y axis points
+  // down, so both world axes enter negated. Returns device pixels.
+  function worldToScreen(x, y) {
+    const k = view.s * dpr;
+    return [canvas.width / 2 - (y - view.cy) * k, canvas.height / 2 - (x - view.cx) * k];
+  }
+
+  // Inverse of worldToScreen, for pointer positions in CSS pixels.
+  function screenToWorld(sx, sy) {
+    return [view.cx - (sy - cssH / 2) / view.s, view.cy - (sx - cssW / 2) / view.s];
+  }
+
+  function fitView() {
+    view.userMoved = false;
+    const root = state.map && state.map.root;
+    if (!root || !(root.size_mm > 0)) return;
+    view.cx = root.cx;
+    view.cy = root.cy;
+    view.s = Math.min(MAX_SCALE, (Math.min(cssW, cssH) * 0.9) / root.size_mm);
+  }
+
+  let drawQueued = false;
+  function requestDraw() {
+    if (drawQueued) return;
+    drawQueued = true;
+    requestAnimationFrame(() => { drawQueued = false; draw(); });
+  }
+
+  function draw() {
+    const W = canvas.width, H = canvas.height, map = state.map, r = state.robot;
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, W, H);
+    if (!map) return;
+    drawQuads(W, H);
+    drawGrid(W, H);
+    drawRootOutline(map.root);
+    if (r && r.origin_id === map.origin_id && Number.isFinite(r.x) && Number.isFinite(r.y)) drawRobot(r);
+    drawOrigin(map.origin_id);
+    drawScaleBar(H);
+  }
+
+  function drawQuads(W, H) {
+    const k = view.s * dpr, [ox, oy] = worldToScreen(0, 0);
+    for (const g of state.groups) {
+      const q = g.coords;
+      ctx.fillStyle = g.css;
+      ctx.beginPath();
+      for (let i = 0; i < q.length; i += 3) {
+        const h = q[i + 2] / 2;
+        // Round each edge rather than each size, so neighbours share pixel edges without seams.
+        const left = Math.round(ox - (q[i + 1] + h) * k), right = Math.round(ox - (q[i + 1] - h) * k);
+        const top = Math.round(oy - (q[i] + h) * k), bottom = Math.round(oy - (q[i] - h) * k);
+        if (right <= 0 || bottom <= 0 || left >= W || top >= H) continue;
+        ctx.rect(left, top, Math.max(1, right - left), Math.max(1, bottom - top));
+      }
+      ctx.fill();
+    }
+  }
+
+  function drawGrid(W, H) {
+    const k = view.s * dpr, [ox, oy] = worldToScreen(0, 0);
+    const xMin = (oy - H) / k, xMax = oy / k, yMin = (ox - W) / k, yMax = ox / k;
+    ctx.lineWidth = 1;
+    for (const [step, colour] of [[100, "rgba(231,234,236,0.05)"], [500, "rgba(231,234,236,0.14)"]]) {
+      if (step * k < 6 * dpr) continue;
+      ctx.beginPath();
+      for (let i = Math.ceil(xMin / step); i <= Math.floor(xMax / step); i++) {
+        if (step === 100 && i % 5 === 0) continue;
+        const sy = Math.round(oy - i * step * k) + 0.5;
+        ctx.moveTo(0, sy);
+        ctx.lineTo(W, sy);
+      }
+      for (let i = Math.ceil(yMin / step); i <= Math.floor(yMax / step); i++) {
+        if (step === 100 && i % 5 === 0) continue;
+        const sx = Math.round(ox - i * step * k) + 0.5;
+        ctx.moveTo(sx, 0);
+        ctx.lineTo(sx, H);
+      }
+      ctx.strokeStyle = colour;
+      ctx.stroke();
+    }
+  }
+
+  function drawRootOutline(root) {
+    const h = root.size_mm / 2;
+    const [l, t] = worldToScreen(root.cx + h, root.cy + h);
+    const [r, b] = worldToScreen(root.cx - h, root.cy - h);
+    ctx.setLineDash([4 * dpr, 4 * dpr]);
+    ctx.strokeStyle = "rgba(95,112,120,0.8)";
+    ctx.lineWidth = dpr;
+    ctx.strokeRect(Math.round(l) + 0.5, Math.round(t) + 0.5, Math.round(r - l), Math.round(b - t));
+    ctx.setLineDash([]);
+  }
+
+  function drawOrigin(originId) {
+    const [x, y] = worldToScreen(0, 0), a = 8 * dpr;
+    ctx.strokeStyle = ctx.fillStyle = TEAL;
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(x - a, y); ctx.lineTo(x + a, y);
+    ctx.moveTo(x, y - a); ctx.lineTo(x, y + a);
+    ctx.stroke();
+    ctx.font = `${11 * dpr}px ${FONT}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    ctx.fillText("+x", x, y - a - 2 * dpr);
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    ctx.fillText("+y", x - a - 3 * dpr, y);
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(`origin ${originId}`, x + a + 3 * dpr, y + 3 * dpr);
+  }
+
+  function drawRobot(r) {
+    const c = Math.cos(r.angle || 0), s = Math.sin(r.angle || 0);
+    const len = Math.min(Math.max(90, 20 / view.s), 48 / view.s), half = len * 0.33; // 20 to 48 CSS px
+    // Corners in his own frame (+x nose, +y left), rotated by the heading into the map
+    // frame, then projected like any other world point.
+    const pts = [[0.6 * len, 0], [-0.4 * len, half], [-0.4 * len, -half]]
+      .map(([fx, fy]) => worldToScreen(r.x + fx * c - fy * s, r.y + fx * s + fy * c));
+    ctx.beginPath();
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    ctx.lineTo(pts[1][0], pts[1][1]);
+    ctx.lineTo(pts[2][0], pts[2][1]);
+    ctx.closePath();
+    ctx.fillStyle = AMBER;
+    ctx.fill();
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.strokeStyle = BG;
+    ctx.stroke();
+  }
+
+  function drawScaleBar(H) {
+    const target = 150 / view.s;
+    const p = 10 ** Math.floor(Math.log10(target));
+    const len = [5, 2, 1].map((m) => m * p).find((v) => v <= target);
+    const w = len * view.s * dpr, x = 16 * dpr, y = H - 16 * dpr;
+    ctx.fillStyle = "rgba(13,19,23,0.75)";
+    ctx.fillRect(x - 8 * dpr, y - 26 * dpr, w + 16 * dpr, 32 * dpr);
+    ctx.strokeStyle = ctx.fillStyle = TEXT;
+    ctx.lineWidth = 2 * dpr;
+    ctx.beginPath();
+    ctx.moveTo(x, y - 5 * dpr); ctx.lineTo(x, y); ctx.lineTo(x + w, y); ctx.lineTo(x + w, y - 5 * dpr);
+    ctx.stroke();
+    ctx.font = `${12 * dpr}px ${FONT}`;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "bottom";
+    ctx.fillText(len >= 1000 ? `${len / 1000} m` : `${len} mm`, x + 4 * dpr, y - 5 * dpr);
+  }
+
+  function resize() {
+    const rect = canvas.getBoundingClientRect();
+    dpr = window.devicePixelRatio || 1;
+    cssW = Math.max(1, rect.width);
+    cssH = Math.max(1, rect.height);
+    canvas.width = Math.round(cssW * dpr);
+    canvas.height = Math.round(cssH * dpr);
+    if (!view.userMoved) fitView();
+    draw();
+  }
+
+  canvas.addEventListener("wheel", (e) => {
+    if (!state.map) return;
+    e.preventDefault();
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? cssH : 1;
+    const rect = canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+    const [wx, wy] = screenToWorld(sx, sy);
+    view.s = Math.min(MAX_SCALE, Math.max(MIN_SCALE, view.s * Math.exp(-e.deltaY * unit * 0.0015)));
+    // Solve the transform for the centre that keeps (wx, wy) under the cursor.
+    view.cx = wx + (sy - cssH / 2) / view.s;
+    view.cy = wy + (sx - cssW / 2) / view.s;
+    view.userMoved = true;
+    requestDraw();
+  }, { passive: false });
+
+  let drag = null;
+  canvas.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || !state.map) return;
+    drag = { x: e.clientX, y: e.clientY };
+    canvas.setPointerCapture(e.pointerId);
+    canvas.classList.add("dragging");
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    view.cy += (e.clientX - drag.x) / view.s;
+    view.cx += (e.clientY - drag.y) / view.s;
+    drag = { x: e.clientX, y: e.clientY };
+    view.userMoved = true;
+    requestDraw();
+  });
+  const endDrag = () => { drag = null; canvas.classList.remove("dragging"); };
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
+  $("fit").addEventListener("click", () => { fitView(); requestDraw(); });
+
+  // ---- demo fixture: a hand-made reconstructed map shaped exactly like the server's reply ----
+
+  const demoStart = Date.now(), demoMaps = {};
+  let demoErrors = 0;
+  const UNKNOWN = 0x5050501F, CLEAR = 0x2FBF5A73;
+
+  const pack = (r, g, b, a) => ((r << 24) | (g << 16) | (b << 8) | a) >>> 0;
+  const noise = (x, y) => { const h = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453; return h - Math.floor(h); };
+
+  // Content and colour of the 8 mm cell centred at (x, y); conf is how firm the obstacles are.
+  function demoCell(x, y, conf) {
+    const ay = Math.abs(y), edge = 56 + 16 * noise(Math.floor(x / 16), y > 0 ? 1 : 2);
+    if (x > 320 && x < 368 && ay < 48) {
+      const n = noise(x, y);
+      if (n < 0.2) return [5, 0x2F7FD9C0];
+      const c = Math.min(1, conf * (0.5 + n));
+      return [4, pack(0, 255, Math.round(255 * (1 - c)), Math.round(60 + 195 * c))];
+    }
+    if (x > 144 && x < 192 && y > 128 && y < 176) return [3, 0xE0402AFF];
+    if (x > 0 && x < 256 && y > -112 && y < -96) return [7, x > 224 ? 0xE0B000FF : x > 192 ? 0xFF69B4FF : 0x000000FF];
+    if (x > 0 && x < 256 && y > -96 && y < -64) return [2, 0x1E7A4A99];
+    if ((x > -64 && x < 320 && ay < edge) || (x > 224 && x < 320 && y > 0 && y < 224)) return [1, CLEAR];
+    if (x > 64 && x < 208 && y > -176 && y < -160) return x < 160 ? [8, 0xFF00FFC0] : [9, 0x8A6FA0A0];
+    if (x > 272 && x < 304 && y > -96 && y < -64) return [6, 0xFF8C00D0];
+    return [0, UNKNOWN];
+  }
+
+  // Leaf quads as the robot's quadtree keeps them: a square splits only where its
+  // children differ, down to root.size_mm / 2^depth.
+  function buildQuads(root, cellAt) {
+    const quads = [], minSide = root.size_mm / 2 ** root.depth;
+    const visit = (cx, cy, side) => {
+      if (side <= minSide) return cellAt(cx, cy);
+      const q = side / 4, kids = [[cx + q, cy + q], [cx + q, cy - q], [cx - q, cy + q], [cx - q, cy - q]];
+      const vals = kids.map(([x, y]) => visit(x, y, side / 2));
+      if (vals.every((v) => v && v[0] === vals[0][0] && v[1] === vals[0][1])) return vals[0];
+      vals.forEach((v, i) => { if (v) quads.push([kids[i][0], kids[i][1], side / 2, v[0], v[1]]); });
+      return null;
+    };
+    const top = visit(root.cx, root.cy, root.size_mm);
+    if (top) quads.push([root.cx, root.cy, root.size_mm, top[0], top[1]]);
+    return quads;
+  }
+
+  function demoMap(key, origin, root, cellAt) {
+    if (!demoMaps[key]) {
+      const quads = buildQuads(root, cellAt);
+      const counts = Object.fromEntries(CONTENT.map((n) => [n, 0]));
+      for (const q of quads) counts[CONTENT[q[3]]] += 1;
+      demoMaps[key] = { origin_id: origin, root, quads, counts, received_ms: Date.now() };
+    }
+    return demoMaps[key];
+  }
+
+  // Drives up the corridor, turns left, drives on, is picked up at 15 s and put down at 20 s.
+  function demoRobot(t) {
+    const moving = ["moving", "wheels_moving", "pathing"], base = { origin_id: 7, localized_to: 1 };
+    if (t < 9) return { x: 30 * t, y: 0, angle: 0, ...base, flags: moving };
+    if (t < 12) return { x: 270, y: 0, angle: ((t - 9) / 3) * (Math.PI / 2), ...base, flags: ["moving", "wheels_moving"] };
+    if (t < 15) return { x: 270, y: 30 * (t - 12), angle: Math.PI / 2, ...base, flags: moving };
+    if (t < 20) return { x: 0, y: 0, angle: 0, origin_id: 8, localized_to: 0, flags: ["picked_up"] };
+    return { x: 0, y: 0, angle: 0.25 * (t - 20), origin_id: 9, localized_to: 0, flags: ["moving", "wheels_moving"] };
+  }
+
+  function demoSnapshot() {
+    const t = (Date.now() - demoStart) / 1000;
+    if (demo === "error") {
+      demoErrors += 1;
+      throw demoErrors % 2 ? new PollError("Server unreachable") : new PollError("HTTP 503", "Service Unavailable");
+    }
+    if (demo === "empty") {
+      const robot = { x: 0, y: 0, angle: 0, origin_id: 7, localized_to: 0, flags: [] };
+      return { serial: "demo", status: "waiting_for_map", map: null, robot };
+    }
+    let map;
+    if (t < 17) {
+      const phase = t < 5 ? 0 : t < 10 ? 1 : 2, conf = [0.35, 0.65, 0.95][phase];
+      map = demoMap(`big${phase}`, 7, { cx: 128, cy: 0, size_mm: 512, depth: 6 }, (x, y) => demoCell(x, y, conf));
+    } else {
+      const origin = t < 20 ? 8 : 9;
+      map = demoMap(`fresh${origin}`, origin, { cx: 0, cy: 0, size_mm: 128, depth: 3 },
+        (x, y) => (Math.abs(x) < 32 && Math.abs(y) < 32 ? [1, CLEAR] : [0, UNKNOWN]));
+    }
+    return { serial: "demo", status: "streaming", map, robot: demoRobot(t) };
+  }
+
+  if (demo) window.navmap = { view, state, worldToScreen, applySnapshot };
+
+  buildLegend();
+  updateLegend();
+  refreshChrome();
+  new ResizeObserver(resize).observe(canvas);
+  setInterval(updateAge, 1000);
+  schedule(0);
+})();
+</script>
+</body>
+</html>
