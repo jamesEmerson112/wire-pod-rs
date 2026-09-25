@@ -1,12 +1,14 @@
 //! Adapters from `tonic::Streaming` to the core stream traits.
 //!
-//! Both are thin: they wait for the next message, map the failure into a
-//! [`ConnError`], and project the one or two fields the slice reads. Keeping
-//! the projection here is what lets `wirepod-core` express the event loop and
-//! the frame pump in domain types.
+//! All three are thin: they wait for the next message, map the failure into a
+//! [`ConnError`], and project the fields the slice reads. Keeping the
+//! projection here is what lets `wirepod-core` express the event loop, the
+//! frame pump and the map feed in domain types.
 
 use async_trait::async_trait;
 use tonic::Streaming;
+use wirepod_core::robot::conn::NavMapReceiver;
+use wirepod_core::robot::navmap::{NavMapFrame, NavMapInfo, NavMapQuad};
 use wirepod_core::{
     CameraFrame, ConnError, EventItem, EventReceiver, FrameStream, RobotStateSample, StimEvent,
 };
@@ -92,9 +94,131 @@ impl FrameStream for TonicFrameStream {
     }
 }
 
+/// A [`NavMapReceiver`] over the robot's `NavMapFeed`.
+pub struct TonicNavMapReceiver {
+    inner: Streaming<pb::NavMapFeedResponse>,
+}
+
+impl TonicNavMapReceiver {
+    /// Wraps an open nav map feed.
+    pub fn new(inner: Streaming<pb::NavMapFeedResponse>) -> Self {
+        Self { inner }
+    }
+}
+
+/// The [`NavMapFrame`] one `NavMapFeedResponse` carries.
+///
+/// `map_info` is a message, so prost makes it optional; an absent one reads as
+/// all zeros, a root with no size and no height. `root_center_z` is dropped,
+/// because the robot's gateway always sends zero there.
+fn nav_map_frame(response: pb::NavMapFeedResponse) -> NavMapFrame {
+    let info = response.map_info.unwrap_or_default();
+    NavMapFrame {
+        origin_id: response.origin_id,
+        info: NavMapInfo {
+            root_depth: info.root_depth,
+            root_size_mm: info.root_size_mm,
+            root_center_x: info.root_center_x,
+            root_center_y: info.root_center_y,
+        },
+        quads: response
+            .quad_infos
+            .into_iter()
+            .map(|quad| NavMapQuad {
+                content: quad.content,
+                depth: quad.depth,
+                rgba: quad.color_rgba,
+            })
+            .collect(),
+    }
+}
+
+#[async_trait]
+impl NavMapReceiver for TonicNavMapReceiver {
+    async fn next(&mut self) -> Result<Option<NavMapFrame>, ConnError> {
+        match self.inner.message().await {
+            Ok(Some(response)) => Ok(Some(nav_map_frame(response))),
+            Ok(None) => Ok(None),
+            Err(status) => Err(status_error(&status)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use wirepod_core::robot::navmap::NavContent;
+
     use super::*;
+
+    #[test]
+    fn a_nav_map_response_keeps_every_quad_in_order() {
+        let response = pb::NavMapFeedResponse {
+            origin_id: 7,
+            map_info: Some(pb::NavMapInfo {
+                root_depth: 6,
+                root_size_mm: 512.0,
+                root_center_x: 64.0,
+                root_center_y: -32.0,
+                root_center_z: 0.0,
+            }),
+            quad_infos: vec![
+                pb::NavMapQuadInfo {
+                    content: pb::NavNodeContentType::NavNodeClearOfObstacle as i32,
+                    depth: 5,
+                    color_rgba: 0x00ff_00ff,
+                },
+                pb::NavMapQuadInfo {
+                    content: pb::NavNodeContentType::NavNodeCliff as i32,
+                    depth: 0,
+                    color_rgba: 0x0000_00ff,
+                },
+            ],
+        };
+        assert_eq!(
+            nav_map_frame(response),
+            NavMapFrame {
+                origin_id: 7,
+                info: NavMapInfo {
+                    root_depth: 6,
+                    root_size_mm: 512.0,
+                    root_center_x: 64.0,
+                    root_center_y: -32.0,
+                },
+                quads: vec![
+                    NavMapQuad {
+                        content: 1,
+                        depth: 5,
+                        rgba: 0x00ff_00ff,
+                    },
+                    NavMapQuad {
+                        content: 7,
+                        depth: 0,
+                        rgba: 0x0000_00ff,
+                    },
+                ],
+            }
+        );
+    }
+
+    /// The numbers `NavContent` carries are the generated enum's, pinned here
+    /// because this is the only crate that can see both.
+    #[test]
+    fn every_nav_content_is_the_generated_content_type() {
+        for content in NavContent::ALL {
+            let generated = pb::NavNodeContentType::try_from(content.wire())
+                .unwrap_or_else(|_| panic!("{content:?} is not a generated content type"));
+            assert_eq!(generated as i32, content.wire());
+        }
+        assert!(pb::NavNodeContentType::try_from(NavContent::ALL.len() as i32).is_err());
+    }
+
+    #[test]
+    fn a_nav_map_response_without_info_is_an_empty_root() {
+        let frame = nav_map_frame(pb::NavMapFeedResponse::default());
+        assert_eq!(frame.info.root_depth, 0);
+        assert_eq!(frame.info.root_size_mm, 0.0);
+        assert!(frame.quads.is_empty());
+    }
 
     #[test]
     fn a_stimulation_event_carries_its_value_and_velocity() {

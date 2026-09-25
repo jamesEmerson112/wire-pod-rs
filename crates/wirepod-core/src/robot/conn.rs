@@ -15,10 +15,12 @@
 
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 
 use crate::esn::Esn;
+use crate::robot::navmap::NavMapFrame;
 use crate::store::jdocs::Jdoc;
 
 /// A gRPC status code, in grpc-go's spelling.
@@ -433,6 +435,15 @@ pub trait EventReceiver: Send {
     async fn next(&mut self) -> Result<Option<EventItem>, ConnError>;
 }
 
+/// The reading half of an open nav map feed.
+///
+/// `Ok(None)` means the robot closed the stream cleanly.
+#[async_trait]
+pub trait NavMapReceiver: Send {
+    /// Waits for the next map.
+    async fn next(&mut self) -> Result<Option<NavMapFrame>, ConnError>;
+}
+
 /// The reading half of an open camera feed.
 #[async_trait]
 pub trait FrameStream: Send {
@@ -529,6 +540,20 @@ pub trait RobotConn: CameraControl + Send + Sync {
     /// what decide whether to wrap this call in a timeout of its own or to
     /// rely on axum dropping the handler future, which deviation 19 describes.
     async fn pull_jdocs(&self, kinds: &[JdocKind]) -> Result<Vec<NamedJdoc>, ConnError>;
+
+    /// Opens the nav map feed, asking for at most one map per `period`.
+    ///
+    /// The default answers `Unimplemented`, so a fake that has no map to give
+    /// need not say so.
+    async fn open_nav_map_feed(
+        &self,
+        _period: Duration,
+    ) -> Result<Box<dyn NavMapReceiver>, ConnError> {
+        Err(ConnError::new(
+            StatusCode::Unimplemented,
+            "this connection has no nav map feed",
+        ))
+    }
 }
 
 /// Dials robots. The registry holds one of these and nothing else knows how a

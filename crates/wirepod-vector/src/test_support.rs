@@ -34,6 +34,7 @@ use tonic::transport::Server;
 use tonic::transport::server::Connected;
 use tonic::{Request, Response, Status};
 use wirepod_core::ProtocolResult;
+use wirepod_core::robot::navmap::NavMapFrame;
 use wirepod_proto::anki::vector::external_interface as pb;
 use wirepod_proto::anki::vector::external_interface::external_interface_server::{
     ExternalInterface, ExternalInterfaceServer,
@@ -117,6 +118,8 @@ struct FakeState {
     last_jdocs: Mutex<Option<RecordedJdocsRequest>>,
     events: Mutex<Option<mpsc::UnboundedReceiver<Result<pb::EventResponse, Status>>>>,
     frames: Mutex<Option<mpsc::UnboundedReceiver<Result<pb::CameraFeedResponse, Status>>>>,
+    nav_maps: Mutex<Option<mpsc::UnboundedReceiver<Result<pb::NavMapFeedResponse, Status>>>>,
+    last_nav_map: Mutex<Option<f32>>,
     enables: Mutex<Vec<bool>>,
 }
 
@@ -127,8 +130,8 @@ fn lock<T>(cell: &Mutex<T>) -> MutexGuard<'_, T> {
 /// Every RPC the fake does not implement, expanded into a body that answers
 /// `Unimplemented`.
 ///
-/// `ExternalInterface` has 88 methods and the seam uses six of them. Writing
-/// the other 82 out by hand would bury the six that matter.
+/// `ExternalInterface` has 88 methods and the seam uses seven of them. Writing
+/// the other 81 out by hand would bury the seven that matter.
 ///
 /// The bodies are hand-desugared rather than written as `async fn`, which is
 /// decision D8's documented fallback. `#[async_trait]` on the impl block runs
@@ -196,6 +199,7 @@ impl ExternalInterface for FakeRobot {
     type CameraFeedStream = UnboundedReceiverStream<Result<pb::CameraFeedResponse, Status>>;
     type BehaviorControlStream =
         UnboundedReceiverStream<Result<pb::BehaviorControlResponse, Status>>;
+    type NavMapFeedStream = UnboundedReceiverStream<Result<pb::NavMapFeedResponse, Status>>;
 
     async fn battery_state(
         &self,
@@ -254,6 +258,18 @@ impl ExternalInterface for FakeRobot {
         let receiver = lock(&self.state.frames)
             .take()
             .ok_or_else(|| Status::resource_exhausted("camera feed already taken"))?;
+        Ok(Response::new(UnboundedReceiverStream::new(receiver)))
+    }
+
+    async fn nav_map_feed(
+        &self,
+        request: Request<pb::NavMapFeedRequest>,
+    ) -> Result<Response<Self::NavMapFeedStream>, Status> {
+        self.record("NavMapFeed", &request);
+        *lock(&self.state.last_nav_map) = Some(request.into_inner().frequency);
+        let receiver = lock(&self.state.nav_maps)
+            .take()
+            .ok_or_else(|| Status::resource_exhausted("nav map feed already taken"))?;
         Ok(Response::new(UnboundedReceiverStream::new(receiver)))
     }
 
@@ -403,7 +419,6 @@ impl ExternalInterface for FakeRobot {
             assume_behavior_control(pb::BehaviorControlRequest)
                 -> AssumeBehaviorControlStream = pb::BehaviorControlResponse;
             audio_feed(pb::AudioFeedRequest) -> AudioFeedStream = pb::AudioFeedResponse;
-            nav_map_feed(pb::NavMapFeedRequest) -> NavMapFeedStream = pb::NavMapFeedResponse;
         }
     }
 }
@@ -414,6 +429,7 @@ pub struct FakeRobotHandle {
     state: Arc<FakeState>,
     events: Mutex<Option<mpsc::UnboundedSender<Result<pb::EventResponse, Status>>>>,
     frames: Mutex<Option<mpsc::UnboundedSender<Result<pb::CameraFeedResponse, Status>>>>,
+    nav_maps: Mutex<Option<mpsc::UnboundedSender<Result<pb::NavMapFeedResponse, Status>>>>,
     shutdown: Mutex<Option<oneshot::Sender<()>>>,
     served: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// The TLS accept loop, which the plaintext fake does not have. It owns the
@@ -547,6 +563,43 @@ impl FakeRobotHandle {
     /// Ends the camera feed cleanly.
     pub fn end_camera_feed(&self) {
         lock(&self.frames).take();
+    }
+
+    /// The `frequency` the last `NavMapFeed` request carried, which the robot
+    /// reads as a period in seconds.
+    pub fn last_nav_map_period(&self) -> Option<f32> {
+        *lock(&self.state.last_nav_map)
+    }
+
+    /// Pushes one map into the open nav map feed, with the zero
+    /// `root_center_z` the robot's gateway always sends.
+    pub fn push_nav_map(&self, frame: &NavMapFrame) {
+        if let Some(sender) = lock(&self.nav_maps).as_ref() {
+            let _ = sender.send(Ok(pb::NavMapFeedResponse {
+                origin_id: frame.origin_id,
+                map_info: Some(pb::NavMapInfo {
+                    root_depth: frame.info.root_depth,
+                    root_size_mm: frame.info.root_size_mm,
+                    root_center_x: frame.info.root_center_x,
+                    root_center_y: frame.info.root_center_y,
+                    root_center_z: 0.0,
+                }),
+                quad_infos: frame
+                    .quads
+                    .iter()
+                    .map(|quad| pb::NavMapQuadInfo {
+                        content: quad.content,
+                        depth: quad.depth,
+                        color_rgba: quad.rgba,
+                    })
+                    .collect(),
+            }));
+        }
+    }
+
+    /// Ends the nav map feed cleanly.
+    pub fn end_nav_map_feed(&self) {
+        lock(&self.nav_maps).take();
     }
 
     /// Stops the server and waits for it to finish.
@@ -683,11 +736,13 @@ struct FakeParts {
     state: Arc<FakeState>,
     events: mpsc::UnboundedSender<Result<pb::EventResponse, Status>>,
     frames: mpsc::UnboundedSender<Result<pb::CameraFeedResponse, Status>>,
+    nav_maps: mpsc::UnboundedSender<Result<pb::NavMapFeedResponse, Status>>,
 }
 
 fn new_fake() -> FakeParts {
     let (event_tx, event_rx) = mpsc::unbounded_channel();
     let (frame_tx, frame_rx) = mpsc::unbounded_channel();
+    let (nav_map_tx, nav_map_rx) = mpsc::unbounded_channel();
     FakeParts {
         state: Arc::new(FakeState {
             calls: Mutex::new(Vec::new()),
@@ -702,10 +757,13 @@ fn new_fake() -> FakeParts {
             last_jdocs: Mutex::new(None),
             events: Mutex::new(Some(event_rx)),
             frames: Mutex::new(Some(frame_rx)),
+            nav_maps: Mutex::new(Some(nav_map_rx)),
+            last_nav_map: Mutex::new(None),
             enables: Mutex::new(Vec::new()),
         }),
         events: event_tx,
         frames: frame_tx,
+        nav_maps: nav_map_tx,
     }
 }
 
@@ -752,6 +810,7 @@ pub async fn spawn_fake_robot() -> (SocketAddr, FakeRobotHandle) {
         state: parts.state,
         events: Mutex::new(Some(parts.events)),
         frames: Mutex::new(Some(parts.frames)),
+        nav_maps: Mutex::new(Some(parts.nav_maps)),
         shutdown: Mutex::new(Some(shutdown_tx)),
         served: Mutex::new(Some(served)),
         accepting: Mutex::new(None),
@@ -808,6 +867,7 @@ pub async fn spawn_fake_robot_tls_with(versions: TlsVersions) -> (SocketAddr, Fa
         state: parts.state,
         events: Mutex::new(Some(parts.events)),
         frames: Mutex::new(Some(parts.frames)),
+        nav_maps: Mutex::new(Some(parts.nav_maps)),
         shutdown: Mutex::new(Some(shutdown_tx)),
         served: Mutex::new(Some(served)),
         accepting: Mutex::new(Some(accepting)),

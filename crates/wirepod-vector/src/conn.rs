@@ -5,12 +5,15 @@
 //! the bearer authorisation metadata, which is what the Go SDK does through
 //! `grpc.WithPerRPCCredentials`: per RPC, not per connection.
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use tonic::metadata::{Ascii, MetadataValue};
 use tonic::service::Interceptor;
 use tonic::service::interceptor::InterceptedService;
 use tonic::transport::Channel;
 use tonic::{Request, Status};
+use wirepod_core::robot::conn::NavMapReceiver;
 use wirepod_core::{
     BatteryLevel, BatteryReading, CameraControl, ConnError, EventReceiver, FrameStream, Jdoc,
     JdocKind, NamedJdoc, ProtocolResult, ProtocolVerdict, RobotConn, StatusCode,
@@ -19,7 +22,7 @@ use wirepod_proto::anki::vector::external_interface as pb;
 use wirepod_proto::anki::vector::external_interface::external_interface_client::ExternalInterfaceClient;
 
 use crate::error::status_error;
-use crate::stream::{TonicEventReceiver, TonicFrameStream};
+use crate::stream::{TonicEventReceiver, TonicFrameStream, TonicNavMapReceiver};
 
 /// The metadata key the robot authenticates on.
 ///
@@ -239,6 +242,36 @@ impl RobotConn for TonicRobotConn {
         }
         response.named_jdocs.into_iter().map(named_jdoc).collect()
     }
+
+    async fn open_nav_map_feed(
+        &self,
+        period: Duration,
+    ) -> Result<Box<dyn NavMapReceiver>, ConnError> {
+        let stream = self
+            .client()
+            .nav_map_feed(pb::NavMapFeedRequest {
+                frequency: nav_map_period_secs(period),
+            })
+            .await
+            .map_err(|status| status_error(&status))?
+            .into_inner();
+        Ok(Box::new(TonicNavMapReceiver::new(stream)))
+    }
+}
+
+/// The shortest period the nav map feed asks for.
+const MIN_NAV_MAP_PERIOD_SECS: f32 = 0.1;
+
+/// What `NavMapFeedRequest.frequency` carries for `period`.
+///
+/// Despite its name the engine reads the field as a period in seconds, the
+/// time between two broadcasts, and divides by it to schedule the next one
+/// (`engine/navMap/mapComponent.cpp:328-331`, `:382`). Zero makes that next
+/// time NaN, and since it is a static shared by every client, the robot sends
+/// one map and then none to anyone until `vic-engine` restarts. The floor
+/// applies to every caller, including tests whose `map_period` is zero.
+fn nav_map_period_secs(period: Duration) -> f32 {
+    period.as_secs_f32().max(MIN_NAV_MAP_PERIOD_SECS)
 }
 
 /// The failure an answer carrying no documents produces.
@@ -355,6 +388,17 @@ mod tests {
         assert!(pb::JdocType::try_from(4).is_err());
         assert_eq!(JdocKind::from_wire(4), JdocKind::RobotSettings);
         assert_eq!(JdocKind::from_wire(-1), JdocKind::RobotSettings);
+    }
+
+    #[test]
+    fn the_nav_map_period_is_sent_in_seconds_and_never_zero() {
+        assert_eq!(nav_map_period_secs(Duration::from_millis(500)), 0.5);
+        assert_eq!(nav_map_period_secs(Duration::from_secs(2)), 2.0);
+        assert_eq!(nav_map_period_secs(Duration::ZERO), MIN_NAV_MAP_PERIOD_SECS);
+        assert_eq!(
+            nav_map_period_secs(Duration::from_millis(10)),
+            MIN_NAV_MAP_PERIOD_SECS
+        );
     }
 
     #[test]
