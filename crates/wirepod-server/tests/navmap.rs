@@ -346,3 +346,65 @@ async fn a_restart_after_a_failure_reports_the_failure() {
     );
     wait_until("the next poll to restart the feed", || conn.opens() == 2).await;
 }
+
+#[tokio::test]
+async fn a_map_an_earlier_feed_left_is_shown_but_not_called_streaming() {
+    let (conn, _script) = MapConn::with_feed();
+    let server = TestServer::with_robot(one_robot(), Arc::clone(&conn) as Arc<dyn RobotConn>);
+    let robot = server
+        .state
+        .get_robot(&Esn::new(TEST_ESN))
+        .await
+        .expect("the robot connects");
+
+    // An earlier feed delivered a map and then ended.
+    let slot = &robot.session.map_feed;
+    let earlier = slot
+        .claim(CancellationToken::new())
+        .expect("the map slot is free");
+    assert!(slot.write(
+        earlier,
+        ReceivedMap {
+            frame: split_root(),
+            received_ms: 1,
+        },
+    ));
+    assert!(slot.release(earlier));
+
+    let first = parse(&server.get(SNAPSHOT).await);
+    assert_eq!(first["status"], "starting");
+    assert_eq!(first["map"]["origin_id"], 7, "the old map is still shown");
+
+    // The new feed is running and has delivered nothing of its own.
+    let second = parse(&server.get(SNAPSHOT).await);
+    assert_eq!(second["status"], "waiting_for_map");
+    assert_eq!(second["map"]["received_ms"], 1);
+}
+
+#[tokio::test]
+async fn a_pose_is_shown_only_while_the_state_stream_runs() {
+    let (conn, _script) = MapConn::with_feed();
+    let server = TestServer::with_robot(one_robot(), Arc::clone(&conn) as Arc<dyn RobotConn>);
+    let robot = server
+        .state
+        .get_robot(&Esn::new(TEST_ESN))
+        .await
+        .expect("the robot connects");
+
+    let state = &robot.session.state_stream;
+    let generation = state
+        .claim(CancellationToken::new())
+        .expect("the state slot is free");
+    assert!(state.write(generation, RobotStateSample::default()));
+    let live = parse(&server.get(SNAPSHOT).await);
+    assert_ne!(live["robot"], Value::Null);
+
+    // The robot ended the stream; the connection lives on.
+    assert!(state.release(generation));
+    let ended = parse(&server.get(SNAPSHOT).await);
+    assert_eq!(
+        ended["robot"],
+        Value::Null,
+        "a dead stream's last pose is not his current one"
+    );
+}
