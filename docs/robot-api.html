@@ -373,7 +373,7 @@ footer p{ margin:0 0 8px; max-width: 84ch; }
     </table>
   </div>
   <div class="prose">
-    <p>The robot never dials <span class="m">ExternalInterface</span> and your server never serves it. Everything in the other thirteen tabs is the second row.</p>
+    <p>The robot never dials <span class="m">ExternalInterface</span> and your server never serves it. Everything in the other fourteen tabs is the second row.</p>
 
     <h3 class="sec">Transport</h3>
     <p>On WireOS the gateway is not a separate process. It is compiled into <code>vic-cloud</code> and started as a goroutine, listening on TCP 443 with a TLS config whose <code>NextProtos</code> is <code>["h2"]</code> and nothing else. The same handler serves the gRPC service and a grpc-gateway JSON mux.</p>
@@ -619,7 +619,7 @@ footer p{ margin:0 0 8px; max-width: 84ch; }
       <div><dt>Does</dt><dd>Runs the path planner to drive to an x, y position and final heading in the robot's current coordinate frame, then completes with an <span class="m">ActionResult</span>.</dd></div>
       <div><dt>Parameters</dt><dd><span class="m">x_mm</span>, <span class="m">y_mm</span>, <span class="m">rad</span>, all <span class="m">float</span>; <span class="m">motion_prof</span>, a <span class="m">PathMotionProfile</span> whose eleven fields cover speed, acceleration and deceleration for straight, point-turn and docking segments, plus <span class="m">is_custom</span>; <span class="m">id_tag</span>; <span class="m">num_retries</span>.</dd></div>
       <div class="is-nc"><dt>Without control</dt><dd>Queued, never answered.</dd></div>
-      <div><dt>Note</dt><dd>Planning can fail on its own terms. Read the result code: <span class="m">PATH_PLANNING_FAILED_ABORT</span> (50331674) and <span class="m">PATH_PLANNING_FAILED_RETRY</span> (67108871) are distinct answers, and only the second is worth retrying.</dd></div>
+      <div><dt>Note</dt><dd>Planning can fail on its own terms, and it comes back as <span class="m">PATH_PLANNING_FAILED_ABORT</span> (50331674). <span class="m">PATH_PLANNING_FAILED_RETRY</span> (67108871) is defined but nothing on the robot produces it, so do not wait for it. The Mapping and planning tab covers the planner and the map it plans over.</dd></div>
     </dl>
   </article>
 
@@ -968,7 +968,7 @@ footer p{ margin:0 0 8px; max-width: 84ch; }
       <div><dt>Does</dt><dd>Streams the robot's navigation memory map. The gateway sets the engine's broadcast frequency on entry, reassembles each map from a begin, many data and an end message, and sends one <span class="m">NavMapFeedResponse</span> per complete map. A <code>defer</code> sets the frequency to &minus;1.0 when you disconnect.</dd></div>
       <div><dt>Parameters</dt><dd><span class="m">frequency</span> <span class="m">float</span>.</dd></div>
       <div><dt>Control</dt><dd><span class="unconf">unconfirmed</span> Not among the seven refused requests, and the handler goes straight to CLAD, but this call was not audited for gating.</dd></div>
-      <div><dt>What arrives</dt><dd><span class="m">origin_id</span>, which you compare against the robot's current origin to know whether the map still applies; <span class="m">map_info</span> with the root depth, size and centre; and <span class="m">quad_infos</span>, each a content type, a depth and an RGBA colour. The ten content types run from <span class="m">NAV_NODE_CLEAR_OF_OBSTACLE</span> through the three proximity-obstacle kinds to <span class="m">NAV_NODE_CLIFF</span> and the two edge types.</dd></div>
+      <div><dt>What arrives</dt><dd><span class="m">origin_id</span>, which you compare against the robot's current origin to know whether the map still applies; <span class="m">map_info</span> with the root depth, size and centre; and <span class="m">quad_infos</span>, each a content type, a depth and an RGBA colour. The ten content types run from <span class="m">NAV_NODE_CLEAR_OF_OBSTACLE</span> through the three proximity-obstacle kinds to <span class="m">NAV_NODE_CLIFF</span> and the two edge types. The Mapping and planning tab explains the quad order, what <span class="m">depth</span> means and how to rebuild the tree.</dd></div>
       <div class="is-trap"><dt>Trap</dt><dd><span class="m">frequency</span> is a period in seconds, not a rate in hertz. The gateway logs it as seconds and the CLAD message it sends is named <span class="m">SetMemoryMapBroadcastFrequency_sec</span>. Asking for 30 gets you a map every thirty seconds, not thirty maps a second.</dd></div>
     </dl>
   </article>
@@ -1450,9 +1450,156 @@ footer p{ margin:0 0 8px; max-width: 84ch; }
       <div><dt>The whole vocabulary</dt><dd>Twenty-four event types: <span class="m">time_stamped_status</span>, <span class="m">onboarding</span>, <span class="m">wake_word</span>, <span class="m">attention_transfer</span>, <span class="m">robot_observed_face</span>, <span class="m">robot_changed_observed_face_id</span>, <span class="m">object_event</span>, <span class="m">stimulation_info</span>, <span class="m">photo_taken</span>, <span class="m">robot_state</span>, <span class="m">cube_battery</span>, <span class="m">keep_alive</span>, <span class="m">connection_response</span>, <span class="m">jdocs_changed</span>, <span class="m">alexa_auth_event</span>, <span class="m">mirror_mode_disabled</span>, <span class="m">vision_modes_auto_disabled</span>, <span class="m">check_update_status_response</span>, <span class="m">user_intent</span>, <span class="m">robot_observed_motion</span>, <span class="m">robot_erased_enrolled_face</span>, <span class="m">robot_renamed_enrolled_face</span>, <span class="m">camera_settings_update</span> and <span class="m">unexpected_movement</span>.</dd></div>
       <div><dt>What needs enabling</dt><dd><strong>Vision events</strong> (<span class="m">robot_observed_face</span>, <span class="m">robot_observed_motion</span> and object observations inside <span class="m">object_event</span>) fire only while the matching vision mode is on, and those toggles need behaviour control. <strong><span class="m">user_intent</span></strong> is forwarded only while the SDK behaviour is activated, and only for whitelisted intents, below. <strong>Cube and face events</strong> arrive over the legacy CLAD socket and are converted in the gateway rather than produced as protobuf by the engine.</dd></div>
       <div class="is-trap"><dt>Trap</dt><dd><span class="m">robot_state</span> is emitted every engine tick, so an unfiltered stream is very busy and will dominate your bandwidth. Filter it out unless you need it. Being non-primary does not reduce what you receive: a secondary connection gets the full stream, and primacy only decides who triggers the analytics connection events and whose disconnect tells the engine the app has gone. Because the keep-alive bypasses the filter, a stream that has gone completely silent is a dead stream rather than a quiet one.</dd></div>
+      <div><dt>Connection ids</dt><dd><p>Each stream gets its own 512-slot event channel, its own filter and its own one-second keep-alive. A stream is primary if no id is recorded yet or its id equals the recorded one, and its id then becomes the recorded id; any other stream is secondary and still gets every event. An empty id is recorded as the empty string, which counts as nothing recorded, so a stream without an id never stops a later one becoming primary, and two primaries can be open at once. When a primary stream ends, the gateway sends the engine <span class="m">AppDisconnected</span> and clears the recorded id. A listener whose channel stays full for 250&nbsp;ms is dropped from the fan-out.</p><p>wire-pod opens one stream per robot at connect, whitelisted to <span class="m">stimulation_info</span>, with no id, and never reads it. It opens a second for each Stim session with the id <span class="m">wirepod</span>. Both are primary, so ending a Stim session tells the engine the app has left while the first stream is still open.</p></dd></div>
       <div><dt>user_intent, precisely</dt><dd>The engine forwards forty-two intent ids, 0 through 41, and nothing else. Non-whitelisted intents are not dropped from the robot's own behaviour tree, they are simply not relayed to you, so most ordinary voice commands never appear on this stream. The whitelist covers the timer intents, the volume intents, the movement intents, <span class="m">knowledge_question</span>, <span class="m">take_a_photo</span>, <span class="m">weather_response</span>, the greetings, the play and trick intents, and <span class="m">global_stop</span>. Ids 6 and 22 are special-cased by animation group name rather than intent tag. The event carries <span class="m">intent_id</span> and <span class="m">json_data</span>, which is the raw intent JSON.</dd></div>
     </dl>
   </article>
+</section>
+
+
+<section class="panel" id="p-map" data-tab="Mapping and planning" hidden>
+  <h2>Mapping and planning</h2>
+  <p class="lede">What sits behind <span class="m">NavMapFeed</span> and <span class="m">GoToPose</span>: a quadtree map about two metres across that forgets on a timer and is deleted whenever the robot is picked up, a pose kept by dead reckoning, and a grid planner that ignores heading. The file and line references are in section 6 of <code>docs/robot-api.md</code>.</p>
+
+  <div class="prose">
+    <h3 class="sec">Axes and units</h3>
+    <p>Distances are millimetres and angles are radians. In the robot's own frame +x points forward, +y points to his left and +z points up, so a positive rotation about z turns him left. The source agrees in three places. The front-left cliff sensor sits at +y and the front-right one at &minus;y. A cliff seen by the front-left sensor alone gets a heading of +45&deg;. When the left tread drives forward and the right does not, the slip handler puts its obstacle at &minus;y and logs "to right of".</p>
+    <p>To draw the map with the robot's nose up the screen, put +x up and +y to the left. The engine's own comments call the +x+y child "up L". The Python SDK's docstring draws the same frame a quarter turn round, with +x to the right and +y up.</p>
+
+    <h3 class="sec">A quadtree, not an occupancy grid</h3>
+    <p>An occupancy grid is a fixed array of cells that each hold a probability of being occupied. This map is neither fixed nor probabilistic. <span class="m">MemoryMap</span> wraps a <span class="m">QuadTree</span>, a tree in which every node is a square that is either a leaf or split into four half-size children. A <span class="m">std::shared_timed_mutex</span> commented "safe thread access for planner" guards it, because the planner reads the map from its own thread while the engine tick writes it.</p>
+    <p>The root starts 128&nbsp;mm on a side with a height of 4, where height means the number of levels still available below a node. The finest leaf is therefore 8&nbsp;mm, and the planner's config repeats that figure as the map resolution. Inserting outside the root doubles its side and adds one level, up to a height of 8, which is a 2048&nbsp;mm root. After that the root shifts by half its side toward the new data and drops the trailing half. The map is a sliding window about two metres square: drive far enough in one direction and the robot forgets what is behind him.</p>
+    <p>A leaf holds a shared pointer to a data object, not a value. Every leaf one insertion covers gets the same pointer, so they share one object and its identity, such as a cube's object id. Four equal sibling leaves merge back into their parent, so uniform areas cost one node and fine detail exists only near boundaries.</p>
+
+    <h3 class="sec">What a quad can hold</h3>
+    <p>The engine has nine content types and the SDK's <span class="m">NavNodeContentType</span> has ten, because the SDK splits the proximity obstacle by whether the robot has been to look at it.</p>
+  </div>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Engine type</th><th>SDK value</th><th>Blocks the planner?</th></tr></thead>
+      <tbody>
+        <tr><td class="m">Unknown</td><td><span class="m">NAV_NODE_UNKNOWN</span> (0)</td><td>No.</td></tr>
+        <tr><td class="m">ClearOfObstacle</td><td><span class="m">NAV_NODE_CLEAR_OF_OBSTACLE</span> (1)</td><td>No.</td></tr>
+        <tr><td class="m">ClearOfCliff</td><td><span class="m">NAV_NODE_CLEAR_OF_CLIFF</span> (2)</td><td>No.</td></tr>
+        <tr><td class="m">ObstacleObservable</td><td><span class="m">NAV_NODE_OBSTACLE_CUBE</span> (3), which also covers the charger and custom objects</td><td>Only while the object's pose is verified.</td></tr>
+        <tr><td class="m">ObstacleProx</td><td><span class="m">NAV_NODE_OBSTACLE_PROXIMITY</span> (4), or <span class="m">NAV_NODE_OBSTACLE_PROXIMITY_EXPLORED</span> (5) once explored</td><td>Only once its belief is confirmed, below.</td></tr>
+        <tr><td class="m">ObstacleUnrecognized</td><td><span class="m">NAV_NODE_OBSTACLE_UNRECOGNIZED</span> (6)</td><td>Yes.</td></tr>
+        <tr><td class="m">Cliff</td><td><span class="m">NAV_NODE_CLIFF</span> (7)</td><td>Yes.</td></tr>
+        <tr><td class="m">InterestingEdge</td><td><span class="m">NAV_NODE_INTERESTING_EDGE</span> (8)</td><td>No. Never written.</td></tr>
+        <tr><td class="m">NotInterestingEdge</td><td><span class="m">NAV_NODE_NON_INTERESTING_EDGE</span> (9)</td><td>No. Never written.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="prose">
+    <p><span class="m">SetUseProxObstaclesInPlanning</span> sets a <span class="m">_collidable</span> flag on every proximity obstacle, but nothing reads the flag, so it changes nothing. An insertion also does not always win: <span class="m">CanOverrideSelfWithContent</span> decides leaf by leaf whether the incoming content may replace what is there.</p>
+  </div>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Incoming content</th><th>What it cannot replace</th></tr></thead>
+      <tbody>
+        <tr><td class="m">Cliff</td><td>An existing <span class="m">Cliff</span>. Two cliffs are merged by a special transform instead.</td></tr>
+        <tr><td class="m">ClearOfCliff</td><td>Nothing. It replaces every type, cliffs and recognised objects included.</td></tr>
+        <tr><td class="m">ClearOfObstacle</td><td><span class="m">Cliff</span>, <span class="m">ClearOfCliff</span>, <span class="m">ObstacleUnrecognized</span> and <span class="m">ObstacleObservable</span>. It does replace a proximity obstacle, whatever its belief.</td></tr>
+        <tr><td class="m">ObstacleProx</td><td><span class="m">Cliff</span>, <span class="m">ObstacleObservable</span>, and a proximity obstacle already marked explored.</td></tr>
+        <tr><td class="m">NotInterestingEdge</td><td>Anything except <span class="m">InterestingEdge</span>.</td></tr>
+        <tr><td><span class="m">Unknown</span>, <span class="m">ObstacleObservable</span>, <span class="m">ObstacleUnrecognized</span></td><td>An existing <span class="m">Cliff</span>.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="prose">
+    <h3 class="sec">What writes the map</h3>
+    <ul>
+      <li><strong>The proximity sensor.</strong> Each reading is placed using the robot's pose at the reading's own timestamp, not the current pose. The distance is clamped to 30&ndash;400&nbsp;mm, and it counts as an object only when the lift is out of the beam, the signal is strong enough, the raw distance is under 400&nbsp;mm, the range is valid and the robot's pitch is within 5&deg; of level. It clears a cone from the robot to 6&nbsp;mm short of the reading and stamps an obstacle 12&nbsp;mm deep there, as wide as 0.4 times the distance but never more than 18&nbsp;mm. A robot standing still stops updating after 32 readings at one pose.</li>
+      <li><strong>Obstacle belief.</strong> A proximity obstacle carries a counter, not a probability. It is created at 40, a hit adds 4 up to 100, and a clearing pass subtracts 6 down to 0. Above 40 it blocks the planner, and only exactly 0 counts as clear. So the second reading that overlaps a fresh obstacle confirms it, seven clearing steps erase a fresh one, and seventeen erase a saturated one. A step is applied once per leaf of that obstacle the insertion visits, and those leaves share one object, so one reading can move the counter several steps.</li>
+      <li><strong>The cliff sensors.</strong> A cliff enters the map only through a <span class="m">CliffEvent</span>, and the robot process sends one only when it stops for the cliff. The engine stamps a bar 10&nbsp;mm deep and 60&nbsp;mm wide at the pose the robot had when the event fired. Once there, a cliff can be replaced by an insertion only if the insertion is <span class="m">ClearOfCliff</span>.</li>
+      <li><strong>Driving.</strong> Whenever the robot has moved about 8&nbsp;mm or turned 20&deg;, the rectangle under the four cliff sensors becomes <span class="m">ClearOfCliff</span> and his footprint becomes <span class="m">ClearOfObstacle</span>, which erases any proximity obstacle under him outright. The only other source of <span class="m">ClearOfCliff</span> is the go-home behaviour, which clears the charger's docking area before driving onto it and deletes every proximity obstacle when it starts.</li>
+      <li><strong>Wheel slip.</strong> An unexpected movement of kind <span class="m">TURNED_BUT_STOPPED</span> or <span class="m">TURNED_IN_OPPOSITE_DIRECTION</span> is taken as hitting something invisible. The robot's position is put back where the slip began, the gyro heading is kept, and a 30 by 10&nbsp;mm <span class="m">ObstacleUnrecognized</span> goes in front, behind, or on the side the treads were turning toward.</li>
+      <li><strong>Vision.</strong> A recognised cube or custom object goes in as its bounding polygon, and the charger as a shaped charger region. An object stacked on another is not inserted. <span class="m">ClearRobotToMarkers</span> would clear the space between the robot and a seen marker, but nothing calls it. Camera ground edges cannot create a cliff: they are used only when a drop-sensor cliff is already in the map, and then they refine its pose and add a 400 by 20&nbsp;mm strip along the fitted edge.</li>
+      <li><strong>Nothing writes the edge types.</strong> The only construction of an <span class="m">InterestingEdge</span> in the whole tree is in a unit test, and the only writer of <span class="m">NotInterestingEdge</span> has no callers. Neither SDK edge value can appear in a map from a stock robot.</li>
+    </ul>
+  </div>
+
+  <div class="note warn">
+    <h4><span class="unconf">unconfirmed</span>A clear view may clear nothing</h4>
+    <p>When a proximity reading finds no object, the code sets the reading's pose to a default pose at the frame's origin and still builds the clearing region from it, so the region lies around the origin rather than in front of the robot. If that holds on a robot, a proximity obstacle goes away only when he drives over it, when a later reading of something farther along the same line clears past it, or when it times out.</p>
+  </div>
+
+  <div class="prose">
+    <h3 class="sec">Forgetting</h3>
+    <p>Every five seconds <span class="m">TimeoutObjects</span> sweeps the whole map and resets stale quads to a fresh <span class="m">Unknown</span>, never to clear.</p>
+  </div>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Content</th><th>Reset to Unknown after</th></tr></thead>
+      <tbody>
+        <tr><td class="m">ObstacleUnrecognized</td><td>20&nbsp;s</td></tr>
+        <tr><td><span class="m">InterestingEdge</span>, <span class="m">NotInterestingEdge</span></td><td>120&nbsp;s, under a constant named <span class="m">kVisionTimeout_ms</span></td></tr>
+        <tr><td class="m">ObstacleProx</td><td>600&nbsp;s</td></tr>
+        <tr><td class="m">Cliff</td><td>1200&nbsp;s</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="prose">
+    <p>Clear quads never expire, and neither do recognised objects, which leave the map only when BlockWorld moves or removes them.</p>
+
+    <h3 class="sec">Origins and delocalization</h3>
+    <p>There is no global frame. Every pose is relative to a numbered origin, which the SDK exposes as <span class="m">PoseStruct.origin_id</span>, and <span class="m">NavMapFeedResponse.origin_id</span> names the origin a map is in. Poses with different origin ids cannot be compared.</p>
+    <p>To delocalize is to give up the current frame. <span class="m">Robot::Delocalize</span> allocates a new origin, puts the robot at exactly zero position and heading in it, and aborts any path, so the new frame's +x is wherever he was facing. It fires whenever the off-treads state changes and either the old or new state is <span class="m">OnTreads</span>, so one pick-up and put-down burns two origins. It also fires after the engine and the robot process disagree about the pose frame for more than 100 state messages, once at startup, and on a <span class="m">ForceDelocalizeRobot</span> message.</p>
+    <p>Relocalizing does not undo any of this. The only landmark is the charger, and BlockWorld looks for a known charger only in the current frame, under a comment reading "VIC-14462: we no longer relocalize to objects in other origins due to rejiggering bugs, and the map timing out anyway". The merge path described in the architecture notes is therefore not reached. Seeing the charger again, in the same frame and near where it was, corrects the robot's pose to agree with it, and that is the only correction there is.</p>
+    <p><span class="m">RobotState.localized_to_object_id</span> is the charger's id after such a correction and &minus;1 otherwise. At &minus;1 the pose is odometry alone; the engine's debug label for that state is "LocalizedTo: Odometry". The map is never saved, so it does not survive a reboot either.</p>
+  </div>
+
+  <div class="note bad">
+    <h4>Picking the robot up deletes his map</h4>
+    <p>Each delocalization calls <span class="m">BlockWorld::OnRobotDelocalized</span>, which forgets every located object and asks for a map in the new origin. Because <span class="m">kMergeOldMaps</span> ships false, every existing map is treated as a zombie and erased. After one pick-up the robot has an empty map in a fresh frame, and any pose you saved from before is in an origin that no longer means anything.</p>
+  </div>
+
+  <div class="prose">
+    <h3 class="sec">Odometry, and no SLAM</h3>
+    <p>Odometry, the robot's estimate of his own motion, runs in the robot process. Distance comes from the wheel encoders and heading from the gyro: after integrating the treads, <code>localization.cpp</code> overwrites the heading with <code>IMUFilter::GetRotation() + gyroRotOffset_</code>. Wheel motion is ignored while he is on the charger, so slipping against it does not drift the pose.</p>
+    <p>SLAM, simultaneous localization and mapping, means correcting the pose against the map as it is built, for example by recognising a place seen before or by tracking camera features. There is none. A case-insensitive search of <code>engine/</code> and <code>coretech/vision/</code> for "slam", "loop closure" and "visual odometry" finds three comments about the lift slamming and nothing else. The map is drawn wherever dead reckoning says the robot is.</p>
+
+    <h3 class="sec">The planner</h3>
+    <p><span class="m">GoToPose</span> becomes a <span class="m">DriveToPoseAction</span> whose target, with z fixed at 0, is parented to whatever origin is current when the request arrives. Targets under 40&nbsp;mm go to one of two small planners that do not check collisions while planning, but their output is checked afterwards against the map and replanned if it collides. Everything else goes to <span class="m">XYPlanner</span>.</p>
+    <p><span class="m">XYPlanner</span> is a bidirectional A*, a best-first search grown from both the start and the goal until the two meet, on a 4-connected grid with a Manhattan heuristic. The step is 32&nbsp;mm and halves near obstacles, with a comment putting the floor at 8&nbsp;mm. It gives up after 100000 expansions, and its escape search for a start inside an obstacle after 10000. Each candidate point is tested as a disc of radius 33&nbsp;mm, half the robot's width plus 3&nbsp;mm. It runs on its own thread against a const reference to the map, which a <code>static_assert</code> enforces. The path is purely positional and smoothed into arcs afterwards, so the robot point-turns at both ends of every path.</p>
+  </div>
+
+  <div class="note warn">
+    <h4>PATH_PLANNING_FAILED_RETRY never arrives</h4>
+    <p>Planning failures come back as <span class="m">PATH_PLANNING_FAILED_ABORT</span>: when the plan cannot start, when the path component fails, and when planning runs past its 6&nbsp;s timeout. <span class="m">PATH_PLANNING_FAILED_RETRY</span> is only defined and compared against; nothing produces it. When the search simply finds no path, the action does not see a planning failure at all. <span class="unconf">unconfirmed</span> The most likely result for an unreachable goal is <span class="m">FAILED_TRAVERSING_PATH</span>, because the path component returns to <span class="m">Ready</span> and the action finds the robot away from the goal.</p>
+  </div>
+
+  <div class="prose">
+    <h3 class="sec">Reading a NavMapFeed</h3>
+    <p>Only leaves are sent, one record of content, depth and colour each. The order is a pre-order walk even though the fold direction is named <span class="m">BreadthFirst</span>: a node first, then each child in turn, in this order.</p>
+  </div>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Index</th><th>Quadrant</th><th>Offset</th><th>Nose-up drawing</th></tr></thead>
+      <tbody>
+        <tr><td class="m">0</td><td class="m">PlusXPlusY</td><td>+x, +y</td><td>upper left</td></tr>
+        <tr><td class="m">1</td><td class="m">PlusXMinusY</td><td>+x, &minus;y</td><td>upper right</td></tr>
+        <tr><td class="m">2</td><td class="m">MinusXPlusY</td><td>&minus;x, +y</td><td>lower left</td></tr>
+        <tr><td class="m">3</td><td class="m">MinusXMinusY</td><td>&minus;x, &minus;y</td><td>lower right</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="prose">
+    <p><span class="m">depth</span> is the remaining height, not the depth from the root. The root carries <span class="m">root_depth</span>, each level down is one less, and a finest 8&nbsp;mm leaf carries 0, so a leaf's side is <span class="m">root_size_mm / 2^(root_depth &minus; depth)</span>. The engine sends the list in chunks between a begin and an end message, and the gateway appends them in arrival order into one response. <span class="m">root_center_z</span> is a hardcoded 0 in the gateway.</p>
+    <p><span class="m">color_rgba</span> is the engine's own render colour, red in the high byte and alpha in the low byte. It carries one fact the content type does not: a cliff from the drop sensors alone is black, from the camera alone gold, and from both pink. The code can also shade a proximity obstacle by its belief, but only under a console variable that defaults to off, so on a stock robot proximity obstacles are plain cyan, or blue once explored, and the belief is not on the wire.</p>
+    <p>To rebuild the tree, as the Python SDK's <span class="m">NavMapGridNode.add_child</span> does, keep a stack of frames, each a node and the index of its next unfilled child. Start with the root. For each quad in order, if the top node's height equals the quad's depth, store the content there, pop it, and advance the index of the frame beneath. Otherwise give the node four children if it has none, each one level lower and half the size, in the order above, and push the child at the next index. Whenever a frame's index reaches 4 its node is full, so pop that too and advance its parent.</p>
+  </div>
+
+  <div class="note warn">
+    <h4>frequency is a period, 0 is unsafe, and a still map sends nothing</h4>
+    <p><span class="m">NavMapFeedRequest.frequency</span> is seconds between maps; the Python SDK sends 0.5, and a negative value stops the feed. Zero reaches an unguarded division by the period in the engine. The robot also sends a map only when it has changed since the last one, and setting the period does not count as a change, so on a robot whose map is not changing you receive nothing.</p>
+  </div>
+
+  <div class="note bad">
+    <h4>OVERRIDE_BEHAVIORS keeps cliffs out of the map</h4>
+    <p>Priority 10 activates <span class="m">SDKOverrideAll</span>, whose <span class="m">disableCliffDetection</span> sends the robot process <span class="m">EnableStopOnCliff(false)</span>. The firmware queues a <span class="m">CliffEvent</span> only when it stops for a cliff; with stopping off it sends a <span class="m">PotentialCliff</span> instead, and the engine's handler for that never touches the map. A script at this priority can drive the robot off a table and his map will not show the edge. The engine's <span class="m">EnableCliffSensor</span> flag is a different switch, and the SDK behaviour does not touch it.</p>
+  </div>
 </section>
 
 
@@ -1618,6 +1765,12 @@ footer p{ margin:0 0 8px; max-width: 84ch; }
       wire-os-victor/engine/components/sdkComponent.cpp, movementComponent.cpp<br>
       wire-os-victor/engine/components/cubes/cubeLights/cubeLightComponent.cpp<br>
       wire-os-victor/engine/aiComponent/behaviorComponent/behaviors/sdkBehaviors/behaviorSDKInterface.cpp<br>
+      wire-os-victor/engine/navMap/mapComponent.cpp, memoryMap/*, quadTree/*<br>
+      wire-os-victor/engine/xyPlanner.cpp, xyPlannerConfig.h, pathPlanner.h, components/pathComponent.cpp, actions/driveToActions.cpp<br>
+      wire-os-victor/engine/robot.cpp, robotEventHandler.cpp, robotToEngineImplMessaging.cpp, blockWorld/blockWorld.cpp<br>
+      wire-os-victor/engine/components/sensors/proxSensorComponent.cpp, cliffSensorComponent.cpp<br>
+      wire-os-victor/robot/supervisor/src/localization.cpp, proxSensors.cpp<br>
+      wire-os-victor/cloud/cloud/ipc_manager.go, wire-pod/chipper/pkg/wirepod/sdkapp/robot.go, server.go<br>
       wire-pod-rs/crates/wirepod-proto/proto/vector/*.proto, wire-pod-rs/docs/robot-api.md
     </p>
   </div>

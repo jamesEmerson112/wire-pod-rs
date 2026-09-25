@@ -23,8 +23,9 @@ message shapes and call ordering.
 3. [Outbound: the SDK surface on the robot](#3-outbound-the-sdk-surface-on-the-robot)
 4. [Setup and identity](#4-setup-and-identity)
 5. [CLAD, briefly](#5-clad-briefly)
-6. [Things that will cost you a day](#6-things-that-will-cost-you-a-day)
-7. [What this document does not confirm](#7-what-this-document-does-not-confirm)
+6. [Mapping, localization and the planner](#6-mapping-localization-and-the-planner)
+7. [Things that will cost you a day](#7-things-that-will-cost-you-a-day)
+8. [What this document does not confirm](#8-what-this-document-does-not-confirm)
 
 ---
 
@@ -431,7 +432,7 @@ Priorities, from `behavior.proto`:
 | Priority | Value | Effect on the robot |
 |---|---|---|
 | `UNKNOWN` | 0 | Silently dropped. `SDKComponent::HandleProtoMessage` returns early on a zero priority, so the stream never receives `ControlGrantedResponse`. Always set a priority. |
-| `OVERRIDE_BEHAVIORS` | 10 | Activates the `SDKOverrideAll` behaviour, which sits above shut-up mode, quiet mode and the sleep cycle, and sets `disableCliffDetection`. What wire-pod uses. |
+| `OVERRIDE_BEHAVIORS` | 10 | Activates the `SDKOverrideAll` behaviour, which sits above shut-up mode, quiet mode and the sleep cycle, and sets `disableCliffDetection`, which also keeps cliffs out of the map (see [6.10](#610-behaviour-control-keeps-cliffs-out-of-the-map)). What wire-pod uses. |
 | `DEFAULT` | 20 | Activates `SDKDefault`, directly below mandatory physical reactions. |
 | `RESERVE_CONTROL` | 30 | Takes the behaviour lock only. It grants `ControlGrantedResponse` immediately but never sets the engine's `_sdkWantsControl`, so the SDK behaviour does not activate and none of the action or vision privileges below apply. |
 
@@ -458,7 +459,7 @@ Three asymmetries in the release path are worth knowing:
   `SDKWantsControl()` in
   `wire-os-victor/engine/aiComponent/behaviorComponent/behaviors/sleeping/behaviorSleepCycle.cpp`,
   and it is the only SDK message that does so. This is the practical workaround for the camera hang
-  in section 6: take behaviour control first, then ask for the camera.
+  in section 7: take behaviour control first, then ask for the camera.
 
 Action RPCs that move the robot take an `id_tag`, and the gateway rejects it with `InvalidArgument`
 unless it is between `FIRST_SDK_TAG` = 2000001 and `LAST_SDK_TAG` = 3000000
@@ -533,7 +534,7 @@ behaviour control; see the note below the tables.
 | `SetHeadAngle` | `SetHeadAngleRequest` | Moves the head to an absolute angle. |
 | `SetLiftHeight` | `SetLiftHeightRequest` | Moves the lift to an absolute height. |
 | `StopAllMotors` | `StopAllMotorsRequest` | Stops head, lift and wheels. |
-| `GoToPose` | `GoToPoseRequest` | Drives to an x, y, angle pose using the planner. |
+| `GoToPose` | `GoToPoseRequest` | Drives to an x, y, angle pose in the current origin using the planner. See [6.8](#68-the-planner). |
 | `GoToObject` | `GoToObjectRequest` | Drives to a known object. |
 | `DockWithCube` | `DockWithCubeRequest` | Approaches and docks with the cube. |
 | `PickupObject`, `PlaceObjectOnGroundHere`, `RollObject`, `PopAWheelie` | matching `*Request` | Cube manipulation actions. |
@@ -587,7 +588,7 @@ animation process.
 | `EnableMarkerDetection`, `EnableFaceDetection`, `EnableMotionDetection` | matching `*Request` | Toggle vision modes that drive events. |
 | `GetCameraConfig` | `CameraConfigRequest` | Returns intrinsics, field of view and the exposure and gain limits. |
 | `SetCameraSettings` | `SetCameraSettingsRequest` | Sets gain, exposure and auto-exposure. |
-| `NavMapFeed` (stream) | `NavMapFeedRequest` | Streams the navigation memory map at a requested frequency. |
+| `NavMapFeed` (stream) | `NavMapFeedRequest` | Streams the navigation memory map. `frequency` is a period in seconds, not a rate. See [6.9](#69-the-navmapfeed-wire-format). |
 
 **Faces**
 
@@ -680,6 +681,32 @@ a dead stream. A connection id is accepted but not required, and a non-primary c
 rejected: it receives the full event stream. Being primary only decides who triggers the DAS
 connection events and whose disconnect sends `AppDisconnected` to the engine. If `vic-switchboard`
 reports a BLE client already holding a different id, the new caller is non-primary.
+
+The connection-id rules are worth reading exactly, because wire-pod opens two streams. Each
+`EventStream` call gets its own channel of engine events, 512 slots deep, filtered by that call's own
+lists, and its own one-second keep-alive ticker
+(`wire-os-victor/cloud/cloud/message_handler.go:1079-1168`). `checkConnectionID` decides primacy
+(`message_handler.go:1031-1062`). If no id is recorded yet, or the incoming id equals the recorded
+one, the stream is primary and its id becomes the recorded id. Otherwise the stream is secondary, and
+it still receives every event. An empty id is recorded as the empty string, which the check treats
+as nothing recorded, so a stream that sends no id never stops a later stream from becoming primary,
+and two primary streams can be open at once. When a primary stream ends, `onDisconnect` calls
+`SendAppDisconnected()`, which tells the engine the app has left, and clears the recorded id
+(`message_handler.go:1022-1029`, `:409-417`). In the engine, the onboarding coordinator and the Alexa
+component listen for that message
+(`wire-os-victor/engine/aiComponent/behaviorComponent/behaviors/onboarding/behaviorOnboardingCoordinator.cpp`,
+`wire-os-victor/engine/aiComponent/alexaComponent.cpp`). One more gateway rule applies to every
+stream: if a listener's channel stays full for 250 ms, the IPC manager logs an error and removes that
+listener from the fan-out (`wire-os-victor/cloud/cloud/ipc_manager.go:234-250`).
+
+wire-pod opens the first stream when it connects to a robot. It is whitelisted to `stimulation_info`,
+carries no connection id, and is stored in `EventStreamClient`, which nothing ever reads
+(`wire-pod/chipper/pkg/wirepod/sdkapp/robot.go:371-386`, field at `:317`). It opens a second stream
+for each Stim session in the web UI, with the same whitelist and the connection id `wirepod`
+(`wire-pod/chipper/pkg/wirepod/sdkapp/server.go:482-493`). By the rules above both streams are
+primary, unless a BLE client holds a different id. Ending a Stim session therefore sends the engine
+`AppDisconnected` and clears the recorded id while the first stream is still open. What the unread
+first stream does to the gateway over time is in [section 8](#8-what-this-document-does-not-confirm).
 
 The full vocabulary of `Event.event_type` is `time_stamped_status`, `onboarding`, `wake_word`,
 `attention_transfer`, `robot_observed_face`, `robot_changed_observed_face_id`, `object_event`,
@@ -975,7 +1002,461 @@ own, so when the engine does not answer, the RPC does not either.
 
 ---
 
-## 6. Things that will cost you a day
+## 6. Mapping, localization and the planner
+
+Two SDK calls reach into the robot's model of the space around him. `NavMapFeed` streams his
+navigation map, and `GoToPose` hands a target to the path planner, which plans across that map. This
+section describes what sits behind both, read from the engine (`vic-engine`) and the robot-process
+firmware. Line numbers refer to the checkout at `E:/GitHub/wire-os-victor` as it stood on
+2026-09-25. Nothing here concerns the server. It matters to anything that reads the map, sends the
+robot somewhere, or holds behaviour control while he drives.
+
+### 6.1 Axes and units
+
+Distances are millimetres and angles are radians. In the robot's own frame +x points forward, +y
+points to his left and +z points up, so a positive rotation about z turns him left. Three places in
+the source agree on this. The front-left cliff sensor sits at +y and the front-right one at -y
+(`wire-os-victor/robot/include/anki/cozmo/shared/cozmoConfig.h:219-221`). A cliff seen by the
+front-left sensor alone is given a heading of +45 degrees, and one seen by the front-right sensor
+alone a heading of -45 degrees
+(`wire-os-victor/engine/components/sensors/cliffSensorComponent.cpp:351-357`). When the left tread
+drives forward and the right one does not, the robot is turning right, and the slip handler puts its
+obstacle at -y with the log text "to right of"
+(`wire-os-victor/engine/components/movementComponent.cpp:395-410`).
+
+To draw the map with the robot's nose pointing up the screen, put +x up and +y to the left. The
+engine's own comments label the +x+y child "up L"
+(`wire-os-victor/engine/navMap/quadTree/quadTreeNode.cpp:74-77`). The Python SDK's docstring draws
+the same frame turned a quarter turn, with +x to the right and +y up
+(`wire-os-victor/tools/sdk/vector-python-sdk-private/sdk/anki_vector/nav_map.py:94-107`).
+
+### 6.2 The map is a quadtree, not an occupancy grid
+
+An occupancy grid, the usual textbook map, is a fixed array of cells that each hold a probability of
+being occupied. Vector's map is neither fixed nor probabilistic. `MemoryMap`
+(`wire-os-victor/engine/navMap/memoryMap/memoryMap.h:25`) wraps a `QuadTree`, a tree in which every
+node is a square that is either a leaf or split into four half-size children. The tree sits behind a
+`std::shared_timed_mutex` whose comment reads "safe thread access for planner" (`memoryMap.h:93-94`),
+because the planner reads the map from its own thread while the engine tick writes it. Reads take the
+lock shared and writes take it exclusively
+(`wire-os-victor/engine/navMap/memoryMap/memoryMap.cpp:169-300`). The Python SDK's module docstring
+draws the same line: the map "doesn't deal with probabilities of occupancy, but instead encodes what
+type of content is there" (`nav_map.py:22-23`).
+
+Three constants set the geometry (`wire-os-victor/engine/navMap/quadTree/quadTree.cpp:32-34`). The
+root starts 128 mm on a side with a height of 4, and its height may grow to 8. Height here means the
+number of levels still available below a node. The smallest quad the tree ever makes is therefore
+128 / 2^4 = 8 mm on a side, which `GetContentPrecisionMM` computes (`quadTree.cpp:54-59`) and which
+the planner config repeats in a comment, "minimum step size of 8mm == navMap resolution"
+(`wire-os-victor/engine/xyPlannerConfig.h:46`).
+
+When something is inserted outside the root, `ExpandToFit` grows the tree (`quadTree.cpp:202-242`).
+Each call to `UpgradeRootLevel` moves the centre toward the new data, doubles the side and adds one
+level of height, so the leaf size stays at 8 mm (`quadTree.cpp:357-361`). It refuses once the height
+reaches 8 (`quadTree.cpp:334`), which caps the root at 128 * 2^4 = 2048 mm. After that, `ShiftRoot`
+moves the root by half its side toward the new data, along each axis the data lies outside, and
+keeps only the half of the tree on that side, so the trailing half of the map is dropped
+(`quadTree.cpp:220-228`, `:245-328`). The map is a sliding window about two metres square, and
+`wire-os-victor/docs/architecture/map.md:21` says as much: drive far enough in one direction and the
+robot forgets what is behind him.
+
+A leaf does not hold a cell value. It holds a `MemoryMapDataPtr`
+(`wire-os-victor/engine/navMap/quadTree/quadTreeTypes.h:133-134`), which wraps a `std::shared_ptr`
+(`wire-os-victor/engine/navMap/memoryMap/data/memoryMapDataWrapper.h:26-49`). One insertion hands the
+same pointer to every leaf it covers, so those leaves share one data object and whatever identity it
+carries, such as a cube's object id. After an insertion the tree calls `TryAutoMerge` on the nodes it
+touched, and when four sibling leaves compare equal the parent takes their content and the children
+are deleted (`quadTreeNode.cpp:89-119`, called from `quadTree.cpp:90-94`). Large uniform areas cost
+one node, and fine detail exists only near boundaries.
+
+### 6.3 What a quad can hold
+
+The engine has nine content types (`wire-os-victor/engine/navMap/memoryMap/memoryMapTypes.h:36-48`).
+The SDK's `NavNodeContentType` has ten (`wire-pod-rs/crates/wirepod-proto/proto/vector/nav_map.proto`),
+because it splits the proximity obstacle by whether the robot has been to look at it. Each data class
+chooses its SDK type when the map is broadcast (`memoryMapData.cpp:85-109`,
+`memoryMapData_ProxObstacle.cpp:50-53`, `memoryMapData_ObservableObject.cpp:52`,
+`memoryMapData_Cliff.cpp:61`, all under `wire-os-victor/engine/navMap/memoryMap/data/`).
+
+| Engine `EContentType` | SDK `NavNodeContentType` | Blocks the planner? |
+|---|---|---|
+| `Unknown` | `NAV_NODE_UNKNOWN` (0) | No. |
+| `ClearOfObstacle` | `NAV_NODE_CLEAR_OF_OBSTACLE` (1) | No. |
+| `ClearOfCliff` | `NAV_NODE_CLEAR_OF_CLIFF` (2) | No. |
+| `ObstacleObservable` | `NAV_NODE_OBSTACLE_CUBE` (3), which also covers the charger and custom objects | Only while the object's pose is verified. |
+| `ObstacleProx` | `NAV_NODE_OBSTACLE_PROXIMITY` (4), or `NAV_NODE_OBSTACLE_PROXIMITY_EXPLORED` (5) once explored | Only once confirmed; see 6.4. |
+| `ObstacleUnrecognized` | `NAV_NODE_OBSTACLE_UNRECOGNIZED` (6) | Yes. |
+| `Cliff` | `NAV_NODE_CLIFF` (7) | Yes. |
+| `InterestingEdge` | `NAV_NODE_INTERESTING_EDGE` (8) | No. Never written; see 6.4. |
+| `NotInterestingEdge` | `NAV_NODE_NON_INTERESTING_EDGE` (9) | No. Never written. |
+
+The planner asks each quad's data whether it is a collision type. The base class answers yes only
+for `ObstacleUnrecognized` and `Cliff` (`memoryMapData.h:47`). A proximity obstacle answers yes only
+once its belief is confirmed (`memoryMapData_ProxObstacle.h:41`, `:64`). A recognised object answers
+yes only while its pose is verified, and BlockWorld clears that flag when the object should have been
+seen and was not (`memoryMapData_ObservableObject.h:37-40`,
+`wire-os-victor/engine/blockWorld/blockWorld.cpp:1220`). `MapComponent::SetUseProxObstaclesInPlanning`
+sets a `_collidable` flag on every proximity obstacle
+(`wire-os-victor/engine/navMap/mapComponent.cpp:1332-1349`), but nothing reads that flag
+(`memoryMapData_ProxObstacle.h:44`, `:82`), so it has no effect.
+
+A new insertion does not always win. `CanOverrideSelfWithContent` decides, leaf by leaf, whether the
+incoming content may replace what is there (`memoryMapData.cpp:19-82`):
+
+| Incoming content | What it cannot replace |
+|---|---|
+| `Cliff` | An existing `Cliff`. Two cliffs are merged by a special transform instead. |
+| `ClearOfCliff` | Nothing. It replaces every type, cliffs and recognised objects included. |
+| `ClearOfObstacle` | `Cliff`, `ClearOfCliff`, `ObstacleUnrecognized` and `ObstacleObservable`. It does replace a proximity obstacle, whatever that obstacle's belief. |
+| `ObstacleProx` | `Cliff`, `ObstacleObservable`, and a proximity obstacle already marked explored. |
+| `NotInterestingEdge` | Anything except `InterestingEdge`. |
+| `Unknown`, `ObstacleObservable`, `ObstacleUnrecognized` | An existing `Cliff`. |
+
+These rules govern insertions. The timeout sweep in 6.5 and a few explicit transforms rewrite leaves
+directly and ignore them.
+
+### 6.4 What writes the map
+
+Every writer goes through `MapComponent` and writes into the map of the current origin. Six sources
+write in production, and two content types have no writer at all.
+
+**The time-of-flight proximity sensor.** On every robot state message, `ProxSensorComponent` looks up
+the robot's pose at the sensor reading's own timestamp from the pose history, rather than using the
+current pose, so a reading taken mid-turn lands where the beam was pointing
+(`wire-os-victor/engine/components/sensors/proxSensorComponent.cpp:150-170`). The distance is
+clamped to between 30 and 400 mm (`:92-93`, `:173`). The reading counts as an object only when the
+lift is out of the beam, the signal quality is above 0.01, the raw distance is under 400 mm, the
+sensor reports a valid range, and the robot's pitch at that moment is within 5 degrees of level
+either way (`:57-58`, `:177-182`). The pitch test keeps a tilted robot from mapping the floor or the
+ceiling. While the robot stays still, only 32 readings at one pose reach the map (`:64`,
+`:189-207`).
+
+`UpdateNavMap` then does two things (`:374-392`). It clears a region from the robot to 6 mm short of
+the reading, shaped as the sensor cone intersected with a strip no wider than the obstacle, and it
+stamps an obstacle 12 mm deep at the reading (`:318-371`). The cone's width is the distance times the
+aperture constant 0.4 (`:99`), and the obstacle's width is the same figure clamped to 18 mm (`:102`).
+That describes the case where the sensor found something. When nothing is in range, the code as
+written builds the clearing region around a default pose at the frame's origin instead of the robot's
+reading (`:184-187`, `:378-383`); section 8 has the details.
+
+**Obstacle belief.** A proximity obstacle carries a small counter, `_belief`, not a probability
+(`wire-os-victor/engine/navMap/memoryMap/data/memoryMapData_ProxObstacle.h:57-65`). A hit adds 4,
+capped at 100, and a clearing pass subtracts 6, floored at 0. Above 40 the obstacle is confirmed and
+blocks the planner, and only exactly 0 counts as clear. A new obstacle is created at 40
+(`memoryMapData_ProxObstacle.cpp:24`), one step short of confirmed. When a later stamp lands on a quad
+that already holds a proximity obstacle, `AddProxData` calls `MarkObserved` on the existing object
+instead of replacing it (`mapComponent.cpp:1285-1311`), so the second reading that overlaps a fresh
+obstacle confirms it. When a clearing region passes over one, `ClearRegion` calls `MarkClear` and
+turns the quad into `ClearOfObstacle` only once the counter reaches 0 (`mapComponent.cpp:1263-1282`).
+A fresh obstacle at 40 therefore needs seven clearing steps to disappear, and one saturated at 100
+needs seventeen. A step is applied once for every leaf holding that obstacle that the insertion
+visits, and the leaves one stamp covered share a single data object (6.2), so one reading can move
+the counter by several steps.
+
+**The cliff sensors.** A cliff enters the map only through a `CliffEvent` from the robot process
+(`wire-os-victor/engine/robotToEngineImplMessaging.cpp:421-445`), and the robot process sends one only
+when it stops for the cliff (`wire-os-victor/robot/supervisor/src/proxSensors.cpp:221-259`); 6.10
+explains why that matters. The engine computes the cliff's pose from the robot's pose at the event's
+timestamp and from which sensors fired (`cliffSensorComponent.cpp:335-427`). A combination it does not
+recognise, such as three sensors at once, is not inserted (`:379-383`). `UpdateNavMapWithCliffAt`
+stamps a bar 10 mm deep and `ROBOT_BOUNDING_Y` wide, which is 60 mm (`cliffSensorComponent.cpp:429-442`,
+`wire-os-victor/robot/include/anki/cozmo/shared/cozmoEngineConfig.h:44`). Once in the map, a cliff
+can be replaced by an insertion only if the insertion is `ClearOfCliff` (`memoryMapData.cpp:30-35`).
+
+**Driving.** Each tick, `MapComponent::UpdateRobotPose` checks whether the robot has moved about 8 mm
+or turned 20 degrees since it last reported (`mapComponent.cpp:73-75`, `:457-461`). If so, it marks the
+rectangle spanned by the four cliff sensors as `ClearOfCliff` and the robot's bounding footprint as
+`ClearOfObstacle` (`:469-483`). Driving over a proximity obstacle therefore erases it at once,
+whatever its belief. Driving is the ordinary source of `ClearOfCliff`, but not the only one:
+`BehaviorGoHome` marks the charger's docking area `ClearOfCliff` before driving onto it
+(`wire-os-victor/engine/aiComponent/behaviorComponent/behaviors/basicWorldInteractions/behaviorGoHome.cpp:414-420`).
+The same behaviour deletes every proximity obstacle when it starts, with a comment blaming stale ones
+for failed plans home (`behaviorGoHome.cpp:238-242`), and clears a disc between the robot and the
+charger (`behaviorGoHome.cpp:735-752`).
+
+**Wheel slip.** When the movement component reports an unexpected movement of the kind
+`TURNED_BUT_STOPPED` or `TURNED_IN_OPPOSITE_DIRECTION`, it assumes the robot has run into something it
+cannot see (`movementComponent.cpp:350-354`). It puts the robot's position back where the slip began,
+keeps the gyro heading, and inserts a 30 by 10 mm `ObstacleUnrecognized` in front, behind, or on the
+side the treads were turning toward (`:385-466`). The console variable that enables this defaults to
+true (`:50`).
+
+**Vision.** When BlockWorld reports a recognised object's pose, `AddObservableObject` inserts it
+(`mapComponent.cpp:996-1072`). A cube or custom object goes in as its bounding polygon on the floor.
+The charger goes in as a shaped charger region, joined with the habitat when the robot believes he is
+in one (`:1032-1048`). An object resting too high above the floor, such as a cube stacked on another,
+is remembered but not inserted (`:1016-1027`). `ClearRobotToMarkers` would clear the space between the
+robot and a marker he has seen (`:1205-1240`), but nothing in the tree calls it.
+
+The camera's ground-edge detection can extend a cliff but not create one. `AddVisionOverheadEdges`
+uses the edge points only if at least one drop-sensor cliff is already in the map and at least 20
+points survive a check against known obstacles (`mapComponent.cpp:1459-1551`, threshold at `:88`). It
+then fits a line with a Hough transform, a voting method for finding straight lines among points,
+and if the fit succeeds it rewrites the recorded pose of the newest drop-sensor cliff to lie on that
+line and stamps a strip 400 mm long and 20 mm deep along it as a cliff seen by vision (`:1567-1604`,
+sizes at `:91-92`).
+
+**The edge types are dead.** `InterestingEdge` is never written in production. A search of the whole
+tree finds exactly one construction of `MemoryMapData` with that type, in a unit test
+(`wire-os-victor/test/engine/testNavMap.cpp:65`); everywhere in the engine it is only compared
+against or erased. `NotInterestingEdge` is written only by `FlagQuadAsNotInterestingEdges`
+(`mapComponent.cpp:556-559`), which has no callers, and the override rules would let it replace only
+an `InterestingEdge` anyway. Neither SDK edge type can appear in a map from a stock robot.
+
+### 6.5 Forgetting
+
+`MapComponent::TimeoutObjects` sweeps the whole map every five seconds (`mapComponent.cpp:492-529`,
+period at `:80`). A quad whose type has a timeout and whose last observation is older than that is
+reset to a fresh `Unknown`, never to clear. The empty `MemoryMapDataPtr()` the sweep returns
+constructs a new `Unknown` data object (`memoryMapDataWrapper.h:37`, `memoryMapData.h:36`).
+
+| Content | Reset to `Unknown` after | Constant |
+|---|---|---|
+| `ObstacleUnrecognized` | 20 s | `kUnrecognizedTimeout_ms` |
+| `InterestingEdge`, `NotInterestingEdge` | 120 s | `kVisionTimeout_ms` |
+| `ObstacleProx` | 600 s | `kProxTimeout_ms` |
+| `Cliff` | 1200 s | `kCliffTimeout_ms` |
+
+The constants are at `mapComponent.cpp:77-81` and the comparison at `:516-520`. Despite its name,
+`kVisionTimeout_ms` applies only to the two edge types. `ClearOfObstacle` and `ClearOfCliff` never
+expire, and neither does `ObstacleObservable`. A recognised object leaves the map only when BlockWorld
+moves or removes it (`mapComponent.cpp:917-993`, `:1075-1119`). A cliff can therefore disappear in two
+ways: by a `ClearOfCliff` insertion, or by the twenty-minute timeout.
+
+### 6.6 Poses, origins and delocalization
+
+There is no global coordinate frame. Every pose is relative to a numbered origin, and the
+`PoseOriginList` hands out origin ids and tracks the current one
+(`wire-os-victor/coretech/common/engine/math/poseOriginList.h:29-79`). The SDK exposes the id as
+`PoseStruct.origin_id`, field 8, whose comment says 0 means none or unknown
+(`wire-pod-rs/crates/wirepod-proto/proto/vector/messages.proto`), and `NavMapFeedResponse.origin_id`
+names the origin a map is in. Poses with different origin ids cannot be compared.
+
+To delocalize is to give up the current coordinate frame. `Robot::Delocalize`
+(`wire-os-victor/engine/robot.cpp:651-778`) allocates a new origin (`:673-684`), places the robot at
+exactly zero position and zero heading in it (`:691-697`), and aborts any path in progress
+(`:754-755`). After every delocalization, the frame's +x is the direction the robot was facing at that
+moment.
+
+Four things trigger it. The main one is the treads state: `robot.cpp:987` sets `isDelocalizing`
+whenever the off-treads state changes and either the old or the new state is `OnTreads`, and
+`robot.cpp:1030-1035` then delocalizes. Picking the robot up is one such change and putting him down
+is another, so one pick-up burns two origins. The second trigger is a watchdog: if the engine and the
+robot process disagree about the pose frame for more than 100 consecutive state messages, which the
+comment puts at three seconds, the engine delocalizes to force a resync (`robot.cpp:1113-1138`). The
+engine also delocalizes once at startup (`robot.cpp:376-377`) and on a `ForceDelocalizeRobot`
+message (`wire-os-victor/engine/robotEventHandler.cpp:1594-1595`).
+
+Delocalizing deletes the map. `Delocalize` calls `BlockWorld::OnRobotDelocalized`, which forgets
+every located object and asks the map component for a map in the new origin
+(`blockWorld.cpp:1632-1645`). `CreateLocalizedMemoryMap` treats every existing map as a zombie when
+`kMergeOldMaps` is false, which is how it ships (`mapComponent.cpp:70`), erases each one, and then
+creates the new empty map (`mapComponent.cpp:667-718`). One pick-up leaves the robot with an empty map
+in a fresh frame.
+
+Relocalizing is narrower than the architecture notes suggest. The notes describe a "rejigger": when
+the robot re-sees an object from an older frame, the older frame is re-parented under the new one and
+the maps are merged (`wire-os-victor/docs/architecture/blockWorld.md:68`; the code is at
+`robot.cpp:1696-1731` and `mapComponent.cpp:399-444`). On this firmware that path is not reached from
+BlockWorld. The only object the robot localizes to is the charger, and BlockWorld looks for an
+existing charger only in the robot's current frame (`blockWorld.cpp:871-891`), under a comment that
+reads "VIC-14462: we no longer relocalize to objects in other origins due to rejiggering bugs, and the
+map timing out anyway" (`blockWorld.cpp:896`). Delocalizing has also cleared every located object,
+so nothing from an older frame survives to be merged across a pick-up. Localization, meaning the
+correction of the robot's pose from a landmark, happens only when he sees the charger again in the
+same frame and close to where he last saw it; his pose is then corrected to agree with it
+(`blockWorld.cpp:897-923`). The architecture notes explain why the charger is the only landmark: the
+cube is rarely connected, while the charger has a bigger marker and usually stays put
+(`blockWorld.md:74-76`).
+
+`RobotState.localized_to_object_id` reports that landmark. It holds the charger's object id after such
+a correction and -1 when the robot is localized to nothing (`robot.cpp:2347`; the unset `ObjectID` is
+-1 in `wire-os-victor/coretech/common/engine/objectIDs.h:86`, and the CLAD field carries the comment
+"Will be -1 if not localized to any object" in
+`wire-os-victor/clad/src/clad/externalInterface/messageEngineToGame.clad:126`). At -1 the pose comes
+from odometry alone, and the engine's own debug label for that state is "LocalizedTo: Odometry"
+(`robot.cpp:780-788`).
+
+The map does not survive a reboot. Nothing under `wire-os-victor/engine/navMap/` reads or writes a
+file; a search there for serialization and file streams finds nothing.
+
+### 6.7 Odometry, and the absence of SLAM
+
+Odometry is the robot's estimate of his own motion from his own sensors, and it runs in the robot
+process rather than the engine. `Localization::Update` reads the two wheel encoders and takes the
+distance each tread has travelled (`wire-os-victor/robot/supervisor/src/localization.cpp:433-441`),
+integrates that into x and y, and then overwrites the heading with the gyro's:
+`orientation_ = IMUFilter::GetRotation() + gyroRotOffset_` (`localization.cpp:639-640`). Heading comes
+from the gyro and distance from the encoders. While the robot is on the charger, wheel motion is
+ignored, so a robot slipping against the charger does not drift (`localization.cpp:445-450`).
+
+SLAM, simultaneous localization and mapping, names the family of methods that correct the pose
+against the map while building it, for example by recognising a place seen before (loop closure) or
+by tracking camera features between frames (visual odometry). None of that exists here. A
+case-insensitive search of `wire-os-victor/engine/` and `wire-os-victor/coretech/vision/` for "slam",
+"loop closure" and "visual odometry" finds three hits, all in engine comments about the lift
+slamming (`heldInPalmTracker.cpp:287`, `behaviorSleepCycle.cpp:1232`, `behaviorReactToSound.cpp:59`),
+and nothing at all in `coretech/vision/`. The pose is dead reckoning corrected only by charger
+sightings, and the map is drawn wherever that pose says the robot is.
+
+### 6.8 The planner
+
+`GoToPose` becomes a `DriveToPoseAction`. The handler builds the target from `x_mm`, `y_mm` and `rad`
+with z fixed at 0, parented to whatever origin is current when the request arrives
+(`wire-os-victor/engine/robotEventHandler.cpp:194-212`, next to a TODO asking for a better way to
+specify the target's parent). If the robot delocalizes during the action, the path is aborted (6.6).
+
+The path component picks a planner by the straight-line distance to the target
+(`wire-os-victor/engine/components/pathComponent.cpp:712-771`). Under 40 mm (`pathComponent.cpp:41`)
+it uses one of two small planners, `FaceAndApproachPlanner` or `MinimalAnglePlanner`
+(`pathComponent.cpp:99-100`). Neither checks for collisions while planning; the base class default
+for `ChecksForCollisions()` is false (`wire-os-victor/engine/pathPlanner.h:99-100`). Their output is
+checked afterwards, though. The path component runs it through the long planner's `CheckIsPathSafe`
+and replans with the long planner if it collides (`pathComponent.cpp:640-665`). From 40 mm up, the
+long planner is used directly.
+
+The long planner is `XYPlanner` (`wire-os-victor/engine/xyPlanner.h:41-61`), configured in
+`wire-os-victor/engine/xyPlannerConfig.h`. It is a bidirectional A*, a best-first graph search that
+grows one search from the start and one from the goal and stops where they meet (`:127`). The grid
+is 4-connected, so the only moves are +x, -x, +y and -y (`:54-59`), and the heuristic is Manhattan
+distance (`:87-90`, `:179-186`). The step is 32 mm (`:45`). When any of the four full steps from a
+point collides, the search also offers the four half steps from that point, so the step shrinks near
+obstacles (`:107-116`, `:142-159`). The halving is limited by `kMaxSubsampleDepth = 2`, whose comment
+reads "minimum step size of 8mm == navMap resolution" (`:46`); section 8 notes that the code as
+written allows one halving more than the comment says. The search gives up after 100000 expansions
+(`:51`, `:175`). A separate escape search, for a start point that is already inside an obstacle, is
+capped at 10000 (`:50`; see `wire-os-victor/docs/architecture/planner.md:58`).
+Each candidate point is tested against the map as a disc of radius 33 mm, half of `ROBOT_BOUNDING_Y`
+plus 3 mm of padding (`xyPlannerConfig.h:47-48`, `:155`), through `MapComponent::CheckForCollisions`,
+which asks whether any quad inside the disc is a collision type (`mapComponent.cpp:1368-1375`).
+
+The planner runs on its own thread, started in its constructor, and holds the map component by const
+reference, with a `static_assert` that fails the build if the reference ever loses its `const`
+(`wire-os-victor/engine/xyPlanner.cpp:44-58`). The plan is purely positional. `XYPlanner` snaps start
+and goal to the 32 mm grid, searches, puts the true end points back, and smooths the corners into arcs
+(`xyPlanner.cpp:156-236`, arc radii at `:33`). It never considers heading, so the robot point-turns at
+the start and at the end of every path (`planner.md:36`).
+
+`DriveToPoseAction` reports `PATH_PLANNING_FAILED_ABORT` in four places: when starting the plan fails
+(`wire-os-victor/engine/actions/driveToActions.cpp:682-687`), when the path component reports
+`Failed` (`driveToActions.cpp:704-708`), when planning runs past the action's timeout
+(`driveToActions.cpp:829-843`), and when a precomputed plan cannot be started
+(`driveToActions.cpp:864-869`). The timeout is `DEFAULT_MAX_PLANNER_COMPUTATION_TIME_S`, 6 s
+(`wire-os-victor/engine/actions/driveToActions.h:87`, `cozmoEngineConfig.h:96`).
+`PATH_PLANNING_FAILED_RETRY` is never produced. A search of the whole tree finds it only in its CLAD
+definition (`wire-os-victor/clad/src/clad/types/actionResults.clad:77`), in the protos, and in two
+comparisons (`driveToActions.cpp:808`, `behaviorGoHome.cpp:320`). A client that retries only on
+`RETRY` never retries.
+
+When the search simply finds no path, the action does not see a planning failure. `XYPlanner` sets
+`CompleteNoPlan` (`xyPlanner.cpp:233-236`), the path component treats that as a finished path and
+returns to `Ready` (`pathComponent.cpp:564-583`, `:326-333`), and the action then finds the robot
+away from the goal. Which result it reports then is in section 8.
+
+### 6.9 The `NavMapFeed` wire format
+
+`MemoryMap::GetBroadcastInfo` is the serializer (`memoryMap.cpp:248-287`). It folds over the tree
+and emits one record of content, depth and colour per leaf; internal nodes emit nothing
+(`memoryMap.cpp:267-282`). The root contributes the header: its height as `root_depth`, its side as
+`root_size_mm`, and its centre (`memoryMap.cpp:254-265`).
+
+The fold is `QuadTreeNode::Fold` with its default direction, which is named
+`FoldDirection::BreadthFirst` (`quadTreeNode.h:48`). Despite the name it is a pre-order depth-first
+walk: the accumulator runs on a node first, and the fold then recurses into each child in turn
+(`quadTreeNode.cpp:322-342`). `DepthFirst` in this code means post-order. Children are visited in the
+order `Subdivide` creates them (`quadTreeNode.cpp:73-77`), which is the order of the `EQuadrant`
+values (`quadTreeTypes.h:121-128`):
+
+| Index | `EQuadrant` | Offset from the parent's centre | In a nose-up drawing |
+|---|---|---|---|
+| 0 | `PlusXPlusY` | +x, +y | upper left |
+| 1 | `PlusXMinusY` | +x, -y | upper right |
+| 2 | `MinusXPlusY` | -x, +y | lower left |
+| 3 | `MinusXMinusY` | -x, -y | lower right |
+
+`depth` is the remaining height, not the depth from the root. The serializer writes `GetMaxHeight()`
+(`memoryMap.cpp:275`), and each child's height is its parent's minus one (`quadTreeNode.cpp:42`). The
+root carries `root_depth`, and a finest 8 mm leaf carries 0, because a node of height 0 refuses to
+subdivide (`quadTreeNode.cpp:71`). A leaf's side is `root_size_mm / 2^(root_depth - depth)`.
+
+The engine splits the list across CLAD `MemoryMapMessage`s, sent between a `MemoryMapMessageBegin`
+that carries the origin id and header and a `MemoryMapMessageEnd` (`mapComponent.cpp:806-827`), with
+the chunk size worked out from the message packet size (`mapComponent.cpp:721-732`). The gateway's
+`NavMapFeed` collects the chunks between begin and end, appends their quads in the order they arrive,
+and sends one `NavMapFeedResponse` per complete map
+(`wire-os-victor/cloud/cloud/message_handler.go:3432-3509`). It fills `root_center_z` with a
+hardcoded 0 (`message_handler.go:322-330`); the engine's internal header has z at 1, but the begin
+message has no field for it (`memoryMap.cpp:258-264`,
+`wire-os-victor/clad/src/clad/gateway/messageRobotToExternal.clad:300-307`). The content value is cast
+straight across, because the CLAD and proto enums share their numbering (`message_handler.go:332-338`,
+`wire-os-victor/clad/src/clad/types/memoryMap.clad:19-31`).
+
+`color_rgba` is the engine's own visualisation colour, from `GetNodeVizColor`
+(`memoryMap.cpp:92-141`), packed with red in the high byte and alpha in the low byte
+(`wire-os-victor/coretech/common/engine/colorRGBA.h:139-147`). It carries one thing the content type
+does not, which is a cliff's provenance. A cliff seen only by the drop sensors is black, one seen only
+by the camera is gold, and one seen by both is pink, each at alpha 0.8 (`memoryMap.cpp:114-125`). The
+function can also shade a proximity obstacle between green and cyan by its belief, but only while the
+console variable `kRenderProxBeliefs` is on, and it defaults to off (`memoryMap.cpp:39`, `:96-99`). On
+a stock robot every proximity obstacle is therefore plain cyan, or blue once explored, at full alpha,
+and the belief is not on the wire at all.
+
+`NavMapFeedRequest.frequency` is a period in seconds, not a frequency. The gateway forwards it as
+`SetMemoryMapBroadcastFrequency_sec` and logs it as seconds (`message_handler.go:3421-3430`). The
+engine stores it as `_broadcastRate_sec` (`mapComponent.cpp:327-331`) and advances the next broadcast
+time by whole multiples of it (`mapComponent.cpp:377-384`). The Python SDK sends 0.5 by default
+(`nav_map.py:381`). A negative value stops the feed. That is the engine's default, and it is what the
+gateway sends when the stream closes (`wire-os-victor/engine/navMap/mapComponent.h:239`,
+`message_handler.go:3440-3441`). Zero is not guarded: the engine divides by the period at
+`mapComponent.cpp:382`, so 0 gives a floating-point division by zero whose result is then converted
+to an integer, which is undefined behaviour in C++.
+
+The robot broadcasts only when the map has changed since its last broadcast (`mapComponent.cpp:347`,
+flags set at `mapComponent.cpp:392-396`). Setting the period does not mark the map as changed, so a
+client that connects to a robot whose map is not changing receives nothing until something does.
+
+The Python SDK's `NavMapGridNode.add_child` is the reference decoder (`nav_map.py:194-243`, driven
+from `nav_map.py:249-257`). It recurses; the same walk with an explicit stack goes like this. Create
+the root node from `map_info`, with height `root_depth`, side `root_size_mm` and centre
+`root_center_x`, `root_center_y`, and push a frame holding the root and a next-child index of 0. For
+each quad, in the order received, look at the node on top of the stack. If its height equals the
+quad's `depth`, that node is the quad: store the content, pop the frame, and advance the next-child
+index of the frame beneath. Otherwise, give the node four children if it has none yet, each at height
+one less, half the side, and centred a quarter of the parent's side away in the order +x+y, +x-y,
+-x+y, -x-y. Then push a frame for the child at the node's next-child index and look again. Whenever a
+frame's next-child index reaches 4, that node is full, so pop it as well and advance its parent's
+index. When the last quad is placed, the stack is empty.
+
+### 6.10 Behaviour control keeps cliffs out of the map
+
+Taking behaviour control at `OVERRIDE_BEHAVIORS` activates `SDKOverrideAll`, whose config sets
+`disableCliffDetection` (3.2;
+`wire-os-victor/resources/config/engine/behaviorComponent/behaviors/victorBehaviorTree/sdkBehaviors/SDKOverrideAll.json:8`).
+When the behaviour activates, `BehaviorSDKInterface` sends the robot process `EnableStopOnCliff(false)`
+(`wire-os-victor/engine/aiComponent/behaviorComponent/behaviors/sdkBehaviors/behaviorSDKInterface.cpp:233-235`,
+`wire-os-victor/engine/aiComponent/behaviorComponent/behaviorExternalInterface/beiRobotInfo.cpp:388-391`),
+which clears the firmware's `_stopOnCliff` (`proxSensors.cpp:337-340`).
+
+The firmware queues a `CliffEvent` only when it stops for a cliff (`proxSensors.cpp:221-259`). With
+`_stopOnCliff` false it does not stop, and it sends a `PotentialCliff` message instead
+(`proxSensors.cpp:260-266`). The engine's handler for that message can play an animation in one
+special mode and never touches the map (`robotToEngineImplMessaging.cpp:389-419`). With no
+`CliffEvent`, `HandleCliffEvent` never runs and no cliff is written. A script holding
+`OVERRIDE_BEHAVIORS` can therefore drive the robot off a table, and his map will not show the edge.
+Priority `DEFAULT` leaves cliff stopping on (`SDKDefault.json:8`), and deactivation turns it back on
+(`behaviorSDKInterface.cpp:261-264`).
+
+The engine has a separate switch with a similar name, and it is not the one involved.
+`HandleCliffEvent` returns early on a detected cliff when `IsCliffSensorEnabled()` is false
+(`robotToEngineImplMessaging.cpp:429-431`), but that flag is set only by the `EnableCliffSensor`
+message (`robotEventHandler.cpp:1553-1563`,
+`wire-os-victor/engine/components/sensors/cliffSensorComponent.h:69-70`), and the SDK behaviour does
+not send it. Under SDK control the cliff never reaches that check, because the firmware never
+reports it.
+
+---
+
+## 7. Things that will cost you a day
 
 **`EnableImageStreaming` waits for the vision system, so a sleeping robot never answers.** The
 gateway forwards the request and then blocks on a channel with no timeout and without consulting the
@@ -1090,9 +1571,29 @@ not.
 the prefix, decodes it, drops the result on the floor, and then slices the header at a fixed offset
 that is correct only for `Bearer `. Use `Bearer`.
 
+**Picking the robot up deletes his map.** Leaving the treads and landing again are two
+delocalizations, each one erases every existing map, and nothing is merged back. See
+[6.6](#66-poses-origins-and-delocalization).
+
+**`NavMapFeedRequest.frequency` is a period in seconds, and 0 is not safe.** Ask for 0.5 to get a map
+at most every half second. Zero reaches an unguarded division in the engine. A robot whose map is not
+changing sends nothing at all, however long you wait. See [6.9](#69-the-navmapfeed-wire-format).
+
+**A nav-map quad's `depth` counts up from the leaves.** A finest leaf is 0 and the root is
+`root_depth`. Decoding it as depth from the root puts every quad in the wrong place. See
+[6.9](#69-the-navmapfeed-wire-format).
+
+**`PATH_PLANNING_FAILED_RETRY` never arrives.** Planning failures come back as
+`PATH_PLANNING_FAILED_ABORT`, and a goal the planner cannot reach probably comes back as neither. See
+[6.8](#68-the-planner).
+
+**Under `OVERRIDE_BEHAVIORS` the robot neither stops at cliffs nor maps them.** The firmware stops
+reporting cliffs to the engine, so an edge a script drove him over is missing from the map afterwards.
+See [6.10](#610-behaviour-control-keeps-cliffs-out-of-the-map).
+
 ---
 
-## 7. What this document does not confirm
+## 8. What this document does not confirm
 
 `chipper.IsIntent`, the helper the robot uses to decide which half of an `IntentGraphResponse` to
 read, lives in `digital-dream-labs/api-clients`, which is not vendored in either checkout here and is
@@ -1123,3 +1624,42 @@ window are inferred from how the Python SDK validates it rather than read from t
 Whether the custom `wirepod-cert.crt` that `vic-cloud` appends at startup reaches the token
 connection depends on whether `gwatts/rootcerts` returns a shared pool or a fresh one. That module is
 not vendored and is not in the local Go module cache.
+
+Several points in section 6 are readings of the code that were not tested on a robot.
+
+What `GoToPose` returns for a goal the planner cannot reach is an inference. The chain up to the last
+step is in 6.8: `XYPlanner` reports no plan, the path component returns to `Ready`, and the action
+finds the robot away from the goal. The action then compares the last path id it sent with the last
+one the robot acknowledged (`wire-os-victor/engine/actions/driveToActions.cpp:762`). Both start at 0
+(`wire-os-victor/engine/components/pathComponent.h:293-294`) and are equal whenever the robot has
+acknowledged its latest path, which gives `FAILED_TRAVERSING_PATH` (`driveToActions.cpp:781`). Only a
+path still in flight would give `FOLLOWING_PATH_BUT_NOT_TRAVERSING` (`driveToActions.cpp:788`). The
+most likely answer to an unreachable goal is therefore `FAILED_TRAVERSING_PATH`, not a planning
+failure.
+
+The proximity sensor's clearing reads like a bug. Whenever a reading finds no object, `objectPose`
+is set to a default `Pose2d()`, which is the identity at the frame's origin
+(`wire-os-victor/engine/components/sensors/proxSensorComponent.cpp:184-187`,
+`wire-os-victor/coretech/common/engine/math/pose.cpp:25-29`). `UpdateNavMap` still clears on such a
+reading and builds the clearing region from that pose (`proxSensorComponent.cpp:318-355`,
+`:378-383`), so the region lies around the origin rather than in front of the robot. If that holds on
+a robot, a clear view ahead clears nothing, and a proximity obstacle goes away only when the robot
+drives over it, when a later reading of something farther along the same line clears past it, or when
+the 600 s timeout expires.
+
+The planner's minimum step disagrees with its own comment. `PlannerPoint::HalfStep` allows a half
+step while the depth is at most `kMaxSubsampleDepth`, which is 2, and a point at depth 2 has a step of
+8 mm, so its half step is 4 mm (`wire-os-victor/engine/xyPlannerConfig.h:101`, `:113-116`). The
+comment beside the constant says the minimum is 8 mm (`xyPlannerConfig.h:46`). Which of the two the
+robot's paths show has not been checked.
+
+The gateway's `NavMapFeed` reads the begin, data and end messages from three separate channels in one
+`select` (`wire-os-victor/cloud/cloud/message_handler.go:3443-3503`). Go chooses at random among
+ready cases, so if the handler falls behind, an end message could be taken before the last data chunk
+and a truncated map sent. That is an inference from the language's rules and has not been observed.
+
+wire-pod's first event stream is never read (3.4). Whether that matters depends on gRPC flow control.
+If the client's receive window fills, the gateway's send on that stream blocks, the stream's 512-slot
+channel fills, and 250 ms later the IPC manager removes the listener
+(`wire-os-victor/cloud/cloud/ipc_manager.go:234-250`). How long that would take with only
+`stimulation_info` events and one keep-alive a second has not been measured.
