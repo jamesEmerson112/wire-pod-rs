@@ -71,6 +71,9 @@ impl StateSlot {
     }
 
     /// Claims the stream, or answers `None` when one is already running.
+    ///
+    /// A new stream starts with no sample, so a pose left behind by a stream
+    /// that died is never read as his current one.
     pub fn claim(&self, cancel: CancellationToken) -> Option<Generation> {
         let mut inner = self.lock();
         if inner.current.is_some() {
@@ -79,6 +82,7 @@ impl StateSlot {
         let generation = inner.last_issued.next();
         inner.last_issued = generation;
         inner.current = Some(Claim { generation, cancel });
+        inner.latest = None;
         Some(generation)
     }
 
@@ -161,6 +165,10 @@ struct MapInner {
     last_issued: Generation,
     current: Option<Claim>,
     latest: Option<Arc<ReceivedMap>>,
+    /// Whether the feed holding the current or last claim has stored a map.
+    /// The last map outlives its feed, so a map being present says nothing
+    /// about whether the feed running now is receiving anything.
+    delivered: bool,
     error: Option<String>,
     watched_at: Duration,
 }
@@ -208,6 +216,7 @@ impl MapSlot {
         inner.last_issued = generation;
         inner.current = Some(Claim { generation, cancel });
         inner.error = None;
+        inner.delivered = false;
         Some(generation)
     }
 
@@ -243,6 +252,7 @@ impl MapSlot {
             return false;
         }
         inner.latest = Some(Arc::new(map));
+        inner.delivered = true;
         inner.error = None;
         true
     }
@@ -255,6 +265,12 @@ impl MapSlot {
         }
         inner.error = Some(error);
         true
+    }
+
+    /// True once the feed holding the current or last claim has stored a map
+    /// of its own, rather than showing one an earlier feed left.
+    pub fn delivered(&self) -> bool {
+        self.lock().delivered
     }
 
     /// The last map the robot sent.
@@ -315,6 +331,44 @@ mod tests {
             "the old generation cannot free the new claim"
         );
         assert!(slot.release(second));
+    }
+
+    #[test]
+    fn a_new_state_stream_does_not_inherit_a_dead_one_s_pose() {
+        let slot = StateSlot::new();
+        let dead = slot
+            .claim(CancellationToken::new())
+            .expect("the first claim succeeds");
+        assert!(slot.write(dead, RobotStateSample::default()));
+        // The robot ended the stream; the loop gave its claim back.
+        assert!(slot.release(dead));
+        slot.claim(CancellationToken::new())
+            .expect("a released slot can be claimed again");
+        assert_eq!(slot.latest(), None);
+    }
+
+    #[test]
+    fn a_map_kept_from_an_earlier_feed_is_not_a_delivery() {
+        let slot = MapSlot::new();
+        let first = slot
+            .claim(CancellationToken::new())
+            .expect("the first claim succeeds");
+        assert!(!slot.delivered());
+        assert!(slot.write(
+            first,
+            ReceivedMap {
+                frame: frame(3),
+                received_ms: 1,
+            },
+        ));
+        assert!(slot.delivered());
+        assert!(slot.release(first));
+
+        // A new feed shows the old map but has delivered nothing of its own.
+        slot.claim(CancellationToken::new())
+            .expect("a released slot can be claimed again");
+        assert!(slot.latest().is_some());
+        assert!(!slot.delivered());
     }
 
     #[test]

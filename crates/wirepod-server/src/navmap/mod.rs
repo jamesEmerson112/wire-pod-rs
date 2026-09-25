@@ -38,10 +38,13 @@
 //! with red in the high byte and alpha in the low byte. `counts` has one key
 //! per content type, named as [`NavContent::name`] names them.
 //!
-//! `map` is null until a map has arrived, and `robot` is null until a state
-//! sample has. `status` is `starting` when this request started the feed,
-//! `waiting_for_map` while a feed runs with no map yet, `streaming` once a map
-//! has arrived, and otherwise the feed's error text.
+//! `map` is null until a map has arrived, and it may be one an earlier feed
+//! left, with `received_ms` saying how old. `robot` is null unless the state
+//! stream is running and has sent a sample. `status` is `starting` when this
+//! request started the feed, `waiting_for_map` while the running feed has
+//! delivered no map of its own, `streaming` once it has, and otherwise error
+//! text: the feed's failure, including the previous failure when this request
+//! restarted a failed feed.
 //!
 //! [`NavContent::name`]: wirepod_core::robot::navmap::NavContent::name
 
@@ -56,6 +59,7 @@ use tokio_util::sync::CancellationToken;
 use wirepod_core::robot::navmap::{ContentCounts, NavContent, ReconstructError, reconstruct};
 use wirepod_core::robot::navmap_feed::MapFeed;
 use wirepod_core::robot::observe::ReceivedMap;
+use wirepod_core::robot::state_stream::spawn_state_stream;
 use wirepod_core::{AppState, Esn, RobotEntry, RobotStateSample};
 
 use crate::{form, literals, reply};
@@ -72,8 +76,12 @@ pub const STARTING: &str = "starting";
 /// `status` while the feed runs and no map has arrived.
 pub const WAITING_FOR_MAP: &str = "waiting_for_map";
 
-/// `status` once a map has arrived.
+/// `status` once the running feed has delivered a map.
 pub const STREAMING: &str = "streaming";
+
+/// `status` when the robot's connection closed while this request was reading
+/// it. The next poll dials a new one.
+pub const CONNECTION_CLOSED: &str = "the robot's connection closed; retrying";
 
 const PAGE: &str = include_str!("navmap.html");
 
@@ -107,12 +115,20 @@ pub async fn snapshot(State(state): State<Arc<AppState>>, req: Request) -> Respo
 }
 
 /// Touches the robot, renews the lease, starts the feed if it is not running,
-/// and reads what both streams last reported.
-fn watch(state: &AppState, entry: &RobotEntry) -> Snapshot {
+/// reopens a state stream the robot has ended, and reads what both streams last
+/// reported.
+fn watch(state: &AppState, entry: &Arc<RobotEntry>) -> Snapshot {
     let now = state.clock().now();
     entry.touch(now);
     let slot = &entry.session.map_feed;
     slot.watch(now);
+
+    // The robot can end the state stream while the connection lives, after a
+    // reboot of his gateway or a brief network drop. Nothing else reopens it,
+    // and reopening uses the connection already held, so it dials nothing.
+    if state.registry().opens_state_stream() && !entry.session.state_stream.is_running() {
+        spawn_state_stream(entry, state.timings().motion_window);
+    }
 
     // Read before the claim, which clears it.
     let previous_error = slot.error();
@@ -138,6 +154,30 @@ fn watch(state: &AppState, entry: &RobotEntry) -> Snapshot {
         None => false,
     };
 
+    // A disconnect on another thread can remove this entry between the lookup
+    // and the claims above. It stops the slots it finds, so a claim made after
+    // that stop would run on a connection nobody owns any more. Checking once
+    // the claims are made closes the window: a disconnect that has not yet
+    // removed the entry will still stop them.
+    let current = state
+        .registry()
+        .peek(&entry.esn)
+        .is_some_and(|live| Arc::ptr_eq(&live, entry));
+    if !current {
+        for cancel in [slot.stop(), entry.session.state_stream.stop()]
+            .into_iter()
+            .flatten()
+        {
+            cancel.cancel();
+        }
+        return Snapshot {
+            serial: entry.esn.as_str().to_owned(),
+            status: CONNECTION_CLOSED.to_owned(),
+            map: None,
+            robot: None,
+        };
+    }
+
     let (map, malformed) = match slot.latest().as_deref().map(map_json) {
         Some(Ok(map)) => (Some(map), None),
         Some(Err(err)) => (None, Some(err.to_string())),
@@ -151,9 +191,12 @@ fn watch(state: &AppState, entry: &RobotEntry) -> Snapshot {
         previous_error.unwrap_or_else(|| STARTING.to_owned())
     } else if let Some(error) = slot.error() {
         error
-    } else if map.is_some() {
+    } else if slot.delivered() {
         STREAMING.to_owned()
     } else {
+        // Including when an earlier feed's map is on show: the robot sends his
+        // map only when it changes, so a feed can run a long time before its
+        // first one, and the page should not call an old map live.
         WAITING_FOR_MAP.to_owned()
     };
 
@@ -161,7 +204,14 @@ fn watch(state: &AppState, entry: &RobotEntry) -> Snapshot {
         serial: entry.esn.as_str().to_owned(),
         status,
         map,
-        robot: entry.session.state_stream.latest().map(robot_json),
+        // Only a running stream's sample is his current pose.
+        robot: entry
+            .session
+            .state_stream
+            .is_running()
+            .then(|| entry.session.state_stream.latest())
+            .flatten()
+            .map(robot_json),
     }
 }
 

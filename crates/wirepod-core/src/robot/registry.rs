@@ -194,6 +194,13 @@ impl RobotRegistry {
         self
     }
 
+    /// Whether this registry opens the connect-time state stream, so that a
+    /// caller that finds the stream dead on a live connection knows whether to
+    /// reopen it.
+    pub fn opens_state_stream(&self) -> bool {
+        self.state_stream
+    }
+
     /// The durations this registry waits on.
     pub fn timings(&self) -> &Timings {
         &self.timings

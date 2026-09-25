@@ -57,9 +57,9 @@ fn response_status(status: Option<&pb::ResponseStatus>) -> &'static str {
 
 /// `BehaviorResults`, by name.
 ///
-/// `WONT_ACTIVATE` is the signal worth watching for: it is what the robot says
-/// when the behaviour could not start, which is almost always because the
-/// caller did not hold behaviour control.
+/// A behaviour request is handled only while the SDK behaviour holds control,
+/// so without control the call never answers at all. `WONT_ACTIVATE` is sent
+/// only when control is held and the behaviour asked for refuses to start.
 fn behavior_result(result: i32) -> &'static str {
     match pb::BehaviorResults::try_from(result) {
         Ok(pb::BehaviorResults::BehaviorInvalidState) => "INVALID_STATE",
@@ -101,6 +101,10 @@ fn action_result(result: Option<&pb::action_result::ActionResultCode>) -> String
         // Never produced by the robot; see the doc comment above.
         pb::action_result::ActionResultCode::PathPlanningFailedRetry => "PATH_PLANNING_RETRY",
         pb::action_result::ActionResultCode::StillOnCharger => "STILL_ON_CHARGER",
+        // The action's tag is still in use on the robot, for instance after a
+        // server restart began the tag counter again while an older action was
+        // pending.
+        pb::action_result::ActionResultCode::BadTag => "BAD_TAG",
         pb::action_result::ActionResultCode::UnexpectedPitchAngle => "UNEXPECTED_PITCH",
         other => return format!("code={}", *other as i32),
     };

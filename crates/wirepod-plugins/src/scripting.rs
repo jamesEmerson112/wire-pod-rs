@@ -34,8 +34,10 @@ getHTTPRequest(url, timeout int) (resp string)
 
 <additions with no Go counterpart>
 <each blocks and returns what the robot answered, so a script can branch on it>
+<the answer is two words, the status and the result, as in RESPONSE_RECEIVED SUCCESS;>
+<the robot always sets the status to RESPONSE_RECEIVED here, so test the second word>
 <timeout is in seconds; leave it out for 30>
-<goToPose needs behavior control, or it waits out the whole timeout>
+<both need behavior control, or they wait out the whole timeout>
 <behavior control at 10 turns off his cliff reaction until release; drive him on the floor>
 <behavior control at 20 keeps the cliff reaction on and still lets goToPose run>
 goToPose(xMm, yMm, angleRad float, timeout float) (result string)
@@ -375,7 +377,7 @@ fn sdk_tag(n: u32) -> i32 {
     (first + n % span) as i32
 }
 
-/// The bound on the best-effort cancel a timed-out `goToPose` sends.
+/// The bound on the best-effort cancel a timed-out action sends.
 const CANCEL_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn next_sdk_tag() -> i32 {
@@ -417,8 +419,11 @@ where
 }
 
 /// Drives him to `(x_mm, y_mm)` facing `angle_rad`, and returns his answer,
-/// such as `OK SUCCESS` or `OK PATH_PLANNING_FAILED`, the RPC error, or a
-/// timeout message once `timeout_s` (30 by default) has passed.
+/// such as `RESPONSE_RECEIVED SUCCESS` or
+/// `RESPONSE_RECEIVED PATH_PLANNING_FAILED`, the RPC error, or a timeout
+/// message once `timeout_s` (30 by default) has passed. The robot's gateway
+/// sets the status word of an action's reply to `RESPONSE_RECEIVED` whatever
+/// happened, so the second word is the one to test.
 ///
 /// - Without behaviour control he queues the action and never answers, so call
 ///   `assumeBehaviorControl` first. At priority 10 (`OVERRIDE_BEHAVIORS`) that
@@ -449,8 +454,12 @@ fn go_to_pose(lua: &Lua, args: (Value, Value, Value, Value)) -> mlua::Result<Str
     let esn = session.esn().as_str().to_owned();
     let id_tag = next_sdk_tag();
     let sent = format!("x_mm={x_mm} y_mm={y_mm} rad={rad} id_tag={id_tag}");
+    let timed_out = sent.clone();
+    // The robot relays an action's result only while the SDK behaviour is
+    // active, so a missing control lock is the usual cause, but a pick-up or a
+    // cliff reaction that interrupts the behaviour ends the same way.
     let on_timeout = format!(
-        "timeout after {timeout:?}: GoToPose never answers unless the script holds behavior control (assumeBehaviorControl)"
+        "timeout after {timeout:?}: GoToPose never answered; it answers only while the script holds behavior control (assumeBehaviorControl), and a pick-up or cliff reaction can interrupt it; the move was cancelled"
     );
     Ok(block_on_action(
         timeout,
@@ -475,6 +484,14 @@ fn go_to_pose(lua: &Lua, args: (Value, Value, Value, Value)) -> mlua::Result<Str
             .map_err(|status| status_error(&status))
         },
         async move {
+            // The deadline dropped the logged call before it could write its
+            // line, so the timeout gets one here.
+            tracing::debug!(
+                target: "sdkapp",
+                comp = COMP_LUA,
+                bot = esn,
+                "motion GoToPose({timed_out}) no answer within {timeout:?}"
+            );
             // Best effort: the answer goes to the log, and the script already has
             // its timeout message.
             let cancelled = tokio::time::timeout(
@@ -499,13 +516,24 @@ fn go_to_pose(lua: &Lua, args: (Value, Value, Value, Value)) -> mlua::Result<Str
     ))
 }
 
-/// Has him look around where he stands, and returns his answer, such as
-/// `OK COMPLETE` or `OK WONT_ACTIVATE`, the RPC error, or a timeout message
-/// once `timeout_s` (30 by default) has passed.
+/// Has him look around where he stands, and returns his answer, normally
+/// `RESPONSE_RECEIVED COMPLETE`, the RPC error, or a timeout message once
+/// `timeout_s` (30 by default) has passed.
+///
+/// Like `goToPose`, it answers only while the script holds behaviour control;
+/// without it the call waits out its timeout. `WONT_ACTIVATE` comes back only
+/// when control is held and the look-around refuses to start. On a timeout the
+/// behaviour is cancelled, because a look-around still running keeps his
+/// external movement commands switched off, so the script's next move would be
+/// silently ignored.
 fn look_around_in_place(lua: &Lua, timeout: Value) -> mlua::Result<String> {
     let timeout = action_timeout(lua, timeout);
     let (mut client, session) = g_rf_ls_with_session(lua)?;
-    let on_timeout = format!("timeout after {timeout:?}: LookAroundInPlace did not answer");
+    let mut canceller = client.clone();
+    let esn = session.esn().as_str().to_owned();
+    let on_timeout = format!(
+        "timeout after {timeout:?}: LookAroundInPlace never answered; it answers only while the script holds behavior control (assumeBehaviorControl); the behavior was cancelled"
+    );
     Ok(block_on_action(
         timeout,
         on_timeout,
@@ -521,7 +549,24 @@ fn look_around_in_place(lua: &Lua, timeout: Value) -> mlua::Result<String> {
             .map(|response| response.get_ref().describe())
             .map_err(|status| status_error(&status))
         },
-        std::future::ready(()),
+        async move {
+            let cancelled = tokio::time::timeout(
+                CANCEL_TIMEOUT,
+                canceller.cancel_behavior(pb::CancelBehaviorRequest {}),
+            )
+            .await;
+            let outcome = match cancelled {
+                Ok(Ok(_)) => "sent".to_owned(),
+                Ok(Err(status)) => status_error(&status).to_string(),
+                Err(_) => format!("no answer within {CANCEL_TIMEOUT:?}"),
+            };
+            tracing::debug!(
+                target: "sdkapp",
+                comp = COMP_LUA,
+                bot = esn,
+                "motion LookAroundInPlace() no answer within {timeout:?}; CancelBehavior: {outcome}"
+            );
+        },
     ))
 }
 
