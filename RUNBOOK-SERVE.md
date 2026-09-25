@@ -74,9 +74,9 @@ To look at the Rust web UI without taking Vector off the Go server, serve HTTP o
 - `behavior control granted at OVERRIDE_BEHAVIORS; cliff detection is off until release` marks the hazard above.
 - A nav map summary appears when the feed starts and stops, on every origin change, and at most once a minute otherwise.
 
-**When state lines appear.** The state stream is open whenever the server holds a connection to him: while the SDK dashboard or the map page is open, while a Lua script runs, and whenever the battery watchdog or the jdocs pinger reaches him. The server never dials him just to watch, so during a voice session with nothing else open there may be no state lines at all. Open the map page to get them.
+**When state lines appear.** The state stream opens when the server connects to him: when the SDK dashboard or the map page is opened, when a Lua script runs, and whenever the battery watchdog or the jdocs pinger reaches him. The server never dials him just to watch, so during a voice session with nothing else open there may be no state lines at all; open the map page to get them. If he ends the stream while the connection lives, after a reboot of his gateway or a network blip, the map page reopens it on its next poll, and until then the page shows no pose rather than a stale one.
 
-**Driving him from a script.** `goToPose(x_mm, y_mm, angle_rad)` and `lookAroundInPlace()` return his answer as text. `goToPose` never answers without behaviour control, so it gives up after 30 seconds and cancels the queued move by its tag. A first script to try, on the floor:
+**Driving him from a script.** `goToPose(x_mm, y_mm, angle_rad)` and `lookAroundInPlace()` return his answer as two words, the status and the result, such as `RESPONSE_RECEIVED SUCCESS`. The robot sets the status to `RESPONSE_RECEIVED` for these whatever happened, so test the second word, for example `string.find(answer, "SUCCESS")`. Both answer only while the script holds behaviour control; without it they give up after 30 seconds and cancel what they asked for, `goToPose` by its tag and `lookAroundInPlace` with `CancelBehavior`. A first script to try, on the floor:
 
 ```lua
 assumeBehaviorControl(20)
@@ -85,4 +85,4 @@ sayText(lookAroundInPlace(), false)
 releaseBehaviorControl()
 ```
 
-Run it with `curl -X POST http://localhost:8080/api-lua/run_script -d '{"esn":"00303f28","script":"..."}'`, or attach it to a custom intent. The coordinates are in whatever frame he is in when the call arrives. That frame's origin is where he was last put down, or where he started up if he has not been lifted since, facing the way he faced then. So `(200, 0)` means 200 mm straight ahead of that spot, not 200 mm ahead of wherever he is now; the map page shows both.
+Run it by posting `{"esn":"00303f28","script":"..."}` to `/api-lua/run_script`, with the script JSON-escaped onto one line, or attach it to a custom intent. From Git Bash: `curl -X POST http://localhost:8080/api-lua/run_script -d '{"esn":"00303f28","script":"..."}'`. From PowerShell, where `curl` is a different command: `Invoke-RestMethod -Method Post -Uri http://localhost:8080/api-lua/run_script -Body '{"esn":"00303f28","script":"..."}'`. The coordinates are in whatever frame he is in when the call arrives. That frame's origin is where he was last put down, or where he started up if he has not been lifted since, facing the way he faced then. So `(200, 0)` means 200 mm straight ahead of that spot, not 200 mm ahead of wherever he is now; the map page shows both.

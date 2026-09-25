@@ -157,9 +157,11 @@ usual cause. Debug level only, so the web UI's default log still matches Go's.
 event stream the moment it connects to a robot (`robot.go:372-384`) and never
 reads it; this port had left it out. It now opens with whitelist
 `["robot_state"]` and the same empty connection id, so the robot's gateway treats
-it exactly as it treats Go's, and it lives as long as the connection. It writes a
-line only for an urgent change (delocalization, pick-up, fall, cliff) or inside a
-three-second window after a motion call, where it says whether he moved. The stim
+it exactly as it treats Go's, and it lives as long as the connection; the map
+page reopens it if the robot ends it early. It writes a line only for an urgent
+change (delocalization, localization, being picked up or held, a fall, a cliff)
+or inside a three-second window after a motion call, where it says whether he
+moved. The stim
 stream is unchanged and still asks for `stimulation_info` alone. The code is
 `crates/wirepod-core/src/robot/state_stream.rs` and `robotstate.rs`.
 
@@ -209,6 +211,23 @@ From the motion and map logging work of 2026-09-25, to check against the robot:
   sends a stop, so that stream runs until the idle sweep.
 - `goToPose` answers `code=...` for any action result `motionlog.rs` does not
   name; widen the list if the robot turns out to use others.
+- Found by the pre-push audit of the same work, to check on the robot:
+  - The nav map channel sets no HTTP/2 keep-alive, so a robot that drops off
+    the network without closing the connection may leave the feed waiting on a
+    dead stream, reported as waiting for a map, until another call on the
+    channel fails.
+  - He can flip between localized and dead reckoning when the charger is
+    marked dirty and then seen again (`blockWorld.cpp:1622`), and each flip is
+    an urgent line, so a roaming robot is not as quiet in the log as a still
+    one.
+  - The robot's gateway hands each action response to every waiting listener,
+    so the `CANCELLED` result of a timed-out `goToPose` can answer a
+    `goToPose` sent just after it.
+  - The action tag counter starts again at 2000001 on every server start, and
+    the Python SDK uses the same window, so a tag still pending on the robot
+    makes the next `goToPose` answer `BAD_TAG`.
+  - `to_number` differs from gopher-lua's `ToNumber` for strings with a leading
+    zero, which gopher-lua reads as octal.
 
 - `MakeLuaState` preloads `gopher-lua-libs` in Go, about thirty Go-written modules a script can `require`: json, http, strings, time, filepath and the rest. The Rust host gives a script mlua's own standard library instead, so a script that requires one of those modules fails where Go's would not. Nothing in the vendored web UI ships such a script, so this shows up only for a script the user writes.
 - The SSH client has never spoken to the robot. `russh` negotiates key exchange and ciphers differently from Go's `golang.org/x/crypto/ssh`, and Vector runs dropbear, so the first real onboarding attempt is the test. `/api-ssh/setup` is the route to watch.
