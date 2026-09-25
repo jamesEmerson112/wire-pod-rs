@@ -153,6 +153,29 @@ tell a robot that obeyed from one that ignored us. Behaviour control grants and
 releases get a line for the same reason, since a missing control lock is the
 usual cause. Debug level only, so the web UI's default log still matches Go's.
 
+**Go's connect-time event stream is back, reading `robot_state`.** Go opens an
+event stream the moment it connects to a robot (`robot.go:372-384`) and never
+reads it; this port had left it out. It now opens with whitelist
+`["robot_state"]` and the same empty connection id, so the robot's gateway treats
+it exactly as it treats Go's, and it lives as long as the connection. It writes a
+line only for an urgent change (delocalization, pick-up, fall, cliff) or inside a
+three-second window after a motion call, where it says whether he moved. The stim
+stream is unchanged and still asks for `stimulation_info` alone. The code is
+`crates/wirepod-core/src/robot/state_stream.rs` and `robotstate.rs`.
+
+**A nav map feed, a page and a snapshot route.** `/navmap` serves a page
+compiled into the binary, and `/api-navmap/snapshot` answers the robot's latest
+map with every quad's position reconstructed, plus his latest state. The feed is
+a `NavMapFeed` stream Go never opens, and it runs only while the page keeps
+polling. The code is `crates/wirepod-core/src/robot/navmap.rs`, `navmap_feed.rs`
+and `crates/wirepod-server/src/navmap/`.
+
+**Two Lua globals.** `goToPose` and `lookAroundInPlace` have no Go counterpart.
+Unlike the translated globals they return the robot's decoded answer, and a
+timed-out `goToPose` cancels its queued action.
+
+The engine facts all of this rests on are in section 6 of `docs/robot-api.md`.
+
 ## The robot's own API
 
 `docs/robot-api.md` is the reference for what the robot exposes and expects, read out of the WireOS sources at `E:/GitHub/wire-os-victor`. Read it before translating anything that talks to the robot. Two findings from it change how the port should behave, and both are on the list below: taking behaviour control is the only SDK message that wakes a sleeping robot, and the robot's own `settings.proto` numbers its fields differently from the copy this port vendors.
@@ -170,6 +193,22 @@ usual cause. Debug level only, so the web UI's default log still matches Go's.
 ## Debug and optimization list
 
 Nothing here is acted on until translation is 100%.
+
+From the motion and map logging work of 2026-09-25, to check against the robot:
+
+- The state stream writes every flip of an urgent flag. If his cliff sensor
+  flickers at a table edge, each flip takes a log-ring slot. Measure it before
+  rate-limiting anything.
+- A map page left open against a robot that refuses the nav map feed restarts
+  the feed on every poll, one RPC a second.
+- How the robot's gateway treats the state stream while he sleeps on the charger
+  is unknown.
+- The battery watchdog caches its own `Arc<RobotEntry>`
+  (`crates/wirepod-server/src/sdkapp/batterywatchdog.rs`), so it can hold an
+  evicted connection open. Closing a dashboard tab while Stim is showing never
+  sends a stop, so that stream runs until the idle sweep.
+- `goToPose` answers `code=...` for any action result `motionlog.rs` does not
+  name; widen the list if the robot turns out to use others.
 
 - `MakeLuaState` preloads `gopher-lua-libs` in Go, about thirty Go-written modules a script can `require`: json, http, strings, time, filepath and the rest. The Rust host gives a script mlua's own standard library instead, so a script that requires one of those modules fails where Go's would not. Nothing in the vendored web UI ships such a script, so this shows up only for a script the user writes.
 - The SSH client has never spoken to the robot. `russh` negotiates key exchange and ciphers differently from Go's `golang.org/x/crypto/ssh`, and Vector runs dropbear, so the first real onboarding attempt is the test. `/api-ssh/setup` is the route to watch.
