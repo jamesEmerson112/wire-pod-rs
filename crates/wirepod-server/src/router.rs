@@ -23,12 +23,12 @@ use axum::Router;
 use axum::extract::{Request, State};
 use axum::middleware::{self, Next};
 use axum::response::Response;
-use axum::routing::any;
+use axum::routing::{any, get};
 use http::Uri;
 use wirepod_core::AppState;
 
 use crate::sdkapp::cam::CAM_STREAM_PATH;
-use crate::{api, conncheck, initweb, mux, reply, sdkapp, ssh_api, webroot};
+use crate::{api, conncheck, initweb, mux, navmap, reply, sdkapp, ssh_api, webroot};
 
 /// The port `BeginServer` serves the mux from, for the robot's conn check
 /// (`server.go:824`).
@@ -129,6 +129,10 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // (`webserver.go:429`).
         .route(webroot::SESSION_CERTS_PREFIX, any(webroot::cert_handler))
         .route("/session-certs/*rest", any(webroot::cert_handler))
+        // The nav map page and its snapshot have no Go counterpart, so they
+        // are exact GET routes outside `/api-sdk/`, whose dispatcher is Go's.
+        .route(navmap::PAGE_PATH, get(navmap::page))
+        .route(navmap::SNAPSHOT_PATH, get(navmap::snapshot))
         .fallback(fallback)
         .with_state(state);
 
