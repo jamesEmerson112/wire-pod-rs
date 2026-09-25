@@ -96,6 +96,9 @@ async fn load_state(
         .sdk_ini(sdk_ini)
         .logs(logs)
         .wall(wall)
+        // Go's connect-time event stream, which this server reads for the
+        // robot's own state.
+        .state_stream(true)
         .build();
     *state
         .custom_intents()
