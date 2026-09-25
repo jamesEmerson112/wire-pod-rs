@@ -211,8 +211,7 @@ async fn a_malformed_map_is_dropped_and_the_last_good_one_kept() {
         vec![
             "nav map feed started, at most one map per 500ms",
             "nav map origin=3 root=128mm depth=4 quads=1 clear_of_obstacle=1",
-            "kept the last good map (1 dropped so far): malformed nav map: 1 quads do not cover \
-             the root",
+            "dropped a nav map (1 so far): malformed nav map: 1 quads do not cover the root",
             "nav map feed stopped (stream ended) after 1 maps and 2 malformed; last origin=3 \
              root=128mm depth=4 quads=1 clear_of_obstacle=1",
         ],

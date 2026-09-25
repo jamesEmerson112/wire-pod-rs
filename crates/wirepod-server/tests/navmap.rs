@@ -196,6 +196,12 @@ async fn a_snapshot_starts_the_feed_once_and_answers_the_placed_map() {
     assert_eq!(first["map"], Value::Null);
     assert_eq!(first["robot"], Value::Null);
 
+    // The first poll claimed the feed before it answered, so this one finds
+    // it running with nothing to show yet.
+    let waiting = parse(&server.get(SNAPSHOT).await);
+    assert_eq!(waiting["status"], "waiting_for_map");
+    assert_eq!(waiting["map"], Value::Null);
+
     let robot = entry(&server);
     script
         .send(Ok(split_root()))

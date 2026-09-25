@@ -281,7 +281,7 @@ impl MapLog {
             target: "sdkapp",
             comp = COMP_SDK,
             bot = bot,
-            "kept the last good map ({} dropped so far): {err}",
+            "dropped a nav map ({} so far): {err}",
             self.dropped,
         );
     }
