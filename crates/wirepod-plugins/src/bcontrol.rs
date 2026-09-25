@@ -7,11 +7,13 @@ use mlua::{Lua, Value};
 use tokio::runtime::Handle;
 use tokio::sync::{Mutex as AsyncMutex, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
+use wirepod_core::logger::COMP_LUA;
 use wirepod_core::{ConnError, StatusCode};
 use wirepod_proto::anki::vector::external_interface as pb;
+use wirepod_vector::motionlog::{control_granted, control_released};
 use wirepod_vector::status_error;
 
-use crate::scripting::{g_rf_ls, to_int};
+use crate::scripting::{g_rf_ls_with_esn, to_int};
 
 fn control_release() -> pb::BehaviorControlRequest {
     pb::BehaviorControlRequest {
@@ -48,7 +50,7 @@ pub fn set_b_control_functions(lua: &Lua) -> mlua::Result<()> {
 
     let assumed = Arc::clone(&currently_assumed);
     let assume = lua.create_function(move |lua, arg: Value| {
-        let mut client = g_rf_ls(lua)?;
+        let (mut client, esn) = g_rf_ls_with_esn(lua)?;
         // Go seeds `priority` with OVERRIDE_BEHAVIORS and only then tests it
         // against the four valid values, so the warning is unreachable and the
         // argument always wins.
@@ -71,6 +73,7 @@ pub fn set_b_control_functions(lua: &Lua) -> mlua::Result<()> {
         };
         let start = start_tx.clone();
         let stop = Arc::clone(&stop_rx);
+        let granted_priority = priority;
         handle.spawn(async move {
             // * begin - modified from official vector-go-sdk
             let (sender, receiver) = mpsc::channel(4);
@@ -86,6 +89,7 @@ pub fn set_b_control_functions(lua: &Lua) -> mlua::Result<()> {
             loop {
                 match r.message().await {
                     Ok(Some(ctrlresp)) if granted(&ctrlresp) => {
+                        control_granted(COMP_LUA, &esn, granted_priority);
                         let _ = start.send(()).await;
                         break;
                     }
@@ -101,6 +105,7 @@ pub fn set_b_control_functions(lua: &Lua) -> mlua::Result<()> {
             // Go's wait is a `select` with a `default` arm, which spins a core
             // at full tilt until the stop arrives; awaiting removes the spin.
             stop.lock().await.recv().await;
+            control_released(COMP_LUA, &esn);
             if let Err(err) = sender.send(control_release()).await {
                 tracing::debug!(comp = "", "{err}");
             }

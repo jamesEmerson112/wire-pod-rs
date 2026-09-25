@@ -3,9 +3,15 @@
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
+use wirepod_core::logger::COMP_SDK;
 use wirepod_core::{ConnError, RobotEntry, StatusCode};
 use wirepod_proto::anki::vector::external_interface as pb;
+use wirepod_vector::motionlog::{control_granted, control_released};
 use wirepod_vector::{sdk_client, status_error};
+
+/// The priority both helpers ask for, named once so the log line and the
+/// request cannot drift apart.
+const OVERRIDE_BEHAVIORS: i32 = pb::control_request::Priority::OverrideBehaviors as i32;
 
 /// What a call answers when the connection is not a tonic one, which only a
 /// test fake is.
@@ -73,6 +79,7 @@ pub async fn say_text(entry: &RobotEntry, text: &str) -> Result<(), ConnError> {
             Err(status) => return Err(status_error(&status)),
         }
     }
+    control_granted(COMP_SDK, entry.esn.as_str(), OVERRIDE_BEHAVIORS);
     // Go discards this call's error.
     let _ = client
         .say_text(pb::SayTextRequest {
@@ -82,6 +89,7 @@ pub async fn say_text(entry: &RobotEntry, text: &str) -> Result<(), ConnError> {
             pitch_scalar: 0.0,
         })
         .await;
+    control_released(COMP_SDK, entry.esn.as_str());
     let _ = sender.send(control_release()).await;
     Ok(())
 }
@@ -106,6 +114,7 @@ pub fn b_control(
     stop: CancellationToken,
 ) -> oneshot::Receiver<Result<(), ConnError>> {
     let client = sdk_client(entry.conn.as_ref());
+    let esn = entry.esn.as_str().to_owned();
     let (start, started) = oneshot::channel();
     tokio::spawn(async move {
         let run = async move {
@@ -126,8 +135,10 @@ pub fn b_control(
                     Err(status) => return fail(start, status_error(&status)),
                 }
             }
+            control_granted(COMP_SDK, &esn, OVERRIDE_BEHAVIORS);
             let _ = start.send(Ok(()));
             stop.cancelled().await;
+            control_released(COMP_SDK, &esn);
             tracing::info!(comp = "", "KGSim: releasing behavior control (interrupt)");
             let _ = sender.send(control_release()).await;
         };

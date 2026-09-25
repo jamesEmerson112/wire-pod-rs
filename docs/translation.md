@@ -136,6 +136,23 @@ On 2026-09-20 the user decided not to translate the LLM and knowledge-graph work
 
 What this costs, so that the decision is reversible with open eyes. A voice command the intent list does not match reaches `intent_system_unmatched` instead of an answer, which is where the port already stood. The dashboard's talk panel and the knowledge-graph RPC have nothing behind them. `preqs` carries three `TODO(M4)` markers at the exact call sites, so picking the work up later means filling those three holes rather than finding them. Weather shared the milestone and is translated.
 
+## Added on purpose, beyond the Go server
+
+Translation stopped at 100% of what was in scope, and these were added after it.
+Each one is a difference the Go server does not have, listed so that a reader who
+diffs the two does not take it for a porting mistake. The feature they belong to
+is the motion and map logging planned on 2026-09-20.
+
+**Motion responses are logged rather than discarded.** Go throws away the answer
+to every motion RPC, at all seven call sites. Those calls now pass through
+`logged` in `crates/wirepod-vector/src/motionlog.rs`, which times the round trip,
+decodes the response *body* and writes one debug line. The body is what matters:
+the transport status is success whether or not the robot moved, so only
+`ResponseStatus.code`, `PlayAnimationResponse.result` and `ActionResult.code` can
+tell a robot that obeyed from one that ignored us. Behaviour control grants and
+releases get a line for the same reason, since a missing control lock is the
+usual cause. Debug level only, so the web UI's default log still matches Go's.
+
 ## The robot's own API
 
 `docs/robot-api.md` is the reference for what the robot exposes and expects, read out of the WireOS sources at `E:/GitHub/wire-os-victor`. Read it before translating anything that talks to the robot. Two findings from it change how the port should behave, and both are on the list below: taking behaviour control is the only SDK message that wakes a sleeping robot, and the robot's own `settings.proto` numbers its fields differently from the copy this port vendors.

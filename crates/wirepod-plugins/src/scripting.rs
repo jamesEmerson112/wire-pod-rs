@@ -43,9 +43,10 @@ use http_body_util::BodyExt;
 use mlua::{AnyUserData, Lua, UserData, Value};
 use serde::Deserialize;
 use tokio::runtime::Handle;
+use wirepod_core::logger::COMP_LUA;
 use wirepod_core::{AppState, ConnError, Esn, RobotEntry, StatusCode};
 use wirepod_proto::anki::vector::external_interface as pb;
-use wirepod_vector::{SdkClient, sdk_client, status_error};
+use wirepod_vector::{SdkClient, logged, sdk_client, status_error};
 
 use crate::bcontrol::set_b_control_functions;
 use crate::display::convert_pixels_to_raw_bitmap;
@@ -107,35 +108,49 @@ fn to_bool(value: &Value) -> bool {
 
 fn say_text(lua: &Lua, (text, goroutine): (Value, Value)) -> mlua::Result<()> {
     let text_to_say = to_string(lua, text);
-    let mut client = g_rf_ls(lua)?;
+    let (mut client, esn) = g_rf_ls_with_esn(lua)?;
+    let spoken = text_to_say.clone();
     execute_with_goroutine(&goroutine, false, async move {
-        client
-            .say_text(pb::SayTextRequest {
+        logged(
+            COMP_LUA,
+            &esn,
+            "SayText",
+            &format!("text={spoken:?}"),
+            client.say_text(pb::SayTextRequest {
                 text: text_to_say,
                 use_vector_voice: true,
                 duration_scalar: 1.0,
                 pitch_scalar: 0.0,
-            })
-            .await
-            .map(drop)
-            .map_err(|status| status_error(&status))
+            }),
+        )
+        .await
+        .map(drop)
+        .map_err(|status| status_error(&status))
     });
     Ok(())
 }
 
 fn play_animation(lua: &Lua, (animation, goroutine): (Value, Value)) -> mlua::Result<()> {
     let anim_to_play = to_string(lua, animation);
-    let mut client = g_rf_ls(lua)?;
+    let (mut client, esn) = g_rf_ls_with_esn(lua)?;
+    let requested = anim_to_play.clone();
     execute_with_goroutine(&goroutine, false, async move {
-        client
-            .play_animation(pb::PlayAnimationRequest {
+        // The one motion response that says outright whether the behaviour
+        // ran, and which animation a trigger resolved to.
+        logged(
+            COMP_LUA,
+            &esn,
+            "PlayAnimation",
+            &format!("animation={requested}"),
+            client.play_animation(pb::PlayAnimationRequest {
                 animation: Some(pb::Animation { name: anim_to_play }),
                 loops: 1,
                 ..pb::PlayAnimationRequest::default()
-            })
-            .await
-            .map(drop)
-            .map_err(|status| status_error(&status))
+            }),
+        )
+        .await
+        .map(drop)
+        .map_err(|status| status_error(&status))
     });
     Ok(())
 }
@@ -149,15 +164,20 @@ fn sleep(lua: &Lua, milliseconds: Value) -> mlua::Result<()> {
 fn move_head(lua: &Lua, speed: Value) -> mlua::Result<()> {
     let head_speed = to_int(lua, speed);
     let head_speed_f = head_speed as f32 / 100.0;
-    let mut client = g_rf_ls(lua)?;
+    let (mut client, esn) = g_rf_ls_with_esn(lua)?;
     execute_with_goroutine(&Value::Nil, true, async move {
-        client
-            .move_head(pb::MoveHeadRequest {
+        logged(
+            COMP_LUA,
+            &esn,
+            "MoveHead",
+            &format!("rad_per_sec={head_speed_f}"),
+            client.move_head(pb::MoveHeadRequest {
                 speed_rad_per_sec: head_speed_f,
-            })
-            .await
-            .map(drop)
-            .map_err(|status| status_error(&status))
+            }),
+        )
+        .await
+        .map(drop)
+        .map_err(|status| status_error(&status))
     });
     Ok(())
 }
@@ -165,15 +185,20 @@ fn move_head(lua: &Lua, speed: Value) -> mlua::Result<()> {
 fn move_lift(lua: &Lua, speed: Value) -> mlua::Result<()> {
     let lift_speed = to_int(lua, speed);
     let lift_speed_f = lift_speed as f32 / 100.0;
-    let mut client = g_rf_ls(lua)?;
+    let (mut client, esn) = g_rf_ls_with_esn(lua)?;
     execute_with_goroutine(&Value::Nil, true, async move {
-        client
-            .move_lift(pb::MoveLiftRequest {
+        logged(
+            COMP_LUA,
+            &esn,
+            "MoveLift",
+            &format!("rad_per_sec={lift_speed_f}"),
+            client.move_lift(pb::MoveLiftRequest {
                 speed_rad_per_sec: lift_speed_f,
-            })
-            .await
-            .map(drop)
-            .map_err(|status| status_error(&status))
+            }),
+        )
+        .await
+        .map(drop)
+        .map_err(|status| status_error(&status))
     });
     Ok(())
 }
@@ -183,18 +208,23 @@ fn move_wheels(lua: &Lua, speeds: (Value, Value, Value, Value)) -> mlua::Result<
     let right_wheel_speed = to_int(lua, speeds.1);
     let left_wheel_speed2 = to_int(lua, speeds.2);
     let right_wheel_speed2 = to_int(lua, speeds.3);
-    let mut client = g_rf_ls(lua)?;
+    let (mut client, esn) = g_rf_ls_with_esn(lua)?;
     execute_with_goroutine(&Value::Nil, true, async move {
-        client
-            .drive_wheels(pb::DriveWheelsRequest {
+        logged(
+            COMP_LUA,
+            &esn,
+            "DriveWheels",
+            &format!("lw={left_wheel_speed} rw={right_wheel_speed}"),
+            client.drive_wheels(pb::DriveWheelsRequest {
                 left_wheel_mmps: left_wheel_speed as f32,
                 right_wheel_mmps: right_wheel_speed as f32,
                 left_wheel_mmps2: left_wheel_speed2 as f32,
                 right_wheel_mmps2: right_wheel_speed2 as f32,
-            })
-            .await
-            .map(drop)
-            .map_err(|status| status_error(&status))
+            }),
+        )
+        .await
+        .map(drop)
+        .map_err(|status| status_error(&status))
     });
     Ok(())
 }
@@ -312,10 +342,18 @@ fn get_http_request(lua: &Lua, (url, timeout): (Value, Value)) -> mlua::Result<m
 /// takes `.Conn`, so this hands back that client. A missing or wrong `bot`
 /// global is Go's failed type assertion, which panics; here it is an error.
 pub(crate) fn g_rf_ls(lua: &Lua) -> mlua::Result<SdkClient> {
+    Ok(g_rf_ls_with_esn(lua)?.0)
+}
+
+/// [`g_rf_ls`] with the serial beside the client, for the call sites whose log
+/// line names which robot moved.
+pub(crate) fn g_rf_ls_with_esn(lua: &Lua) -> mlua::Result<(SdkClient, String)> {
     let ud: AnyUserData = lua.globals().get("bot")?;
     let bot = ud.borrow::<Bot>()?;
-    sdk_client(bot.robot.conn.as_ref())
-        .ok_or_else(|| mlua::Error::runtime("rpc error: code = Unavailable desc = no SDK client"))
+    let client = sdk_client(bot.robot.conn.as_ref()).ok_or_else(|| {
+        mlua::Error::runtime("rpc error: code = Unavailable desc = no SDK client")
+    })?;
+    Ok((client, bot.esn.as_str().to_owned()))
 }
 
 pub fn make_lua_state(bot: Option<Bot>) -> Result<Lua, ScriptError> {

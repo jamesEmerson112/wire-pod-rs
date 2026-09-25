@@ -3,8 +3,9 @@
 
 use axum::response::Response;
 use wirepod_core::RobotEntry;
+use wirepod_core::logger::COMP_SDK;
 use wirepod_proto::anki::vector::external_interface as pb;
-use wirepod_vector::status_error;
+use wirepod_vector::{logged, status_error};
 
 use crate::sdkapp::{NO_SDK_CLIENT, sdk_client};
 use crate::{literals, reply};
@@ -21,14 +22,22 @@ pub async fn move_wheels(entry: &RobotEntry, lw: &str, rw: &str) -> Response {
         return reply::empty();
     };
     let (lw, rw) = (speed(lw), speed(rw));
-    let _ = client
-        .drive_wheels(pb::DriveWheelsRequest {
+    // Go discards this, and so does the caller; the wrapper only reads the
+    // answer on the way past. Nothing here takes behaviour control, so the
+    // robot is free to ignore the call, and the logged body is what says so.
+    let _ = logged(
+        COMP_SDK,
+        entry.esn.as_str(),
+        "DriveWheels",
+        &format!("lw={lw} rw={rw}"),
+        client.drive_wheels(pb::DriveWheelsRequest {
             left_wheel_mmps: lw,
             right_wheel_mmps: rw,
             left_wheel_mmps2: lw,
             right_wheel_mmps2: rw,
-        })
-        .await;
+        }),
+    )
+    .await;
     reply::empty()
 }
 
@@ -36,11 +45,17 @@ pub async fn move_lift(entry: &RobotEntry, raw: &str) -> Response {
     let Some(mut client) = sdk_client(entry) else {
         return reply::empty();
     };
-    let _ = client
-        .move_lift(pb::MoveLiftRequest {
-            speed_rad_per_sec: speed(raw),
-        })
-        .await;
+    let speed = speed(raw);
+    let _ = logged(
+        COMP_SDK,
+        entry.esn.as_str(),
+        "MoveLift",
+        &format!("speed={speed}"),
+        client.move_lift(pb::MoveLiftRequest {
+            speed_rad_per_sec: speed,
+        }),
+    )
+    .await;
     reply::empty()
 }
 
@@ -48,11 +63,17 @@ pub async fn move_head(entry: &RobotEntry, raw: &str) -> Response {
     let Some(mut client) = sdk_client(entry) else {
         return reply::empty();
     };
-    let _ = client
-        .move_head(pb::MoveHeadRequest {
-            speed_rad_per_sec: speed(raw),
-        })
-        .await;
+    let speed = speed(raw);
+    let _ = logged(
+        COMP_SDK,
+        entry.esn.as_str(),
+        "MoveHead",
+        &format!("speed={speed}"),
+        client.move_head(pb::MoveHeadRequest {
+            speed_rad_per_sec: speed,
+        }),
+    )
+    .await;
     reply::empty()
 }
 
@@ -61,9 +82,16 @@ pub async fn mirror_mode(entry: &RobotEntry, enable: &str) -> Response {
         return reply::text(NO_SDK_CLIENT);
     };
     let enable = enable == "true";
-    match client
-        .enable_mirror_mode(pb::EnableMirrorModeRequest { enable })
-        .await
+    // One of the seven requests the robot refuses outright without behaviour
+    // control, so its body status is worth reading even though Go ignores it.
+    match logged(
+        COMP_SDK,
+        entry.esn.as_str(),
+        "EnableMirrorMode",
+        &format!("enable={enable}"),
+        client.enable_mirror_mode(pb::EnableMirrorModeRequest { enable }),
+    )
+    .await
     {
         Ok(_) => reply::text(literals::SUCCESS),
         // Go prints the error value rather than its message, which renders the
