@@ -2,8 +2,9 @@
 //! receiver, and the registry opening it for each new connection behind its
 //! switch.
 //!
-//! No test pauses the clock. Motion windows are a few hundred milliseconds,
-//! and every wait carries a real-clock ceiling that only fires on a regression.
+//! No test pauses the clock, and every wait carries a real-clock ceiling that
+//! only fires on a regression. No assertion waits for a motion window to run
+//! out: a call the loop must see as over is stamped a whole window in the past.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -31,9 +32,9 @@ const CEILING: Duration = Duration::from_secs(5);
 /// Long enough for a spawned task to have been polled, had it been spawned.
 const PARK_WINDOW: Duration = Duration::from_millis(50);
 
-/// Long enough that a sample sent straight after a stamp lands inside it even
-/// on a loaded machine.
-const WINDOW: Duration = Duration::from_millis(400);
+/// Long enough that a sample sent straight after a stamp lands inside it
+/// however far a loaded machine lets the loop fall behind.
+const WINDOW: Duration = Duration::from_secs(30);
 
 const ESN: &str = "00303f28";
 
@@ -261,43 +262,51 @@ async fn the_loop_writes_what_the_tracker_reports_and_finishes_the_window() {
             .map(|entry| entry.msg)
             .collect()
     };
-    let call = |rpc: &'static str, args: &str| MotionCall {
+    let call = |rpc: &'static str, args: &str, at: Instant| MotionCall {
         rpc,
         args: args.to_owned(),
-        at: Instant::now(),
+        at,
     };
 
     // Idle: stored, and nothing written.
     robot.send(sample(RESTING, 0.0));
     until(|| slot.latest() == Some(sample(RESTING, 0.0))).await;
 
-    slot.note_motion_call(call("DriveWheels", "lw=50 rw=50"));
+    slot.note_motion_call(call("DriveWheels", "lw=50 rw=50", Instant::now()));
     robot.send(sample(DRIVING, 1.0));
     until(|| lines().len() == 1).await;
 
-    slot.note_motion_call(call("DriveWheels", "lw=0 rw=0"));
+    slot.note_motion_call(call("DriveWheels", "lw=0 rw=0", Instant::now()));
     robot.send(sample(RESTING, 2.0));
     until(|| lines().len() == 2).await;
 
-    // A call he ignores: the window opens on one sample and closes on the
-    // first one after it.
-    slot.note_motion_call(call("MoveHead", "speed=2"));
-    robot.send(sample(RESTING, 2.0));
-    tokio::time::sleep(WINDOW + Duration::from_millis(50)).await;
-    robot.send(sample(RESTING, 2.0));
+    // A call he ignores, replaced by one stamped a second later. The loop has
+    // read the first sample against the ignored call once it stores the
+    // second.
+    let ignored = call("MoveHead", "speed=2", Instant::now());
+    let replacing_at = ignored.at + Duration::from_secs(1);
+    slot.note_motion_call(ignored);
+    robot.send(sample(RESTING, 3.0));
+    robot.send(sample(RESTING, 4.0));
+    until(|| slot.latest() == Some(sample(RESTING, 4.0))).await;
+    slot.note_motion_call(call("MoveLift", "speed=2", replacing_at));
+    robot.send(sample(RESTING, 5.0));
     until(|| lines().len() == 3).await;
-    assert_eq!(
-        slot.motion_call(),
-        None,
-        "the loop did not finish the window"
-    );
+
+    // A call whose window is already over is finished on the next sample.
+    let over = Instant::now()
+        .checked_sub(WINDOW + Duration::from_secs(1))
+        .expect("the clock has run for longer than one window");
+    slot.note_motion_call(call("MoveLift", "speed=-2", over));
+    robot.send(sample(RESTING, 6.0));
+    until(|| slot.motion_call().is_none()).await;
 
     assert_eq!(
         lines(),
         [
-            "state +[moving wheels_moving] pose=(1.0, 0.0) heading=0.000rad origin=3",
-            "state -[moving wheels_moving] pose=(2.0, 0.0) heading=0.000rad origin=3",
-            "no movement after MoveHead(speed=2)",
+            "state +[wheels_moving] pose=(1.0, 0.0) heading=0.000rad origin=3",
+            "state -[wheels_moving] pose=(2.0, 0.0) heading=0.000rad origin=3",
+            "no movement after MoveHead(speed=2) in the 1.0 s before MoveLift",
         ]
     );
     for entry in ring.get_entries(LogLevel::Debug, 0) {
