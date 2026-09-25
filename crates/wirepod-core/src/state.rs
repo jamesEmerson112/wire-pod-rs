@@ -404,9 +404,10 @@ impl AppState {
 /// The connection factory is the one thing with no sensible default, because it
 /// decides whether the server talks to a real robot. Everything else defaults:
 /// [`Timings::default`], a [`SystemClock`], a [`SystemWallClock`], an empty
-/// [`BotInfo`], no liveness deadline, the zero [`ApiConfig`], an empty store per
-/// file and an empty log ring, with every path rooted at the working directory
-/// the way an un-packaged Go build leaves it ([`Paths::default`]).
+/// [`BotInfo`], no liveness deadline, no state stream, the zero [`ApiConfig`],
+/// an empty store per file and an empty log ring, with every path rooted at the
+/// working directory the way an un-packaged Go build leaves it
+/// ([`Paths::default`]).
 ///
 /// The three stores whose identity is a path are resolved in
 /// [`AppStateBuilder::build`] rather than in [`AppStateBuilder::new`], so that
@@ -418,6 +419,7 @@ pub struct AppStateBuilder {
     timings: Timings,
     clock: Option<Arc<dyn Clock>>,
     liveness_deadline: Option<Duration>,
+    state_stream: bool,
     paths: Paths,
     config: ApiConfig,
     config_gate: Option<WriteGate>,
@@ -438,6 +440,7 @@ impl AppStateBuilder {
             timings: Timings::default(),
             clock: None,
             liveness_deadline: None,
+            state_stream: false,
             paths: Paths::default(),
             config: ApiConfig::default(),
             config_gate: None,
@@ -472,6 +475,13 @@ impl AppStateBuilder {
     /// reproduces Go's undeadlined `BatteryState` (`robot.go:365`).
     pub fn liveness_deadline(mut self, deadline: Option<Duration>) -> Self {
         self.liveness_deadline = deadline;
+        self
+    }
+
+    /// Opens the connect-time `robot_state` stream for every new connection.
+    /// Off by default; the server turns it on.
+    pub fn state_stream(mut self, on: bool) -> Self {
+        self.state_stream = on;
         self
     }
 
@@ -611,7 +621,8 @@ impl AppStateBuilder {
         let registry = RobotRegistry::new(self.factory)
             .with_timings(self.timings)
             .with_clock(Arc::clone(&clock))
-            .with_liveness_deadline(self.liveness_deadline);
+            .with_liveness_deadline(self.liveness_deadline)
+            .with_state_stream(self.state_stream);
         Arc::new(AppState {
             bot_info: RwLock::new(self.bot_info),
             pinger: PingerState::new(),

@@ -28,6 +28,7 @@ use crate::esn::Esn;
 use crate::robot::conn::{ConnError, ConnTarget, RobotConn, RobotConnFactory};
 use crate::robot::meter::{CamMeter, CamMeters};
 use crate::robot::session::SdkSession;
+use crate::robot::state_stream::spawn_state_stream;
 use crate::store::bot_info::BotInfo;
 use crate::timings::Timings;
 
@@ -128,6 +129,7 @@ pub struct RobotRegistry {
     timings: Timings,
     clock: Arc<dyn Clock>,
     liveness_deadline: Option<Duration>,
+    state_stream: bool,
 }
 
 impl fmt::Debug for RobotRegistry {
@@ -136,6 +138,7 @@ impl fmt::Debug for RobotRegistry {
             .field("len", &self.len())
             .field("timings", &self.timings)
             .field("liveness_deadline", &self.liveness_deadline)
+            .field("state_stream", &self.state_stream)
             .finish_non_exhaustive()
     }
 }
@@ -152,6 +155,7 @@ impl RobotRegistry {
             timings: Timings::default(),
             clock: Arc::new(SystemClock::new()),
             liveness_deadline: None,
+            state_stream: false,
         }
     }
 
@@ -177,6 +181,16 @@ impl RobotRegistry {
     /// line.
     pub fn with_liveness_deadline(mut self, deadline: Option<Duration>) -> Self {
         self.liveness_deadline = deadline;
+        self
+    }
+
+    /// The same, opening the connect-time `robot_state` stream for every new
+    /// connection.
+    ///
+    /// Off by default, so a registry built for a test opens no stream it did
+    /// not ask for. The server turns it on.
+    pub fn with_state_stream(mut self, on: bool) -> Self {
+        self.state_stream = on;
         self
     }
 
@@ -249,6 +263,12 @@ impl RobotRegistry {
             session,
         });
         self.entries_mut().insert(esn.clone(), Arc::clone(&entry));
+        // Go opens this stream inline and fails the connect when it cannot;
+        // here it opens in a task of its own, so a robot that refuses it is
+        // still connected and the refusal is a log line.
+        if self.state_stream {
+            spawn_state_stream(&entry, self.timings.motion_window);
+        }
         Ok(entry)
     }
 
