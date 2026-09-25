@@ -33,6 +33,16 @@ impl NavMapReceiver for ScriptedReceiver {
     }
 }
 
+/// A stream that never sends.
+struct SilentReceiver;
+
+#[async_trait]
+impl NavMapReceiver for SilentReceiver {
+    async fn next(&mut self) -> Result<Option<NavMapFrame>, ConnError> {
+        std::future::pending().await
+    }
+}
+
 /// A fake robot with a nav map feed.
 struct MapConn {
     inner: FakeRobotConn,
@@ -41,12 +51,16 @@ struct MapConn {
 }
 
 impl MapConn {
-    /// A robot with one scripted feed, and the handle that feeds it.
+    /// A robot with one scripted feed, and the handle that feeds it. The
+    /// second stream, which the feed opens on its first map, never sends.
     fn with_feed() -> (Arc<Self>, Script) {
         let (sender, receiver) = mpsc::unbounded_channel();
         let conn = Arc::new(Self {
             inner: FakeRobotConn::new(),
-            feeds: Mutex::new(vec![Box::new(ScriptedReceiver(receiver))]),
+            feeds: Mutex::new(vec![
+                Box::new(ScriptedReceiver(receiver)),
+                Box::new(SilentReceiver),
+            ]),
             opens: AtomicUsize::new(0),
         });
         (conn, sender)
@@ -210,6 +224,10 @@ async fn a_snapshot_starts_the_feed_once_and_answers_the_placed_map() {
         robot.session.map_feed.latest().is_some()
     })
     .await;
+    wait_until("the first map to open the second stream", || {
+        conn.opens() == 2
+    })
+    .await;
 
     // Nothing in this crate starts the state stream, so its slot is claimed
     // here to stand in for it.
@@ -266,8 +284,9 @@ async fn a_snapshot_starts_the_feed_once_and_answers_the_placed_map() {
 
     assert_eq!(
         conn.opens(),
-        1,
-        "the second snapshot started no second feed"
+        2,
+        "the second snapshot started no second feed; the second open is the feed's own, on its \
+         first map"
     );
     assert!(robot.session.map_feed.is_running());
 }

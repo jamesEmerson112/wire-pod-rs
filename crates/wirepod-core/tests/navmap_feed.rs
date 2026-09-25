@@ -5,11 +5,14 @@
 //! paused: the lease tick runs in real time, at the test lease's 20 ms, under a
 //! ceiling that fires only on a regression.
 
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::layer::SubscriberExt;
@@ -120,6 +123,39 @@ fn watching(ring: &Arc<LogRing>) -> tracing::subscriber::DefaultGuard {
 
 fn entries(ring: &LogRing) -> Vec<Entry> {
     ring.get_entries(LogLevel::Debug, 0)
+}
+
+fn messages(ring: &LogRing) -> Vec<String> {
+    entries(ring).into_iter().map(|entry| entry.msg).collect()
+}
+
+/// Lets the feed run until `ready` holds.
+async fn wait_until(what: &str, mut ready: impl FnMut() -> bool) {
+    timeout(CEILING, async {
+        while !ready() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for {what}"));
+}
+
+fn holds(slot: &MapSlot, expected: &NavMapFrame) -> bool {
+    slot.latest().is_some_and(|kept| kept.frame == *expected)
+}
+
+async fn exit_of(running: JoinHandle<MapFeedExit>) -> MapFeedExit {
+    timeout(CEILING, running)
+        .await
+        .expect("within the ceiling")
+        .expect("the feed task did not panic")
+}
+
+/// Waits for the feed to drop the stream `script` feeds.
+async fn dropped(script: &Script, which: &str) {
+    timeout(CEILING, script.closed())
+        .await
+        .unwrap_or_else(|_| panic!("the feed kept the {which} stream"));
 }
 
 #[tokio::test]
@@ -331,25 +367,44 @@ async fn a_robot_without_the_feed_is_reported_once() {
     assert_eq!(entries(&ring).len(), 2, "a repeated failure is not logged");
 }
 
-/// A robot whose gateway holds the `NavMapFeed` call open without answering,
-/// as it may while it has no map to send.
-struct SilentConn(FakeRobotConn);
+/// A robot whose `NavMapFeed` opens take their answers in the order scripted,
+/// and are counted. An open with no answer left is held open without one, as
+/// the gateway may hold it while it has no map to send.
+struct ScriptedConn {
+    inner: FakeRobotConn,
+    answers: Mutex<VecDeque<Result<Box<dyn NavMapReceiver>, ConnError>>>,
+    opens: AtomicUsize,
+}
 
-#[async_trait]
-impl CameraControl for SilentConn {
-    async fn enable_image_streaming(&self, on: bool) -> Result<(), ConnError> {
-        self.0.enable_image_streaming(on).await
+impl ScriptedConn {
+    fn new(answers: Vec<Result<Box<dyn NavMapReceiver>, ConnError>>) -> Arc<Self> {
+        Arc::new(Self {
+            inner: FakeRobotConn::new(),
+            answers: Mutex::new(answers.into()),
+            opens: AtomicUsize::new(0),
+        })
+    }
+
+    fn opens(&self) -> usize {
+        self.opens.load(Ordering::SeqCst)
     }
 }
 
 #[async_trait]
-impl RobotConn for SilentConn {
+impl CameraControl for ScriptedConn {
+    async fn enable_image_streaming(&self, on: bool) -> Result<(), ConnError> {
+        self.inner.enable_image_streaming(on).await
+    }
+}
+
+#[async_trait]
+impl RobotConn for ScriptedConn {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
     async fn battery_state(&self) -> Result<BatteryReading, ConnError> {
-        self.0.battery_state().await
+        self.inner.battery_state().await
     }
 
     async fn protocol_version(
@@ -357,7 +412,7 @@ impl RobotConn for SilentConn {
         client_version: i64,
         min_host_version: i64,
     ) -> Result<ProtocolVerdict, ConnError> {
-        self.0
+        self.inner
             .protocol_version(client_version, min_host_version)
             .await
     }
@@ -367,40 +422,260 @@ impl RobotConn for SilentConn {
         whitelist: &[&str],
         connection_id: &str,
     ) -> Result<Box<dyn EventReceiver>, ConnError> {
-        self.0.open_event_stream(whitelist, connection_id).await
+        self.inner.open_event_stream(whitelist, connection_id).await
     }
 
     async fn open_camera_feed(&self) -> Result<Box<dyn FrameStream>, ConnError> {
-        self.0.open_camera_feed().await
+        self.inner.open_camera_feed().await
     }
 
     async fn pull_jdocs(&self, kinds: &[JdocKind]) -> Result<Vec<NamedJdoc>, ConnError> {
-        self.0.pull_jdocs(kinds).await
+        self.inner.pull_jdocs(kinds).await
     }
 
     async fn open_nav_map_feed(
         &self,
         _period: Duration,
     ) -> Result<Box<dyn NavMapReceiver>, ConnError> {
-        std::future::pending().await
+        self.opens.fetch_add(1, Ordering::SeqCst);
+        let answer = self.answers.lock().expect("answers").pop_front();
+        match answer {
+            Some(answer) => answer,
+            None => std::future::pending().await,
+        }
     }
+}
+
+fn open_and_run(feed: MapFeed, conn: &Arc<ScriptedConn>) -> JoinHandle<MapFeedExit> {
+    let conn = Arc::clone(conn);
+    tokio::spawn(async move { feed.open_and_run(conn.as_ref()).await })
 }
 
 #[tokio::test]
 async fn a_lapsed_lease_ends_an_open_the_robot_never_answers() {
     let clock = Arc::new(ManualClock::new());
     let (slot, feed) = claimed(&clock);
-    let conn = SilentConn(FakeRobotConn::new());
-    let running = tokio::spawn(async move { feed.open_and_run(&conn).await });
+    let conn = ScriptedConn::new(Vec::new());
+    let running = open_and_run(feed, &conn);
 
     tokio::time::sleep(Duration::from_millis(60)).await;
     assert!(!running.is_finished(), "a watched open kept waiting");
 
     clock.advance(Duration::from_secs(1));
-    let exit = timeout(CEILING, running)
-        .await
-        .expect("within the ceiling")
-        .expect("the feed task did not panic");
+    let exit = exit_of(running).await;
     assert_eq!(exit, MapFeedExit::LeaseLapsed);
     assert!(!slot.is_running());
+}
+
+/// A feed whose first stream has brought one map, which opened the second.
+struct TwoStreams {
+    slot: Arc<MapSlot>,
+    cancel: CancellationToken,
+    conn: Arc<ScriptedConn>,
+    first: Script,
+    second: Script,
+    running: JoinHandle<MapFeedExit>,
+}
+
+async fn two_streams(clock: &Arc<ManualClock>) -> TwoStreams {
+    let (slot, feed) = claimed(clock);
+    let cancel = feed.cancel.clone();
+    let (first_receiver, first) = scripted();
+    let (second_receiver, second) = scripted();
+    let conn = ScriptedConn::new(vec![Ok(first_receiver), Ok(second_receiver)]);
+    first.send(Ok(map(3, 1))).expect("listening");
+    let running = open_and_run(feed, &conn);
+    wait_until("the first map to open a second stream", || {
+        conn.opens() == 2
+    })
+    .await;
+    TwoStreams {
+        slot,
+        cancel,
+        conn,
+        first,
+        second,
+        running,
+    }
+}
+
+#[tokio::test]
+async fn the_first_map_opens_one_more_stream_and_the_first_stays_open() {
+    let ring = ring();
+    let _guard = watching(&ring);
+    let clock = Arc::new(ManualClock::new());
+    let feed = two_streams(&clock).await;
+
+    for content in [2, 7] {
+        feed.first.send(Ok(map(3, content))).expect("listening");
+        wait_until("a later map on the first stream", || {
+            holds(&feed.slot, &map(3, content))
+        })
+        .await;
+    }
+    assert!(!feed.first.is_closed(), "the first stream was kept");
+    assert_eq!(feed.conn.opens(), 2, "later maps opened nothing more");
+
+    feed.cancel.cancel();
+    assert_eq!(exit_of(feed.running).await, MapFeedExit::Cancelled);
+    assert_eq!(
+        messages(&ring),
+        vec![
+            "nav map feed started, at most one map per 500ms",
+            "nav map origin=3 root=128mm depth=4 quads=1 clear_of_obstacle=1",
+            "nav map feed: reopened alongside the first stream to reassert the broadcast period, \
+             which a stream the robot had not yet noticed closing resets to -1 on the next map",
+            "nav map feed stopped (cancelled) after 3 maps; last origin=3 root=128mm depth=4 \
+             quads=1 cliff=1",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_map_on_the_second_stream_is_stored() {
+    let clock = Arc::new(ManualClock::new());
+    let feed = two_streams(&clock).await;
+
+    feed.second.send(Ok(map(4, 1))).expect("listening");
+    wait_until("the map on the second stream", || {
+        holds(&feed.slot, &map(4, 1))
+    })
+    .await;
+
+    feed.cancel.cancel();
+    assert_eq!(exit_of(feed.running).await, MapFeedExit::Cancelled);
+}
+
+#[tokio::test]
+async fn a_cancelled_feed_drops_both_streams() {
+    let clock = Arc::new(ManualClock::new());
+    let feed = two_streams(&clock).await;
+
+    feed.cancel.cancel();
+    assert_eq!(exit_of(feed.running).await, MapFeedExit::Cancelled);
+    dropped(&feed.first, "first").await;
+    dropped(&feed.second, "second").await;
+    assert!(!feed.slot.is_running());
+    assert_eq!(feed.slot.error(), None);
+}
+
+#[tokio::test]
+async fn a_lapsed_feed_drops_both_streams() {
+    let clock = Arc::new(ManualClock::new());
+    let feed = two_streams(&clock).await;
+
+    clock.advance(Duration::from_secs(1));
+    assert_eq!(exit_of(feed.running).await, MapFeedExit::LeaseLapsed);
+    dropped(&feed.first, "first").await;
+    dropped(&feed.second, "second").await;
+    assert!(!feed.slot.is_running());
+}
+
+#[tokio::test]
+async fn an_ending_second_stream_ends_the_feed() {
+    let clock = Arc::new(ManualClock::new());
+    let feed = two_streams(&clock).await;
+
+    drop(feed.second);
+    assert_eq!(exit_of(feed.running).await, MapFeedExit::StreamEnded);
+    dropped(&feed.first, "first").await;
+    assert_eq!(feed.slot.error().as_deref(), Some(STREAM_ENDED));
+}
+
+#[tokio::test]
+async fn a_failing_second_stream_ends_the_feed() {
+    let clock = Arc::new(ManualClock::new());
+    let feed = two_streams(&clock).await;
+
+    let err = ConnError::new(StatusCode::Internal, "NavMemoryMap engine stream died");
+    feed.second.send(Err(err.clone())).expect("listening");
+    assert_eq!(
+        exit_of(feed.running).await,
+        MapFeedExit::Failed(err.clone())
+    );
+    dropped(&feed.first, "first").await;
+    assert_eq!(feed.slot.error(), Some(err.to_string()));
+}
+
+#[tokio::test]
+async fn a_refused_second_open_leaves_the_first_stream_running() {
+    let ring = ring();
+    let _guard = watching(&ring);
+    let clock = Arc::new(ManualClock::new());
+    let (slot, feed) = claimed(&clock);
+    let (receiver, script) = scripted();
+    let refusal = ConnError::new(StatusCode::Unavailable, "too many streams");
+    let conn = ScriptedConn::new(vec![Ok(receiver), Err(refusal)]);
+    script.send(Ok(map(3, 1))).expect("listening");
+    let running = open_and_run(feed, &conn);
+    wait_until("the first map to try a second stream", || conn.opens() == 2).await;
+
+    script
+        .send(Ok(map(3, 2)))
+        .expect("the first stream is still read");
+    wait_until("the next map", || holds(&slot, &map(3, 2))).await;
+    assert!(slot.is_running());
+
+    drop(script);
+    assert_eq!(exit_of(running).await, MapFeedExit::StreamEnded);
+    assert_eq!(conn.opens(), 2, "the refusal was not retried");
+    let refused: Vec<String> = messages(&ring)
+        .into_iter()
+        .filter(|msg| msg.starts_with("nav map feed: could not reopen"))
+        .collect();
+    assert_eq!(
+        refused,
+        vec![
+            "nav map feed: could not reopen alongside the first stream to reassert the broadcast \
+             period, so it carries on with the first alone: rpc error: code = Unavailable desc = \
+             too many streams"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_second_open_the_robot_never_answers_holds_nothing_up() {
+    let clock = Arc::new(ManualClock::new());
+    let (slot, feed) = claimed(&clock);
+    let cancel = feed.cancel.clone();
+    let (receiver, script) = scripted();
+    // Only the first open is answered.
+    let conn = ScriptedConn::new(vec![Ok(receiver)]);
+    script.send(Ok(map(3, 1))).expect("listening");
+    let running = open_and_run(feed, &conn);
+    wait_until("the first map to try a second stream", || conn.opens() == 2).await;
+
+    script.send(Ok(map(3, 2))).expect("listening");
+    wait_until("the next map", || holds(&slot, &map(3, 2))).await;
+
+    cancel.cancel();
+    assert_eq!(exit_of(running).await, MapFeedExit::Cancelled);
+    dropped(&script, "first").await;
+}
+
+#[tokio::test]
+async fn a_feed_after_a_failure_logs_its_start_and_stop_once_it_has_a_map() {
+    let ring = ring();
+    let _guard = watching(&ring);
+    let clock = Arc::new(ManualClock::new());
+    let (_slot, mut feed) = claimed(&clock);
+    feed.previous_error = Some(STREAM_ENDED.to_owned());
+    let (receiver, script) = scripted();
+    script.send(Ok(map(3, 1))).expect("listening");
+    drop(script);
+
+    let exit = timeout(CEILING, feed.run(receiver))
+        .await
+        .expect("within the ceiling");
+    assert_eq!(exit, MapFeedExit::StreamEnded);
+    assert_eq!(
+        messages(&ring),
+        vec![
+            "nav map feed started, at most one map per 500ms",
+            "nav map origin=3 root=128mm depth=4 quads=1 clear_of_obstacle=1",
+            "nav map feed stopped (stream ended) after 1 maps; last origin=3 root=128mm depth=4 \
+             quads=1 clear_of_obstacle=1",
+        ],
+        "the stream ended as the one before it did, but it brought a map first"
+    );
 }

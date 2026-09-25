@@ -1421,6 +1421,20 @@ The robot broadcasts only when the map has changed since its last broadcast (`ma
 flags set at `mapComponent.cpp:392-396`). Setting the period does not mark the map as changed, so a
 client that connects to a robot whose map is not changing receives nothing until something does.
 
+The gateway does not notice a client that has gone away until it next has a map to send. On entry
+the handler sets the period from the request and defers setting it back to -1
+(`message_handler.go:3434-3441`). It then waits in a `select` over the engine's three map channels
+and nothing else, with no case for the stream's context (`message_handler.go:3456-3504`), and it
+looks at the context only after a `Send` (`:3494-3499`). A handler whose client has dropped the stream
+therefore stays parked until the next broadcast. Then its `Send` fails, the handler returns, and its
+deferred call sets the engine's single `_broadcastRate_sec` to -1 (`mapComponent.cpp:328-331`), which
+stops broadcasts to every client (`mapComponent.cpp:347`). Each handler registers its own channels
+with the engine's CLAD manager (`message_handler.go:3443-3451`), so every live handler receives every
+broadcast and all parked handlers fire on the same map. A client that opens the feed while one is
+parked gets one map and then nothing. wire-pod-rs never drops a stream while its feed runs. On the
+first map it opens a second stream beside the first, which sets the period again after every parked
+handler has reset it, and it reads both until the feed ends.
+
 The Python SDK's `NavMapGridNode.add_child` is the reference decoder (`nav_map.py:194-243`, driven
 from `nav_map.py:249-257`). It recurses; the same walk with an explicit stack goes like this. Create
 the root node from `map_info`, with height `root_depth`, side `root_size_mm` and centre

@@ -9,6 +9,8 @@
 //! `map_summary_gap`.
 
 use std::fmt;
+use std::future::{Future, pending};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -85,8 +87,8 @@ pub struct MapFeed {
     ///
     /// The snapshot route restarts a failed feed on every poll, so a robot that
     /// refuses the stream would otherwise write two lines a second. A feed that
-    /// replaces a failed one writes no start line, and no stop line when it
-    /// fails the same way.
+    /// replaces a failed one writes its start line only when its first map
+    /// arrives, and no stop line when it fails the same way without one.
     pub previous_error: Option<String>,
 }
 
@@ -97,9 +99,15 @@ impl MapFeed {
     /// The open is raced against the token and the lease rather than simply
     /// awaited, because the robot's gateway need not answer the call until it
     /// has a map to send, and a robot sitting still has none.
+    ///
+    /// When the first map arrives it opens a second stream beside the first,
+    /// which sets the broadcast period again after any stream the robot had
+    /// not yet seen close has reset it, and reads both until the feed ends.
     pub async fn open_and_run(self, conn: &dyn RobotConn) -> MapFeedExit {
-        self.log_start();
-        let log = MapLog::new(&self.slot);
+        let mut log = MapLog::new(&self.slot);
+        if self.previous_error.is_none() {
+            self.log_start(&mut log);
+        }
         let mut lease = self.lease_ticker();
         let open = conn.open_nav_map_feed(self.timings.map_period);
         tokio::pin!(open);
@@ -116,23 +124,33 @@ impl MapFeed {
             }
         };
         match opened {
-            Ok(receiver) => self.pump(receiver, lease, log).await,
+            Ok(receiver) => {
+                self.pump(receiver, Second::Unopened(conn), lease, log)
+                    .await
+            }
             Err(exit) => self.finish(exit, &log),
         }
     }
 
     /// Runs the feed over a stream that is already open, giving the claim back
     /// however it ends.
+    ///
+    /// With no connection it cannot open the second stream, so it does not
+    /// reassert the broadcast period after its first map, and a stream the
+    /// robot has not yet seen close can stop it at that map.
     pub async fn run(self, receiver: Box<dyn NavMapReceiver>) -> MapFeedExit {
-        self.log_start();
-        let log = MapLog::new(&self.slot);
+        let mut log = MapLog::new(&self.slot);
+        if self.previous_error.is_none() {
+            self.log_start(&mut log);
+        }
         let lease = self.lease_ticker();
-        self.pump(receiver, lease, log).await
+        self.pump(receiver, Second::Absent, lease, log).await
     }
 
     async fn pump(
         self,
-        mut receiver: Box<dyn NavMapReceiver>,
+        mut first: Box<dyn NavMapReceiver>,
+        mut second: Second<'_>,
         mut lease: Interval,
         mut log: MapLog,
     ) -> MapFeedExit {
@@ -145,14 +163,35 @@ impl MapFeed {
                         break MapFeedExit::LeaseLapsed;
                     }
                 }
-                received = receiver.next() => match received {
-                    Ok(Some(frame)) => self.receive(frame, &mut log),
+                received = first.next() => match received {
+                    Ok(Some(frame)) => {
+                        if let Second::Unopened(conn) = second {
+                            second = Second::Opening(
+                                conn.open_nav_map_feed(self.timings.map_period),
+                            );
+                        }
+                        self.receive(frame, &mut log);
+                    }
                     Ok(None) => break MapFeedExit::StreamEnded,
                     Err(err) => break MapFeedExit::Failed(err),
                 },
+                event = second.next() => match event {
+                    SecondEvent::Opened(Ok(receiver)) => {
+                        self.log_reopened(None);
+                        second = Second::Open(receiver);
+                    }
+                    SecondEvent::Opened(Err(err)) => {
+                        self.log_reopened(Some(&err));
+                        second = Second::Absent;
+                    }
+                    SecondEvent::Received(Ok(Some(frame))) => self.receive(frame, &mut log),
+                    SecondEvent::Received(Ok(None)) => break MapFeedExit::StreamEnded,
+                    SecondEvent::Received(Err(err)) => break MapFeedExit::Failed(err),
+                },
             }
         };
-        drop(receiver);
+        drop(second);
+        drop(first);
         self.finish(exit, &log)
     }
 
@@ -162,6 +201,9 @@ impl MapFeed {
     /// and under load can pass on a truncated one. Dropping it keeps the last
     /// good map in the slot, so one bad map never blanks the page.
     fn receive(&self, frame: NavMapFrame, log: &mut MapLog) {
+        if !log.started {
+            self.log_start(log);
+        }
         let now = self.clock.now();
         let gap = self.timings.map_summary_gap;
         let bot = self.serial.as_str();
@@ -183,7 +225,8 @@ impl MapFeed {
         }
         self.slot.release(self.generation);
 
-        if failure.is_some() && failure == self.previous_error {
+        let silent = log.maps == 0 && log.dropped == 0;
+        if silent && failure.is_some() && failure == self.previous_error {
             return exit;
         }
         let bot = self.serial.as_str();
@@ -209,10 +252,8 @@ impl MapFeed {
         exit
     }
 
-    fn log_start(&self) {
-        if self.previous_error.is_some() {
-            return;
-        }
+    fn log_start(&self, log: &mut MapLog) {
+        log.started = true;
         tracing::debug!(
             target: "sdkapp",
             comp = COMP_SDK,
@@ -220,6 +261,27 @@ impl MapFeed {
             "nav map feed started, at most one map per {:?}",
             self.timings.map_period,
         );
+    }
+
+    fn log_reopened(&self, failure: Option<&ConnError>) {
+        let bot = self.serial.as_str();
+        match failure {
+            None => tracing::debug!(
+                target: "sdkapp",
+                comp = COMP_SDK,
+                bot = bot,
+                "nav map feed: reopened alongside the first stream to reassert the broadcast \
+                 period, which a stream the robot had not yet noticed closing resets to -1 on \
+                 the next map",
+            ),
+            Some(err) => tracing::debug!(
+                target: "sdkapp",
+                comp = COMP_SDK,
+                bot = bot,
+                "nav map feed: could not reopen alongside the first stream to reassert the \
+                 broadcast period, so it carries on with the first alone: {err}",
+            ),
+        }
     }
 
     /// Ticks once a second, or at the lease's own length when that is shorter,
@@ -240,9 +302,53 @@ impl MapFeed {
     }
 }
 
+/// An open of the nav map feed that has not answered yet.
+type Opening<'a> =
+    Pin<Box<dyn Future<Output = Result<Box<dyn NavMapReceiver>, ConnError>> + Send + 'a>>;
+
+/// The second stream, which the feed opens beside the first when its first map
+/// arrives.
+///
+/// The robot's gateway sets the engine's broadcast period when a `NavMapFeed`
+/// opens and sets it to -1 when the call returns, but it waits only on the
+/// engine, so it sees that its client has gone only when it next sends a map.
+/// The period is one value for every client. A stream dropped earlier, by this
+/// server or anyone else, therefore stops the feed for everybody at the next
+/// map. Every such stream wakes on the same map, so opening another stream after
+/// the first map sets the period again once they have all reset it. The feed
+/// never drops a stream while it runs, since that stream would do the same, and
+/// it reads both, since the robot stops sending on one that is not read.
+enum Second<'a> {
+    /// No map yet, and the connection to open the stream on.
+    Unopened(&'a dyn RobotConn),
+    Opening(Opening<'a>),
+    Open(Box<dyn NavMapReceiver>),
+    /// `run`, which has no connection, or an open that failed.
+    Absent,
+}
+
+enum SecondEvent {
+    Opened(Result<Box<dyn NavMapReceiver>, ConnError>),
+    Received(Result<Option<NavMapFrame>, ConnError>),
+}
+
+impl Second<'_> {
+    /// Waits for the open to answer or the stream to deliver, and forever when
+    /// there is neither.
+    async fn next(&mut self) -> SecondEvent {
+        match self {
+            Self::Opening(open) => SecondEvent::Opened(open.as_mut().await),
+            Self::Open(receiver) => SecondEvent::Received(receiver.next().await),
+            Self::Unopened(_) | Self::Absent => pending().await,
+        }
+    }
+}
+
 /// What the feed has said about its maps.
 #[derive(Debug)]
 struct MapLog {
+    /// Whether the start line has gone out.
+    started: bool,
     /// The origin of the last map, starting from the one the slot kept from an
     /// earlier feed, so a pick-up while nobody watched still reads as a reset.
     origin: Option<u32>,
@@ -258,6 +364,7 @@ struct MapLog {
 impl MapLog {
     fn new(slot: &MapSlot) -> Self {
         Self {
+            started: false,
             origin: slot.latest().map(|map| map.frame.origin_id),
             summarised_at: None,
             maps: 0,
