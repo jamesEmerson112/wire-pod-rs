@@ -1154,9 +1154,11 @@ visits, and the leaves one stamp covered share a single data object (6.2), so on
 the counter by several steps.
 
 **The cliff sensors.** A cliff enters the map only through a `CliffEvent` from the robot process
-(`wire-os-victor/engine/robotToEngineImplMessaging.cpp:421-445`), and the robot process sends one only
-when it stops for the cliff (`wire-os-victor/robot/supervisor/src/proxSensors.cpp:221-259`); 6.10
-explains why that matters. The engine computes the cliff's pose from the robot's pose at the event's
+(`wire-os-victor/engine/robotToEngineImplMessaging.cpp:421-445`), and the robot process sends one with
+cliff flags set only when it stops for the cliff
+(`wire-os-victor/robot/supervisor/src/proxSensors.cpp:221-259`). It also sends one with no flags when
+the cliff clears (`proxSensors.cpp:297-300`), which the engine handles without touching the map. 6.10
+explains why the first rule matters. The engine computes the cliff's pose from the robot's pose at the event's
 timestamp and from which sensors fired (`cliffSensorComponent.cpp:335-427`). A combination it does not
 recognise, such as three sensors at once, is not inserted (`:379-383`). `UpdateNavMapWithCliffAt`
 stamps a bar 10 mm deep and `ROBOT_BOUNDING_Y` wide, which is 60 mm (`cliffSensorComponent.cpp:429-442`,
@@ -1407,9 +1409,13 @@ engine stores it as `_broadcastRate_sec` (`mapComponent.cpp:327-331`) and advanc
 time by whole multiples of it (`mapComponent.cpp:377-384`). The Python SDK sends 0.5 by default
 (`nav_map.py:381`). A negative value stops the feed. That is the engine's default, and it is what the
 gateway sends when the stream closes (`wire-os-victor/engine/navMap/mapComponent.h:239`,
-`message_handler.go:3440-3441`). Zero is not guarded: the engine divides by the period at
-`mapComponent.cpp:382`, so 0 gives a floating-point division by zero whose result is then converted
-to an integer, which is undefined behaviour in C++.
+`message_handler.go:3440-3441`). Zero is not guarded. The update at `mapComponent.cpp:382` divides by
+the period, so with 0 it adds NaN, not-a-number, to the next-broadcast time, and under IEEE
+floating-point rules every later comparison against NaN is false, including the `FLT_LE` test at
+`:378` (`wire-os-victor/lib/util/source/anki/util/math/math.h:210-213`). Read as written, a period of
+0 gets you one map and then nothing, with no error. The next-broadcast time is a function-level
+`static`, so no later client gets a map either until `vic-engine` restarts. This has not been tried
+on a robot.
 
 The robot broadcasts only when the map has changed since its last broadcast (`mapComponent.cpp:347`,
 flags set at `mapComponent.cpp:392-396`). Setting the period does not mark the map as changed, so a
@@ -1437,7 +1443,8 @@ When the behaviour activates, `BehaviorSDKInterface` sends the robot process `En
 `wire-os-victor/engine/aiComponent/behaviorComponent/behaviorExternalInterface/beiRobotInfo.cpp:388-391`),
 which clears the firmware's `_stopOnCliff` (`proxSensors.cpp:337-340`).
 
-The firmware queues a `CliffEvent` only when it stops for a cliff (`proxSensors.cpp:221-259`). With
+The firmware queues a `CliffEvent` that reports a cliff only when it stops for one
+(`proxSensors.cpp:221-259`). With
 `_stopOnCliff` false it does not stop, and it sends a `PotentialCliff` message instead
 (`proxSensors.cpp:260-266`). The engine's handler for that message can play an animation in one
 special mode and never touches the map (`robotToEngineImplMessaging.cpp:389-419`). With no
@@ -1576,7 +1583,8 @@ delocalizations, each one erases every existing map, and nothing is merged back.
 [6.6](#66-poses-origins-and-delocalization).
 
 **`NavMapFeedRequest.frequency` is a period in seconds, and 0 is not safe.** Ask for 0.5 to get a map
-at most every half second. Zero reaches an unguarded division in the engine. A robot whose map is not
+at most every half second. Zero reaches an unguarded division in the engine, and as written it yields
+one map and then silence, for every client, until the engine restarts. A robot whose map is not
 changing sends nothing at all, however long you wait. See [6.9](#69-the-navmapfeed-wire-format).
 
 **A nav-map quad's `depth` counts up from the leaves.** A finest leaf is 0 and the root is
