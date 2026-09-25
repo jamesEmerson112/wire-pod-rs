@@ -30,8 +30,21 @@ getHTTPRequest(url, timeout int) (resp string)
 
 */
 
+/*
+
+<additions with no Go counterpart>
+<each blocks and returns what the robot answered, so a script can branch on it>
+<timeout is in seconds; leave it out for 30>
+<goToPose needs behavior control, or it waits out the whole timeout>
+<behavior control at 10 turns off his cliff reaction until release; drive him on the floor>
+goToPose(xMm, yMm, angleRad float, timeout float) (result string)
+lookAroundInPlace(timeout float) (result string)
+
+*/
+
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use axum::Router;
@@ -46,7 +59,7 @@ use tokio::runtime::Handle;
 use wirepod_core::logger::COMP_LUA;
 use wirepod_core::{AppState, ConnError, Esn, RobotEntry, SdkSession, StatusCode};
 use wirepod_proto::anki::vector::external_interface as pb;
-use wirepod_vector::{SdkClient, logged, sdk_client, status_error};
+use wirepod_vector::{MotionOutcome, SdkClient, logged, sdk_client, status_error};
 
 use crate::bcontrol::set_b_control_functions;
 use crate::display::convert_pixels_to_raw_bitmap;
@@ -98,6 +111,14 @@ pub(crate) fn to_int(lua: &Lua, value: Value) -> i64 {
     match lua.coerce_number(value) {
         Ok(Some(number)) => number as i64,
         _ => 0,
+    }
+}
+
+/// `L.ToNumber(n)`, with 0 for anything that will not coerce.
+fn to_number(lua: &Lua, value: Value) -> f64 {
+    match lua.coerce_number(value) {
+        Ok(Some(number)) => number,
+        _ => 0.0,
     }
 }
 
@@ -338,6 +359,127 @@ fn get_http_request(lua: &Lua, (url, timeout): (Value, Value)) -> mlua::Result<m
     }
 }
 
+/// How long `goToPose` and `lookAroundInPlace` wait for an answer when the
+/// script names no timeout.
+const ACTION_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Counts the action tags drawn so far. The gateway rejects an action whose
+/// `id_tag` falls outside `FIRST_SDK_TAG..=LAST_SDK_TAG`, zero included.
+static NEXT_SDK_TAG: AtomicU32 = AtomicU32::new(0);
+
+/// The `n`th tag of the SDK window, wrapping inside it.
+fn sdk_tag(n: u32) -> i32 {
+    let first = pb::ActionTagConstants::FirstSdkTag as u32;
+    let span = pb::ActionTagConstants::LastSdkTag as u32 - first + 1;
+    (first + n % span) as i32
+}
+
+fn next_sdk_tag() -> i32 {
+    sdk_tag(NEXT_SDK_TAG.fetch_add(1, Ordering::Relaxed))
+}
+
+/// The script's timeout in seconds, or [`ACTION_TIMEOUT`] when it is missing,
+/// zero, negative or not a number.
+fn action_timeout(lua: &Lua, value: Value) -> Duration {
+    match Duration::try_from_secs_f64(to_number(lua, value)) {
+        Ok(timeout) if !timeout.is_zero() => timeout,
+        _ => ACTION_TIMEOUT,
+    }
+}
+
+/// Waits on one action call from the script's thread and hands the script the
+/// decoded answer, the RPC error, or `on_timeout` once `timeout` has passed.
+fn block_on_action<F>(timeout: Duration, on_timeout: String, fut: F) -> String
+where
+    F: Future<Output = Result<String, ConnError>>,
+{
+    let Ok(handle) = Handle::try_current() else {
+        return String::new();
+    };
+    match handle.block_on(async move { tokio::time::timeout(timeout, fut).await }) {
+        Ok(Ok(answer)) => answer,
+        Ok(Err(err)) => {
+            tracing::info!(comp = "", "LUA: failure: {err}");
+            err.to_string()
+        }
+        Err(_) => {
+            tracing::info!(comp = "", "LUA: failure: {on_timeout}");
+            on_timeout
+        }
+    }
+}
+
+/// Drives him to `(x_mm, y_mm)` facing `angle_rad`, and returns his answer,
+/// such as `OK SUCCESS` or `OK PATH_PLANNING_FAILED`, the RPC error, or a
+/// timeout message once `timeout_s` (30 by default) has passed.
+///
+/// - Without behaviour control he queues the action and never answers, so call
+///   `assumeBehaviorControl` first. At priority 10 (`OVERRIDE_BEHAVIORS`) that
+///   also turns off his cliff reaction until release: he neither stops at a
+///   drop nor records it in his map, so a script that drives him should run on
+///   the floor.
+/// - A target less than 40 mm away is planned without regard to obstacles and
+///   only checked for collisions afterwards.
+/// - The path is purely positional, so he turns in place at both ends.
+/// - The target is read in whatever coordinate frame he is in when the request
+///   arrives, and that frame is thrown away whenever he is picked up.
+/// - A planning failure arrives as `PATH_PLANNING_FAILED` (the proto's
+///   `PATH_PLANNING_FAILED_ABORT`) or, for an unreachable goal, most likely as
+///   `code=67108866` (`FAILED_TRAVERSING_PATH`). It never arrives as
+///   `PATH_PLANNING_FAILED_RETRY`, which the engine never produces.
+fn go_to_pose(lua: &Lua, args: (Value, Value, Value, Value)) -> mlua::Result<String> {
+    let x_mm = to_number(lua, args.0) as f32;
+    let y_mm = to_number(lua, args.1) as f32;
+    let rad = to_number(lua, args.2) as f32;
+    let timeout = action_timeout(lua, args.3);
+    let (mut client, session) = g_rf_ls_with_session(lua)?;
+    let id_tag = next_sdk_tag();
+    let sent = format!("x_mm={x_mm} y_mm={y_mm} rad={rad} id_tag={id_tag}");
+    let on_timeout = format!(
+        "timeout after {timeout:?}: GoToPose never answers unless the script holds behavior control (assumeBehaviorControl)"
+    );
+    Ok(block_on_action(timeout, on_timeout, async move {
+        logged(
+            COMP_LUA,
+            &session,
+            "GoToPose",
+            &sent,
+            client.go_to_pose(pb::GoToPoseRequest {
+                x_mm,
+                y_mm,
+                rad,
+                motion_prof: None,
+                id_tag,
+                num_retries: 0,
+            }),
+        )
+        .await
+        .map(|response| response.get_ref().describe())
+        .map_err(|status| status_error(&status))
+    }))
+}
+
+/// Has him look around where he stands, and returns his answer, such as
+/// `OK COMPLETE` or `OK WONT_ACTIVATE`, the RPC error, or a timeout message
+/// once `timeout_s` (30 by default) has passed.
+fn look_around_in_place(lua: &Lua, timeout: Value) -> mlua::Result<String> {
+    let timeout = action_timeout(lua, timeout);
+    let (mut client, session) = g_rf_ls_with_session(lua)?;
+    let on_timeout = format!("timeout after {timeout:?}: LookAroundInPlace did not answer");
+    Ok(block_on_action(timeout, on_timeout, async move {
+        logged(
+            COMP_LUA,
+            &session,
+            "LookAroundInPlace",
+            "",
+            client.look_around_in_place(pb::LookAroundInPlaceRequest {}),
+        )
+        .await
+        .map(|response| response.get_ref().describe())
+        .map_err(|status| status_error(&status))
+    }))
+}
+
 /// get robot from LState. Go hands back the `*vector.Vector` and every caller
 /// takes `.Conn`, so this hands back that client. A missing or wrong `bot`
 /// global is Go's failed type assertion, which panics; here it is an error.
@@ -372,6 +514,12 @@ pub fn make_lua_state(bot: Option<Bot>) -> Result<Lua, ScriptError> {
     globals.set("showImage", lua.create_function(show_image_on_screen)?)?;
     globals.set("postHTTPRequest", lua.create_function(post_http_request)?)?;
     globals.set("getHTTPRequest", lua.create_function(get_http_request)?)?;
+    // Additions with no Go counterpart.
+    globals.set("goToPose", lua.create_function(go_to_pose)?)?;
+    globals.set(
+        "lookAroundInPlace",
+        lua.create_function(look_around_in_place)?,
+    )?;
     set_b_control_functions(&lua)?;
     if let Some(bot) = bot {
         let conn = Arc::clone(&bot.robot.conn);
@@ -495,6 +643,7 @@ pub fn register_scripting_api() -> Router<Arc<AppState>> {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::RangeInclusive;
     use std::time::Duration;
 
     use wirepod_core::{BotInfo, RobotConnFactory};
@@ -508,6 +657,9 @@ mod tests {
 
     /// The real-clock ceiling every test runs under.
     const CEILING: Duration = Duration::from_secs(20);
+
+    /// `FIRST_SDK_TAG..=LAST_SDK_TAG`, the only action tags the gateway takes.
+    const SDK_WINDOW: RangeInclusive<i32> = 2_000_001..=3_000_000;
 
     async fn live_entry() -> (Arc<RobotEntry>, FakeRobotHandle) {
         let (addr, handle) = spawn_fake_robot().await;
@@ -528,6 +680,34 @@ mod tests {
             .await
             .expect("dial the fake robot");
         (entry, handle)
+    }
+
+    /// [`run_lua_script`] with the script's return value handed back.
+    async fn eval_script(entry: Arc<RobotEntry>, script: &'static str) -> String {
+        tokio::task::spawn_blocking(move || {
+            let lua = make_lua_state(Some(Bot {
+                esn: entry.esn.clone(),
+                robot: entry,
+            }))
+            .expect("the Lua state is made");
+            lua.load(script)
+                .eval::<String>()
+                .expect("the script returns a string")
+        })
+        .await
+        .expect("the script thread finished")
+    }
+
+    /// The RPC and arguments of the last motion call, as its log line
+    /// rendered them. The fake records which RPC arrived but not its body, so
+    /// this is where the values that went out are read back.
+    fn last_sent(entry: &RobotEntry) -> (&'static str, String) {
+        let call = entry
+            .session
+            .state_stream
+            .motion_call()
+            .expect("the call opened a motion window");
+        (call.rpc, call.args)
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -563,6 +743,60 @@ mod tests {
         })
         .await
         .expect("the script finished");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn go_to_pose_returns_the_answer_and_tags_each_call_inside_the_sdk_window() {
+        tokio::time::timeout(CEILING, async {
+            let (entry, handle) = live_entry().await;
+            let mut tags = Vec::new();
+            for _ in 0..2 {
+                let answer =
+                    eval_script(Arc::clone(&entry), "return goToPose(200, -50, 1.5)").await;
+                // The fake answers an all-default body.
+                assert_eq!(answer, "UNKNOWN no-result");
+                let (rpc, args) = last_sent(&entry);
+                assert_eq!(rpc, "GoToPose");
+                let tag: i32 = args
+                    .strip_prefix("x_mm=200 y_mm=-50 rad=1.5 id_tag=")
+                    .and_then(|tag| tag.parse().ok())
+                    .unwrap_or_else(|| panic!("the pose and a tag in {args:?}"));
+                assert!(SDK_WINDOW.contains(&tag), "{tag} inside the SDK window");
+                tags.push(tag);
+            }
+            assert_ne!(tags[0], tags[1], "each call draws its own tag");
+            let arrived = handle
+                .methods()
+                .into_iter()
+                .filter(|method| *method == "go_to_pose")
+                .count();
+            assert_eq!(arrived, 2);
+            handle.shutdown().await;
+        })
+        .await
+        .expect("the script finished");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn look_around_in_place_returns_the_behavior_result() {
+        tokio::time::timeout(CEILING, async {
+            let (entry, handle) = live_entry().await;
+            let answer = eval_script(Arc::clone(&entry), "return lookAroundInPlace()").await;
+            assert_eq!(answer, "UNKNOWN INVALID_STATE");
+            assert_eq!(last_sent(&entry).0, "LookAroundInPlace");
+            assert!(handle.methods().contains(&"look_around_in_place"));
+            handle.shutdown().await;
+        })
+        .await
+        .expect("the script finished");
+    }
+
+    #[test]
+    fn the_action_tag_wraps_inside_the_sdk_window() {
+        assert_eq!(sdk_tag(0), *SDK_WINDOW.start());
+        assert_eq!(sdk_tag(999_999), *SDK_WINDOW.end());
+        assert_eq!(sdk_tag(1_000_000), *SDK_WINDOW.start());
+        assert!(SDK_WINDOW.contains(&sdk_tag(u32::MAX)));
     }
 
     #[test]
