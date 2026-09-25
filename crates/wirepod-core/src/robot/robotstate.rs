@@ -1,18 +1,19 @@
-//! The robot's own account of what it is doing, and what changed since last
-//! time.
+//! The robot's own account of what it is doing, and the few changes in it that
+//! are worth a log line.
 //!
-//! The robot sends a `RobotState` event many times a second. Logging each one
-//! would fill the 500-entry ring in well under a minute and evict everything
-//! else, so nothing here logs a sample. [`StateTracker`] holds the last one and
-//! answers only with what changed, which for a robot sitting still is nothing
-//! at all.
-//!
-//! Even a change is not always worth a line: `LIFT_IN_POS` and `HEAD_IN_POS`
-//! flicker throughout any movement. So ordinary changes are rate limited and
-//! the ones that matter — delocalization, being picked up, falling, a cliff —
-//! are not.
+//! The robot sends a `RobotState` event many times a second, and an awake
+//! Vector animates constantly, so his head and lift flags flicker with every
+//! idle animation. The log ring holds 500 entries of every level and the voice
+//! pipeline needs them too, so [`StateTracker`] writes a line in only two
+//! cases. An urgent change is written at once. A change in the movement flags
+//! is written only in the few seconds after a motion call, because that is the
+//! question the call's own answer cannot settle: the motion RPCs report success
+//! whether he moved or not. Everything else is stored as the latest sample and
+//! never logged, so a parked or idling robot writes nothing at all.
 
 use std::time::{Duration, Instant};
+
+use crate::robot::observe::MotionCall;
 
 /// One bit of `RobotState.status`, paired with the name a log line uses.
 ///
@@ -38,15 +39,27 @@ pub const STATUS_FLAGS: [(u32, &str); 17] = [
     (0x20000, "motion_detected"),
 ];
 
-/// The flags that always earn a line immediately, however recently the last one
-/// was written.
+/// `picked_up`, `falling`, `cliff_detected` and `being_held`: the flags written
+/// the moment they change, inside a motion window or not.
 ///
-/// Each one is either a safety event or a fact that invalidates what came
-/// before: a fall, a cliff, a lift off the treads, and the pick-up that is
-/// about to delocalize him.
-const ALWAYS_REPORT: u32 = 0x8 | 0x20 | 0x4000 | 0x10000;
+/// Each is either a safety event or the start of a delocalization, and none of
+/// them flickers with an idle animation.
+const URGENT: u32 = 0x8 | 0x20 | 0x4000 | 0x10000;
 
-/// The gap an ordinary flag change has to clear before it is worth a line.
+/// `moving`, `animating`, `pathing`, `lift_in_pos`, `head_in_pos` and
+/// `wheels_moving`: the flags a motion window watches.
+const MOVEMENT: u32 = 0x1 | 0x40 | 0x80 | 0x100 | 0x200 | 0x8000;
+
+/// `moving`, `animating`, `pathing` and `wheels_moving`: the movement flags
+/// that are set only while something is happening. The two `_in_pos` flags are
+/// set at rest.
+const ACTIVE: u32 = 0x1 | 0x40 | 0x80 | 0x8000;
+
+/// The shortest gap between two movement lines inside one motion window.
+///
+/// A change held back by the gap is folded into the next line, because the
+/// next line is measured against what the log last said, and a flicker that
+/// reverts inside the gap is never written at all.
 pub const QUIET_GAP: Duration = Duration::from_millis(500);
 
 /// A decoded `RobotState` event.
@@ -64,26 +77,28 @@ pub struct RobotStateSample {
     pub angle_rad: f32,
     /// Which coordinate frame the pose is in. Zero is none or unknown.
     pub origin_id: u32,
-    /// The object the robot has localized against, or zero for none.
+    /// The object the robot has localized against, or -1 for none.
     ///
-    /// Zero means he is running on dead reckoning alone, which the robot's own
-    /// debug label calls "LocalizedTo: Odometry". Only the charger ever sets
-    /// this; Vector does not localize to cubes.
+    /// -1 means he is running on dead reckoning alone, which the robot's own
+    /// debug label calls "LocalizedTo: Odometry"; zero is an object id like any
+    /// other, and it is also what the derived `Default` leaves here. Only the
+    /// charger ever sets this; Vector does not localize to cubes.
     pub localized_to_object_id: i32,
 }
 
 impl RobotStateSample {
     /// The names of the flags that are set, in bit order.
     pub fn status_names(&self) -> Vec<&'static str> {
-        STATUS_FLAGS
-            .iter()
-            .filter(|(bit, _)| self.status & bit != 0)
-            .map(|(_, name)| *name)
-            .collect()
+        names_of(self.status)
+    }
+
+    /// The object he is localized to, or `None` on dead reckoning alone.
+    pub fn localized_to(&self) -> Option<i32> {
+        (self.localized_to_object_id >= 0).then_some(self.localized_to_object_id)
     }
 }
 
-/// What changed between two samples.
+/// What one sample changed that is worth a line.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct StateChange {
     /// Flags that became set.
@@ -97,92 +112,207 @@ pub struct StateChange {
 }
 
 impl StateChange {
-    /// True when nothing in the sample moved.
+    /// True when nothing in the sample is worth a line.
     pub fn is_empty(&self) -> bool {
         self.gained.is_empty()
             && self.lost.is_empty()
             && self.origin.is_none()
             && self.localized_to.is_none()
     }
+
+    /// The lines this change reads as, given the sample that carried it.
+    ///
+    /// Three kinds rather than one, because they answer different questions: a
+    /// new origin says everything measured before it is now meaningless, a
+    /// localization change says whether his pose is being corrected or has been
+    /// drifting, and the flag line says what he is doing.
+    fn lines(&self, sample: &RobotStateSample) -> Vec<String> {
+        let mut lines = Vec::new();
+        if let Some((was, now)) = self.origin {
+            lines.push(format!("state delocalized: origin {was} -> {now}"));
+        }
+        if let Some((was, now)) = self.localized_to {
+            lines.push(if now < 0 {
+                format!("state on odometry alone: no longer localized to object {was}")
+            } else {
+                format!("state localized to object {now}")
+            });
+        }
+        if !self.gained.is_empty() || !self.lost.is_empty() {
+            let mut line = String::from("state");
+            if !self.gained.is_empty() {
+                line.push_str(&format!(" +[{}]", self.gained.join(" ")));
+            }
+            if !self.lost.is_empty() {
+                line.push_str(&format!(" -[{}]", self.lost.join(" ")));
+            }
+            line.push_str(&format!(
+                " pose=({:.1}, {:.1}) heading={:.3}rad origin={}",
+                sample.x_mm, sample.y_mm, sample.angle_rad, sample.origin_id,
+            ));
+            lines.push(line);
+        }
+        lines
+    }
 }
 
-/// Holds the last sample and answers with what a log line should say.
-///
-/// One tracker belongs to one robot's event stream, which is what makes holding
-/// the previous sample in a plain field correct: the stream is single-threaded
-/// and ends when the robot goes away.
-#[derive(Debug, Default)]
-pub struct StateTracker {
-    last: Option<RobotStateSample>,
-    /// The sample the log last described. Changes are measured against this
-    /// rather than against the previous sample, so a change the quiet gap held
-    /// back is folded into the next line instead of being lost.
-    reported: Option<RobotStateSample>,
+/// What the tracker wants done after one sample.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StateReport {
+    /// The log lines to write, oldest fact first.
+    pub lines: Vec<String>,
+    /// The motion call whose window has closed, for the caller to hand to
+    /// [`StateSlot::finish_motion_call`](crate::robot::observe::StateSlot::finish_motion_call).
+    pub finished: Option<MotionCall>,
+}
+
+/// The motion window being watched.
+#[derive(Debug)]
+struct Window {
+    call: MotionCall,
+    /// The movement flags just before the call could have had any effect.
+    start: u32,
+    /// The movement flags the log last described, which starts as `start`.
+    reported: u32,
+    /// When this window last wrote a movement line.
     reported_at: Option<Instant>,
+    /// Whether any sample in the window differed from `start`.
+    changed: bool,
+}
+
+/// Decides, sample by sample, which lines the state stream writes.
+///
+/// One tracker belongs to one stream, which is what makes holding the previous
+/// sample in a plain field correct: the stream is single-threaded and ends
+/// with the connection. The motion call and the time are passed in rather than
+/// read, so every rule here can be tested without a runtime or a wait.
+#[derive(Debug)]
+pub struct StateTracker {
+    window: Duration,
+    last: Option<RobotStateSample>,
+    watching: Option<Window>,
 }
 
 impl StateTracker {
-    pub fn new() -> Self {
-        Self::default()
+    /// A tracker that watches each motion call for `window` after it went out.
+    pub fn new(window: Duration) -> Self {
+        Self {
+            window,
+            last: None,
+            watching: None,
+        }
     }
 
-    /// The last sample seen, for a caller that wants the pose rather than the
-    /// change.
-    pub fn last(&self) -> Option<RobotStateSample> {
-        self.last
-    }
-
-    /// Records `sample` and answers with the change worth reporting, if any.
+    /// Records `sample` and answers with the lines it earns.
     ///
-    /// `now` is passed rather than read so the rate limit can be tested without
-    /// waiting. The first sample of a stream always reports, because the flags
-    /// it arrives with are news.
-    pub fn note(&mut self, sample: RobotStateSample, now: Instant) -> Option<StateChange> {
-        self.last = Some(sample);
-        let Some(previous) = self.reported else {
-            self.reported = Some(sample);
-            self.reported_at = Some(now);
-            return Some(StateChange {
-                gained: sample.status_names(),
-                lost: Vec::new(),
-                origin: None,
-                localized_to: None,
-            });
-        };
+    /// `call` is the session's current motion call, if any. The first sample of
+    /// a stream earns nothing, because there is nothing to compare it with.
+    ///
+    /// A change seen inside a window may be his own animation rather than the
+    /// call's effect: an awake Vector animates whether or not he was asked to
+    /// move, and the window cannot tell the two apart. What it can say for
+    /// certain is the opposite case, that nothing changed at all.
+    pub fn note(
+        &mut self,
+        sample: RobotStateSample,
+        call: Option<MotionCall>,
+        now: Instant,
+    ) -> StateReport {
+        let previous = self.last.replace(sample);
+        let mut report = StateReport::default();
+        let mut change = StateChange::default();
+        let (mut gained, mut lost) = (0, 0);
 
-        let changed = previous.status ^ sample.status;
-        let change = StateChange {
-            gained: names_of(changed & sample.status),
-            lost: names_of(changed & previous.status),
-            origin: (previous.origin_id != sample.origin_id)
-                .then_some((previous.origin_id, sample.origin_id)),
-            localized_to: (previous.localized_to_object_id != sample.localized_to_object_id)
-                .then_some((
-                    previous.localized_to_object_id,
-                    sample.localized_to_object_id,
-                )),
-        };
-        if change.is_empty() {
-            return None;
+        if let Some(previous) = previous {
+            change.origin = (previous.origin_id != sample.origin_id)
+                .then_some((previous.origin_id, sample.origin_id));
+            // Every negative id means the same thing, so only a change of
+            // anchor counts.
+            change.localized_to = (previous.localized_to() != sample.localized_to()).then_some((
+                previous.localized_to_object_id,
+                sample.localized_to_object_id,
+            ));
+            let flipped = (previous.status ^ sample.status) & URGENT;
+            gained |= flipped & sample.status;
+            lost |= flipped & previous.status;
         }
 
-        // A delocalization, a fall, a cliff or a lift is reported whenever it
-        // happens. Everything else waits out the quiet gap, so that the head
-        // and lift settling flags cannot crowd the ring.
-        let urgent = change.origin.is_some() || changed & ALWAYS_REPORT != 0;
-        if !urgent
-            && let Some(reported_at) = self.reported_at
-            && now.duration_since(reported_at) < QUIET_GAP
-        {
-            return None;
+        match call {
+            Some(call) if now.saturating_duration_since(call.at) < self.window => {
+                // A newer call replaces the window of an older one, which is
+                // dropped without a verdict: the robot can only answer the most
+                // recent command.
+                if self
+                    .watching
+                    .as_ref()
+                    .is_some_and(|window| window.call != call)
+                {
+                    self.watching = None;
+                }
+                let start = previous.unwrap_or(sample).status & MOVEMENT;
+                let window = self.watching.get_or_insert(Window {
+                    call,
+                    start,
+                    reported: start,
+                    reported_at: None,
+                    changed: false,
+                });
+
+                let current = sample.status & MOVEMENT;
+                window.changed |= current != window.start;
+                let flipped = current ^ window.reported;
+                let quiet = window
+                    .reported_at
+                    .is_none_or(|at| now.saturating_duration_since(at) >= QUIET_GAP);
+                // An urgent line is going out anyway, so it carries whatever the
+                // gap was holding back.
+                if flipped != 0 && (quiet || (gained | lost) != 0) {
+                    gained |= flipped & current;
+                    lost |= flipped & window.reported;
+                    window.reported = current;
+                    window.reported_at = Some(now);
+                }
+            }
+            Some(call) => {
+                // The window has closed. A call first seen after its window
+                // was never observed, so it gets no verdict, only a finish.
+                if let Some(window) = self.watching.take()
+                    && window.call == call
+                    && !window.changed
+                {
+                    report.lines.push(verdict(&window));
+                }
+                report.finished = Some(call);
+            }
+            None => self.watching = None,
         }
-        self.reported = Some(sample);
-        self.reported_at = Some(now);
-        Some(change)
+
+        change.gained = names_of(gained);
+        change.lost = names_of(lost);
+        report.lines.extend(change.lines(&sample));
+        report
     }
 }
 
-/// The names of the set bits of `bits`.
+/// The one line for a window that closed with no movement flag changing.
+///
+/// A robot that was already driving when the call arrived keeps `moving` set
+/// throughout, so "no movement" would be false; the line says what stayed set
+/// instead, and the reader can see that the call changed no flag.
+fn verdict(window: &Window) -> String {
+    let MotionCall { rpc, args, .. } = &window.call;
+    let active = window.start & ACTIVE;
+    if active == 0 {
+        format!("no movement after {rpc}({args})")
+    } else {
+        format!(
+            "no change after {rpc}({args}): [{}] throughout",
+            names_of(active).join(" ")
+        )
+    }
+}
+
+/// The names of the set bits of `bits`, in bit order.
 fn names_of(bits: u32) -> Vec<&'static str> {
     STATUS_FLAGS
         .iter()
@@ -195,92 +325,308 @@ fn names_of(bits: u32) -> Vec<&'static str> {
 mod tests {
     use super::*;
 
-    fn at(millis: u64) -> Instant {
-        // A fixed base so the arithmetic is exact rather than clock-dependent.
-        Instant::now() + Duration::from_millis(millis)
+    const WINDOW: Duration = Duration::from_millis(3_000);
+
+    const RESTING: u32 = 0x100 | 0x200;
+    const DRIVING: u32 = 0x1 | 0x8000 | 0x100 | 0x200;
+
+    /// Instants measured from one base, so the arithmetic is exact rather than
+    /// clock-dependent.
+    struct Clock(Instant);
+
+    impl Clock {
+        fn new() -> Self {
+            Self(Instant::now())
+        }
+
+        fn at(&self, millis: u64) -> Instant {
+            self.0 + Duration::from_millis(millis)
+        }
+
+        fn call(&self, rpc: &'static str, args: &str, millis: u64) -> MotionCall {
+            MotionCall {
+                rpc,
+                args: args.to_owned(),
+                at: self.at(millis),
+            }
+        }
     }
 
     fn sample(status: u32) -> RobotStateSample {
         RobotStateSample {
             status,
-            ..RobotStateSample::default()
+            x_mm: 120.43,
+            y_mm: -33.06,
+            angle_rad: 0.7812,
+            origin_id: 3,
+            localized_to_object_id: -1,
         }
     }
 
     #[test]
     fn the_bitfield_names_every_flag_the_robot_can_set() {
-        // Driving: moving, wheels turning, head and lift settled.
-        let driving = sample(0x1 | 0x8000 | 0x100 | 0x200);
         assert_eq!(
-            driving.status_names(),
+            sample(DRIVING).status_names(),
             ["moving", "lift_in_pos", "head_in_pos", "wheels_moving"]
         );
         assert!(sample(0).status_names().is_empty());
     }
 
     #[test]
-    fn a_still_robot_produces_nothing_after_the_first_sample() {
-        let mut tracker = StateTracker::new();
-        let resting = sample(0x1000 | 0x2000);
+    fn urgent_changes_are_written_at_once_with_no_motion_call() {
+        let clock = Clock::new();
+        let mut tracker = StateTracker::new(WINDOW);
+        assert_eq!(
+            tracker.note(sample(RESTING), None, clock.at(0)),
+            StateReport::default(),
+            "the first sample has nothing to be compared with",
+        );
 
-        let first = tracker
-            .note(resting, at(0))
-            .expect("the first sample is always news");
-        assert_eq!(first.gained, ["on_charger", "charging"]);
+        let lifted = tracker.note(sample(RESTING | 0x8 | 0x10000), None, clock.at(10));
+        assert_eq!(
+            lifted.lines,
+            ["state +[picked_up being_held] pose=(120.4, -33.1) heading=0.781rad origin=3"]
+        );
 
-        // Every subsequent identical sample is silent, which is what keeps a
-        // parked robot from evicting the ring.
-        for millis in [10, 5_000, 60_000] {
-            assert_eq!(tracker.note(resting, at(millis)), None);
+        // He throws his frame away with no flag changing, immediately after
+        // the last line.
+        let moved_frame = RobotStateSample {
+            origin_id: 4,
+            ..sample(RESTING | 0x8 | 0x10000)
+        };
+        assert_eq!(
+            tracker.note(moved_frame, None, clock.at(11)).lines,
+            ["state delocalized: origin 3 -> 4"]
+        );
+
+        // -1 is dead reckoning; zero is an object like any other.
+        let on_charger = RobotStateSample {
+            localized_to_object_id: 0,
+            ..moved_frame
+        };
+        assert_eq!(
+            tracker.note(on_charger, None, clock.at(12)).lines,
+            ["state localized to object 0"]
+        );
+        let lost = tracker.note(moved_frame, None, clock.at(13));
+        assert_eq!(
+            lost.lines,
+            ["state on odometry alone: no longer localized to object 0"]
+        );
+        let also_unknown = RobotStateSample {
+            localized_to_object_id: -2,
+            ..moved_frame
+        };
+        assert!(
+            tracker
+                .note(also_unknown, None, clock.at(13))
+                .lines
+                .is_empty(),
+            "every negative id means dead reckoning"
+        );
+
+        let cliff = tracker.note(
+            RobotStateSample {
+                status: RESTING | 0x4000 | 0x20,
+                ..moved_frame
+            },
+            None,
+            clock.at(14),
+        );
+        assert_eq!(
+            cliff.lines,
+            [
+                "state +[falling cliff_detected] -[picked_up being_held] pose=(120.4, -33.1) heading=0.781rad origin=4"
+            ]
+        );
+        assert_eq!(cliff.finished, None);
+    }
+
+    #[test]
+    fn idle_flicker_with_no_motion_call_writes_nothing() {
+        let clock = Clock::new();
+        let mut tracker = StateTracker::new(WINDOW);
+        let idle = [
+            RESTING,
+            RESTING | 0x40 | 0x1,
+            0x40 | 0x1 | 0x100,
+            0x40 | 0x1,
+            RESTING | 0x40,
+            RESTING | 0x20000,
+            RESTING | 0x1000 | 0x2000,
+            RESTING,
+        ];
+        for (tick, status) in (0..).zip(idle.iter().cycle().take(200)) {
+            let report = tracker.note(sample(*status), None, clock.at(tick * 30));
+            assert_eq!(
+                report,
+                StateReport::default(),
+                "tick {tick} wrote something"
+            );
         }
     }
 
     #[test]
-    fn an_ordinary_flutter_waits_out_the_quiet_gap_but_a_cliff_does_not() {
-        let mut tracker = StateTracker::new();
-        tracker.note(sample(0x100), at(0)).expect("first sample");
+    fn a_motion_call_followed_by_movement_writes_the_movement() {
+        let clock = Clock::new();
+        let mut tracker = StateTracker::new(WINDOW);
+        let call = clock.call("DriveWheels", "lw=50 rw=50", 100);
+        tracker.note(sample(RESTING), None, clock.at(90));
 
-        // head_in_pos flicking off well inside the gap is dropped.
-        assert_eq!(tracker.note(sample(0x100 | 0x200), at(50)), None);
+        // The first sample after the call has not reacted yet.
+        let report = tracker.note(sample(RESTING), Some(call.clone()), clock.at(110));
+        assert_eq!(report, StateReport::default());
 
-        // A cliff in the same window is reported regardless.
-        let cliff = tracker
-            .note(sample(0x100 | 0x200 | 0x4000), at(60))
-            .expect("a cliff is always worth a line");
-        assert_eq!(cliff.gained, ["head_in_pos", "cliff_detected"]);
-        assert!(cliff.lost.is_empty());
+        let started = tracker.note(sample(DRIVING), Some(call.clone()), clock.at(160));
+        assert_eq!(
+            started.lines,
+            ["state +[moving wheels_moving] pose=(120.4, -33.1) heading=0.781rad origin=3"]
+        );
 
-        // And once the gap has passed, ordinary changes report again.
-        let settled = tracker
-            .note(sample(0x100), at(1_000))
-            .expect("past the quiet gap");
-        assert_eq!(settled.lost, ["head_in_pos", "cliff_detected"]);
+        // The head settles and unsettles inside the quiet gap: held back, and
+        // gone again before the gap ends, so never written.
+        let flicker = sample(DRIVING & !0x200);
+        assert!(
+            tracker
+                .note(flicker, Some(call.clone()), clock.at(200))
+                .lines
+                .is_empty()
+        );
+        assert!(
+            tracker
+                .note(sample(DRIVING), Some(call.clone()), clock.at(260))
+                .lines
+                .is_empty()
+        );
+
+        // A change still standing when the gap has passed is written, measured
+        // against what the log last said.
+        assert!(
+            tracker
+                .note(flicker, Some(call.clone()), clock.at(600))
+                .lines
+                .is_empty()
+        );
+        let held = tracker.note(flicker, Some(call.clone()), clock.at(700));
+        assert_eq!(
+            held.lines,
+            ["state -[head_in_pos] pose=(120.4, -33.1) heading=0.781rad origin=3"]
+        );
+
+        // The window closes having seen movement: finished, with no verdict.
+        let closed = tracker.note(flicker, Some(call.clone()), clock.at(3_100));
+        assert_eq!(closed.lines, Vec::<String>::new());
+        assert_eq!(closed.finished, Some(call));
+
+        // Outside a window the same flags are silent again.
+        assert!(
+            tracker
+                .note(sample(RESTING), None, clock.at(3_200))
+                .lines
+                .is_empty()
+        );
     }
 
     #[test]
-    fn delocalization_is_reported_the_instant_it_happens() {
-        let mut tracker = StateTracker::new();
-        let before = RobotStateSample {
-            status: 0x1,
-            origin_id: 3,
-            localized_to_object_id: 7,
-            ..RobotStateSample::default()
-        };
-        tracker.note(before, at(0)).expect("first sample");
+    fn a_motion_call_followed_by_nothing_writes_one_line_once_the_window_passes() {
+        let clock = Clock::new();
+        let mut tracker = StateTracker::new(WINDOW);
+        let call = clock.call("DriveWheels", "lw=50 rw=50", 0);
+        tracker.note(sample(RESTING), None, clock.at(0));
+        for millis in (30..3_000).step_by(30) {
+            let report = tracker.note(sample(RESTING), Some(call.clone()), clock.at(millis));
+            assert_eq!(report, StateReport::default(), "{millis}ms wrote something");
+        }
 
-        // A new origin with no flag change at all, immediately after the last
-        // line: the robot has thrown away his coordinate frame and everything
-        // measured in the old one is now meaningless.
-        let after = RobotStateSample {
-            origin_id: 4,
-            localized_to_object_id: 0,
-            ..before
-        };
-        let change = tracker
-            .note(after, at(1))
-            .expect("a new origin always reports");
-        assert_eq!(change.origin, Some((3, 4)));
-        assert_eq!(change.localized_to, Some((7, 0)));
-        assert!(change.gained.is_empty() && change.lost.is_empty());
+        let closed = tracker.note(sample(RESTING), Some(call.clone()), clock.at(3_010));
+        assert_eq!(closed.lines, ["no movement after DriveWheels(lw=50 rw=50)"]);
+        assert_eq!(closed.finished, Some(call.clone()));
+
+        // Were the finish to be lost, the stale call still earns no second line.
+        let again = tracker.note(sample(RESTING), Some(call.clone()), clock.at(3_040));
+        assert!(again.lines.is_empty());
+        assert_eq!(again.finished, Some(call));
+    }
+
+    #[test]
+    fn a_robot_already_moving_is_not_reported_as_still() {
+        let clock = Clock::new();
+        let mut tracker = StateTracker::new(WINDOW);
+        tracker.note(sample(DRIVING), None, clock.at(0));
+        let turn = clock.call("DriveWheels", "lw=100 rw=190", 10);
+        for millis in (30..3_000).step_by(30) {
+            assert!(
+                tracker
+                    .note(sample(DRIVING), Some(turn.clone()), clock.at(millis))
+                    .lines
+                    .is_empty()
+            );
+        }
+        let closed = tracker.note(sample(DRIVING), Some(turn), clock.at(3_020));
+        assert_eq!(
+            closed.lines,
+            ["no change after DriveWheels(lw=100 rw=190): [moving wheels_moving] throughout"]
+        );
+    }
+
+    #[test]
+    fn a_newer_call_is_not_finished_by_an_older_window() {
+        let clock = Clock::new();
+        let mut tracker = StateTracker::new(Duration::from_millis(1_000));
+        let older = clock.call("MoveHead", "speed=2", 0);
+        let newer = clock.call("MoveLift", "speed=2", 500);
+        tracker.note(sample(RESTING), None, clock.at(0));
+        assert!(
+            tracker
+                .note(sample(RESTING), Some(older), clock.at(30))
+                .lines
+                .is_empty()
+        );
+
+        // The newer call replaces the older one before the older window ends.
+        assert!(
+            tracker
+                .note(sample(RESTING), Some(newer.clone()), clock.at(510))
+                .lines
+                .is_empty()
+        );
+
+        // Past the older window's end, inside the newer one's: no verdict for
+        // either, and nothing finished.
+        let report = tracker.note(sample(RESTING), Some(newer.clone()), clock.at(1_100));
+        assert_eq!(report, StateReport::default());
+
+        let closed = tracker.note(sample(RESTING), Some(newer.clone()), clock.at(1_510));
+        assert_eq!(closed.lines, ["no movement after MoveLift(speed=2)"]);
+        assert_eq!(closed.finished, Some(newer));
+    }
+
+    #[test]
+    fn an_urgent_line_carries_the_movement_the_gap_held_back() {
+        let clock = Clock::new();
+        let mut tracker = StateTracker::new(WINDOW);
+        let call = clock.call("DriveWheels", "lw=50 rw=50", 0);
+        tracker.note(sample(RESTING), None, clock.at(0));
+        tracker.note(sample(DRIVING), Some(call.clone()), clock.at(30));
+
+        // He stops and is lifted in the same sample, inside the gap.
+        let lifted = tracker.note(sample(RESTING | 0x8), Some(call), clock.at(60));
+        assert_eq!(
+            lifted.lines,
+            [
+                "state +[picked_up] -[moving wheels_moving] pose=(120.4, -33.1) heading=0.781rad origin=3"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_call_seen_only_after_its_window_is_finished_without_a_verdict() {
+        let clock = Clock::new();
+        let mut tracker = StateTracker::new(WINDOW);
+        tracker.note(sample(RESTING), None, clock.at(0));
+        let late = clock.call("DriveWheels", "lw=50 rw=50", 10);
+        let report = tracker.note(sample(RESTING), Some(late.clone()), clock.at(5_000));
+        assert!(report.lines.is_empty());
+        assert_eq!(report.finished, Some(late));
     }
 }
