@@ -16,6 +16,8 @@ use std::future::Future;
 use std::time::Instant;
 
 use tonic::{Response, Status};
+use wirepod_core::SdkSession;
+use wirepod_core::robot::observe::MotionCall;
 use wirepod_proto::anki::vector::external_interface as pb;
 
 use crate::error::status_error;
@@ -26,6 +28,10 @@ use crate::error::status_error;
 /// a `BehaviorResults`, and the action family adds an `ActionResult`, and in
 /// both cases that second field is the one worth reading.
 pub trait MotionOutcome {
+    /// Whether the call is meant to move the robot. Only these open a motion
+    /// window, so a call such as `SayText` never earns a "no movement" line.
+    const MOVES: bool;
+
     /// The body, rendered for a log line.
     fn describe(&self) -> String;
 }
@@ -97,9 +103,11 @@ fn action_result(result: Option<&pb::action_result::ActionResultCode>) -> String
 /// The `status` field alone, which is the whole body of the direct-motor
 /// responses.
 macro_rules! status_only {
-    ($($response:ty),* $(,)?) => {
+    ($($response:ty => $moves:expr),* $(,)?) => {
         $(
             impl MotionOutcome for $response {
+                const MOVES: bool = $moves;
+
                 fn describe(&self) -> String {
                     response_status(self.status.as_ref()).to_owned()
                 }
@@ -109,12 +117,12 @@ macro_rules! status_only {
 }
 
 status_only!(
-    pb::DriveWheelsResponse,
-    pb::MoveHeadResponse,
-    pb::MoveLiftResponse,
-    pb::StopAllMotorsResponse,
-    pb::EnableMirrorModeResponse,
-    pb::SayTextResponse,
+    pb::DriveWheelsResponse => true,
+    pb::MoveHeadResponse => true,
+    pb::MoveLiftResponse => true,
+    pb::StopAllMotorsResponse => true,
+    pb::EnableMirrorModeResponse => false,
+    pb::SayTextResponse => false,
 );
 
 /// `status` plus an `ActionResult`, which is the action family.
@@ -122,6 +130,8 @@ macro_rules! status_and_action {
     ($($response:ty),* $(,)?) => {
         $(
             impl MotionOutcome for $response {
+                const MOVES: bool = true;
+
                 fn describe(&self) -> String {
                     format!(
                         "{} {}",
@@ -152,6 +162,8 @@ macro_rules! status_and_behavior {
     ($($response:ty),* $(,)?) => {
         $(
             impl MotionOutcome for $response {
+                const MOVES: bool = true;
+
                 fn describe(&self) -> String {
                     format!(
                         "{} {}",
@@ -174,6 +186,8 @@ status_and_behavior!(
 /// actually chose, which for a trigger is the only way to learn which variant
 /// ran.
 impl MotionOutcome for pb::PlayAnimationResponse {
+    const MOVES: bool = true;
+
     fn describe(&self) -> String {
         let played = self
             .animation
@@ -247,8 +261,8 @@ pub fn control_released(comp: &'static str, esn: &str) {
 /// script's call shows as `lua`.
 pub async fn logged<T, F>(
     comp: &'static str,
-    esn: &str,
-    rpc: &str,
+    session: &SdkSession,
+    rpc: &'static str,
     args: &str,
     call: F,
 ) -> Result<Response<T>, Status>
@@ -256,7 +270,17 @@ where
     T: MotionOutcome,
     F: Future<Output = Result<Response<T>, Status>>,
 {
+    let esn = session.esn().as_str();
     let started = Instant::now();
+    // Stamped before the call goes out, so the state stream's window covers
+    // the robot's reaction from its first moment.
+    if T::MOVES {
+        session.state_stream.note_motion_call(MotionCall {
+            rpc,
+            args: args.to_owned(),
+            at: started,
+        });
+    }
     let result = call.await;
     let millis = started.elapsed().as_millis();
     match &result {
@@ -336,7 +360,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_wrapper_returns_the_result_untouched() {
-        let ok = logged("sdkapp", "00303f28", "DriveWheels", "lw=50 rw=50", async {
+        let session = SdkSession::new(wirepod_core::Esn::new("00303f28"));
+        let ok = logged("sdkapp", &session, "DriveWheels", "lw=50 rw=50", async {
             Ok(Response::new(pb::DriveWheelsResponse {
                 status: Some(pb::ResponseStatus {
                     code: pb::response_status::StatusCode::Ok as i32,
@@ -352,7 +377,7 @@ mod tests {
         );
 
         let failed: Result<Response<pb::MoveHeadResponse>, Status> =
-            logged("lua", "00303f28", "MoveHead", "speed=2", async {
+            logged("lua", &session, "MoveHead", "speed=2", async {
                 Err(Status::unavailable("no connection"))
             })
             .await;
@@ -361,6 +386,33 @@ mod tests {
                 .expect_err("the wrapper passes the failure through")
                 .code(),
             tonic::Code::Unavailable
+        );
+    }
+
+    #[tokio::test]
+    async fn only_a_call_that_moves_the_robot_opens_a_motion_window() {
+        let session = SdkSession::new(wirepod_core::Esn::new("00303f28"));
+        let _ = logged(
+            "sdkapp",
+            &session,
+            "EnableMirrorMode",
+            "enable=true",
+            async { Ok(Response::new(pb::EnableMirrorModeResponse::default())) },
+        )
+        .await;
+        assert_eq!(session.state_stream.motion_call(), None);
+
+        let _ = logged("sdkapp", &session, "DriveWheels", "lw=50 rw=50", async {
+            Ok(Response::new(pb::DriveWheelsResponse::default()))
+        })
+        .await;
+        let call = session
+            .state_stream
+            .motion_call()
+            .expect("a motion call is stamped");
+        assert_eq!(
+            (call.rpc, call.args.as_str()),
+            ("DriveWheels", "lw=50 rw=50")
         );
     }
 }

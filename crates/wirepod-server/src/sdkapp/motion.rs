@@ -27,7 +27,7 @@ pub async fn move_wheels(entry: &RobotEntry, lw: &str, rw: &str) -> Response {
     // robot is free to ignore the call, and the logged body is what says so.
     let _ = logged(
         COMP_SDK,
-        entry.esn.as_str(),
+        &entry.session,
         "DriveWheels",
         &format!("lw={lw} rw={rw}"),
         client.drive_wheels(pb::DriveWheelsRequest {
@@ -48,7 +48,7 @@ pub async fn move_lift(entry: &RobotEntry, raw: &str) -> Response {
     let speed = speed(raw);
     let _ = logged(
         COMP_SDK,
-        entry.esn.as_str(),
+        &entry.session,
         "MoveLift",
         &format!("speed={speed}"),
         client.move_lift(pb::MoveLiftRequest {
@@ -66,7 +66,7 @@ pub async fn move_head(entry: &RobotEntry, raw: &str) -> Response {
     let speed = speed(raw);
     let _ = logged(
         COMP_SDK,
-        entry.esn.as_str(),
+        &entry.session,
         "MoveHead",
         &format!("speed={speed}"),
         client.move_head(pb::MoveHeadRequest {
@@ -86,7 +86,7 @@ pub async fn mirror_mode(entry: &RobotEntry, enable: &str) -> Response {
     // control, so its body status is worth reading even though Go ignores it.
     match logged(
         COMP_SDK,
-        entry.esn.as_str(),
+        &entry.session,
         "EnableMirrorMode",
         &format!("enable={enable}"),
         client.enable_mirror_mode(pb::EnableMirrorModeRequest { enable }),

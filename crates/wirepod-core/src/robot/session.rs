@@ -22,6 +22,7 @@ use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use tokio_util::sync::CancellationToken;
 
 use crate::esn::{Esn, Generation};
+use crate::robot::observe::{MapSlot, StateSlot};
 
 /// Camera ownership for one robot. Preemptive: a new claim displaces whatever
 /// handler held the feed and reports that it did so, and only the current owner
@@ -319,6 +320,12 @@ pub struct SdkSession {
     /// clears and the behaviour-control task polls (`bcassume.go:32`,
     /// `bcassume.go:82`).
     pub bc_assumption: AtomicBool,
+    /// The connect-time `robot_state` stream, exclusive for the life of the
+    /// connection. Its receive loop takes an `Arc` into its own task.
+    pub state_stream: Arc<StateSlot>,
+    /// The nav map feed, which runs only while a page keeps renewing its
+    /// lease.
+    pub map_feed: Arc<MapSlot>,
     esn: Esn,
     cam_op: AsyncMutex<()>,
     last_touch: Mutex<Duration>,
@@ -336,6 +343,8 @@ impl SdkSession {
             cam: CamOwner::new(),
             events: Arc::new(EventOwner::new()),
             bc_assumption: AtomicBool::new(false),
+            state_stream: Arc::new(StateSlot::new()),
+            map_feed: Arc::new(MapSlot::new()),
             esn,
             cam_op: AsyncMutex::new(()),
             last_touch: Mutex::new(Duration::ZERO),

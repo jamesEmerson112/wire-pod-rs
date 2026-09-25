@@ -328,6 +328,18 @@ impl RobotRegistry {
         if let Some(cancel) = entry.session.events.stop() {
             cancel.cancel();
         }
+        // The two observation streams hold the entry's connection open for as
+        // long as they run, so an eviction that left them running would keep
+        // the old connection alive while the next request dialled a new one.
+        for cancel in [
+            entry.session.state_stream.stop(),
+            entry.session.map_feed.stop(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            cancel.cancel();
+        }
         let stopped = entry.session.cam.current();
         tokio::time::sleep(self.timings.disconnect_settle).await;
 

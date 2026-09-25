@@ -35,6 +35,7 @@ pub mod jdocspinger;
 pub mod literals;
 pub mod mdns;
 pub mod mux;
+pub mod navmap;
 pub mod peer;
 pub mod reply;
 pub mod router;

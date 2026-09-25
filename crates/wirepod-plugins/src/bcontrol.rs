@@ -13,7 +13,7 @@ use wirepod_proto::anki::vector::external_interface as pb;
 use wirepod_vector::motionlog::{control_granted, control_released};
 use wirepod_vector::status_error;
 
-use crate::scripting::{g_rf_ls_with_esn, to_int};
+use crate::scripting::{g_rf_ls_with_session, to_int};
 
 fn control_release() -> pb::BehaviorControlRequest {
     pb::BehaviorControlRequest {
@@ -50,7 +50,8 @@ pub fn set_b_control_functions(lua: &Lua) -> mlua::Result<()> {
 
     let assumed = Arc::clone(&currently_assumed);
     let assume = lua.create_function(move |lua, arg: Value| {
-        let (mut client, esn) = g_rf_ls_with_esn(lua)?;
+        let (mut client, session) = g_rf_ls_with_session(lua)?;
+        let esn = session.esn().as_str().to_owned();
         // Go seeds `priority` with OVERRIDE_BEHAVIORS and only then tests it
         // against the four valid values, so the warning is unreachable and the
         // argument always wins.

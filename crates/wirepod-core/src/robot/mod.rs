@@ -5,9 +5,13 @@ pub mod cam;
 pub mod conn;
 pub mod events;
 pub mod meter;
+pub mod navmap;
+pub mod navmap_feed;
+pub mod observe;
 pub mod registry;
 pub mod robotstate;
 pub mod session;
+pub mod state_stream;
 
 pub use crate::robot::cam::{CamGuard, PumpExit, cam_stream_pump, start_cam_stream};
 pub use crate::robot::conn::{
