@@ -56,6 +56,7 @@ dd.err { color: var(--red); }
 .chip.bad { color: var(--red); background: rgba(217, 80, 63, 0.16); }
 #legend { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; }
 #legend li { display: grid; grid-template-columns: 18px 16px 1fr auto; align-items: center; gap: 8px; }
+#legend li.never .name { opacity: 0.55; }
 .sw { width: 18px; height: 18px; overflow: hidden; background: var(--bg); border: 1px solid #3A4952; border-radius: 3px; }
 .sw i { display: block; width: 100%; height: 100%; }
 .sw.none { border-style: dashed; }
@@ -138,6 +139,12 @@ dd.err { color: var(--red); }
   const FONT = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
 
   const $ = (id) => document.getElementById(id);
+  // The engine's "no object" id is -1, so 0 is a real object and a missing field
+  // reads as no anchor at all.
+  const localizedTo = (robot) => (Number.isInteger(robot.localized_to) ? robot.localized_to : -1);
+  // Content types the robot's firmware never writes: the only construction of
+  // the first is a unit test, and the writer of the second has no callers.
+  const NEVER_WRITTEN = new Set(["interesting_edge", "non_interesting_edge"]);
   const canvas = $("map"), ctx = canvas.getContext("2d"), statusEl = $("status");
   const params = new URLSearchParams(location.search);
   const demo = params.get("demo");
@@ -443,7 +450,7 @@ dd.err { color: var(--red); }
     setText($("f-status"), state.gotReply ? state.status || "–" : "–");
     $("f-status").classList.toggle("err", state.gotReply && !Object.hasOwn(STATUS_TEXT, state.status));
     setText($("f-loc"), !robot ? "no pose yet"
-      : robot.localized_to ? `localized to object ${robot.localized_to}` : "odometry only (dead reckoning)");
+      : localizedTo(robot) >= 0 ? `localized to object ${robot.localized_to}` : "odometry only (dead reckoning)");
     setText($("f-pose"), robot
       ? `x ${mm(robot.x)}, y ${mm(robot.y)}, heading ${Math.round(((robot.angle || 0) * 180) / Math.PI)}°` : "–");
     setText($("f-frame"), robot ? `origin ${robot.origin_id}` : "–");
@@ -492,7 +499,11 @@ dd.err { color: var(--red); }
       const li = document.createElement("li");
       li.innerHTML = '<span class="sw"><i></i></span><span class="num"></span><span class="name"></span><span class="count"></span>';
       li.querySelector(".num").textContent = String(i);
-      li.querySelector(".name").textContent = name;
+      li.querySelector(".name").textContent = NEVER_WRITTEN.has(name) ? `${name} (never written)` : name;
+      if (NEVER_WRITTEN.has(name)) {
+        li.classList.add("never");
+        li.title = "Vector's firmware never writes this type, so expect zero.";
+      }
       return li;
     }));
   }
@@ -714,7 +725,6 @@ dd.err { color: var(--red); }
   let demoErrors = 0;
   const UNKNOWN = 0x5050501F, CLEAR = 0x2FBF5A73;
 
-  const pack = (r, g, b, a) => ((r << 24) | (g << 16) | (b << 8) | a) >>> 0;
   const noise = (x, y) => { const h = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453; return h - Math.floor(h); };
 
   // Content and colour of the 8 mm cell centred at (x, y); conf is how firm the obstacles are.
@@ -723,14 +733,14 @@ dd.err { color: var(--red); }
     if (x > 320 && x < 368 && ay < 48) {
       const n = noise(x, y);
       if (n < 0.2) return [5, 0x2F7FD9C0];
-      const c = Math.min(1, conf * (0.5 + n));
-      return [4, pack(0, 255, Math.round(255 * (1 - c)), Math.round(60 + 195 * c))];
+      // A stock robot does not colour obstacles by belief; they appear once
+      // enough readings confirm them, so the demo firms them up by count.
+      return n < conf ? [4, 0x00D8C8D0] : [0, UNKNOWN];
     }
     if (x > 144 && x < 192 && y > 128 && y < 176) return [3, 0xE0402AFF];
     if (x > 0 && x < 256 && y > -112 && y < -96) return [7, x > 224 ? 0xE0B000FF : x > 192 ? 0xFF69B4FF : 0x000000FF];
     if (x > 0 && x < 256 && y > -96 && y < -64) return [2, 0x1E7A4A99];
     if ((x > -64 && x < 320 && ay < edge) || (x > 224 && x < 320 && y > 0 && y < 224)) return [1, CLEAR];
-    if (x > 64 && x < 208 && y > -176 && y < -160) return x < 160 ? [8, 0xFF00FFC0] : [9, 0x8A6FA0A0];
     if (x > 272 && x < 304 && y > -96 && y < -64) return [6, 0xFF8C00D0];
     return [0, UNKNOWN];
   }
@@ -768,8 +778,8 @@ dd.err { color: var(--red); }
     if (t < 9) return { x: 30 * t, y: 0, angle: 0, ...base, flags: moving };
     if (t < 12) return { x: 270, y: 0, angle: ((t - 9) / 3) * (Math.PI / 2), ...base, flags: ["moving", "wheels_moving"] };
     if (t < 15) return { x: 270, y: 30 * (t - 12), angle: Math.PI / 2, ...base, flags: moving };
-    if (t < 20) return { x: 0, y: 0, angle: 0, origin_id: 8, localized_to: 0, flags: ["picked_up"] };
-    return { x: 0, y: 0, angle: 0.25 * (t - 20), origin_id: 9, localized_to: 0, flags: ["moving", "wheels_moving"] };
+    if (t < 20) return { x: 0, y: 0, angle: 0, origin_id: 8, localized_to: -1, flags: ["picked_up"] };
+    return { x: 0, y: 0, angle: 0.25 * (t - 20), origin_id: 9, localized_to: -1, flags: ["moving", "wheels_moving"] };
   }
 
   function demoSnapshot() {
@@ -779,7 +789,7 @@ dd.err { color: var(--red); }
       throw demoErrors % 2 ? new PollError("Server unreachable") : new PollError("HTTP 503", "Service Unavailable");
     }
     if (demo === "empty") {
-      const robot = { x: 0, y: 0, angle: 0, origin_id: 7, localized_to: 0, flags: [] };
+      const robot = { x: 0, y: 0, angle: 0, origin_id: 7, localized_to: -1, flags: [] };
       return { serial: "demo", status: "waiting_for_map", map: null, robot };
     }
     let map;
