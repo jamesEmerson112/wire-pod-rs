@@ -11,6 +11,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use wirepod_core::RobotEntry;
 use wirepod_core::logger::COMP_SDK;
 use wirepod_proto::anki::vector::external_interface as pb;
+use wirepod_vector::motionlog::{control_granted, control_released};
 use wirepod_vector::status_error;
 
 use crate::sdkapp::sdk_client;
@@ -55,7 +56,12 @@ pub fn assume(entry: &RobotEntry, priority: &str) -> Response {
         return response;
     };
     let request = control_request(priority);
+    let level = match &request.request_type {
+        Some(pb::behavior_control_request::RequestType::ControlRequest(asked)) => asked.priority,
+        _ => 0,
+    };
     let session = Arc::clone(&entry.session);
+    let esn = entry.esn.as_str().to_owned();
     tokio::spawn(async move {
         let (sender, receiver) = mpsc::channel(4);
         // Queued before the call rather than after it, because tonic's call
@@ -80,6 +86,7 @@ pub fn assume(entry: &RobotEntry, priority: &str) -> Response {
                             pb::behavior_control_response::ResponseType::ControlGrantedResponse(_)
                         )
                     ) {
+                        control_granted(COMP_SDK, &esn, level);
                         break;
                     }
                 }
@@ -93,6 +100,7 @@ pub fn assume(entry: &RobotEntry, priority: &str) -> Response {
         while session.bc_assumption.load(Ordering::SeqCst) {
             tokio::time::sleep(POLL).await;
         }
+        control_released(COMP_SDK, &esn);
         let _ = sender.send(control_release()).await;
     });
     response

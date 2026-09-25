@@ -37,6 +37,7 @@ getHTTPRequest(url, timeout int) (resp string)
 <timeout is in seconds; leave it out for 30>
 <goToPose needs behavior control, or it waits out the whole timeout>
 <behavior control at 10 turns off his cliff reaction until release; drive him on the floor>
+<behavior control at 20 keeps the cliff reaction on and still lets goToPose run>
 goToPose(xMm, yMm, angleRad float, timeout float) (result string)
 lookAroundInPlace(timeout float) (result string)
 
@@ -423,7 +424,9 @@ where
 ///   `assumeBehaviorControl` first. At priority 10 (`OVERRIDE_BEHAVIORS`) that
 ///   also turns off his cliff reaction until release: he neither stops at a
 ///   drop nor records it in his map, so a script that drives him should run on
-///   the floor.
+///   the floor. Priority 20 (`DEFAULT`) keeps the cliff reaction on
+///   (`SDKDefault.json` sets `disableCliffDetection` false) and still activates
+///   the SDK behaviour an action needs.
 /// - A target less than 40 mm away is planned without regard to obstacles and
 ///   only checked for collisions afterwards.
 /// - The path is purely positional, so he turns in place at both ends.

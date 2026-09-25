@@ -12,7 +12,8 @@ use tokio_util::sync::CancellationToken;
 use wirepod_core::logger::COMP_SDK;
 use wirepod_core::{AppState, BotStatusKind, Esn, GetRobotError, RobotEntry, Timings};
 use wirepod_proto::anki::vector::external_interface as pb;
-use wirepod_vector::sdk_client;
+use wirepod_vector::motionlog::{control_granted, control_released};
+use wirepod_vector::{logged, sdk_client};
 
 const HYSTERESIS_N: i32 = 3;
 const MAX_ATTEMPTS: i32 = 3;
@@ -284,9 +285,26 @@ async fn drive_home(entry: &RobotEntry, esn: &Esn, timings: &Timings) -> bool {
             }
         }
     }
+    // The drive home runs with his cliff reaction off, which the grant line
+    // says, and it is a motion call like any other, so its answer is logged.
+    control_granted(
+        COMP_SDK,
+        esn.as_str(),
+        pb::control_request::Priority::OverrideBehaviors as i32,
+    );
     // blocks until the dock behavior finishes or the deadline expires
-    let docked =
-        tokio::time::timeout_at(until, client.drive_on_charger(pb::DriveOnChargerRequest {})).await;
+    let docked = tokio::time::timeout_at(
+        until,
+        logged(
+            COMP_SDK,
+            &entry.session,
+            "DriveOnCharger",
+            "",
+            client.drive_on_charger(pb::DriveOnChargerRequest {}),
+        ),
+    )
+    .await;
+    control_released(COMP_SDK, esn.as_str());
     let _ = sender.send(pb::BehaviorControlRequest {
         request_type: Some(pb::behavior_control_request::RequestType::ControlRelease(
             pb::ControlRelease {},
