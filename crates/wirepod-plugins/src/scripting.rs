@@ -374,6 +374,9 @@ fn sdk_tag(n: u32) -> i32 {
     (first + n % span) as i32
 }
 
+/// The bound on the best-effort cancel a timed-out `goToPose` sends.
+const CANCEL_TIMEOUT: Duration = Duration::from_secs(2);
+
 fn next_sdk_tag() -> i32 {
     sdk_tag(NEXT_SDK_TAG.fetch_add(1, Ordering::Relaxed))
 }
@@ -388,10 +391,12 @@ fn action_timeout(lua: &Lua, value: Value) -> Duration {
 }
 
 /// Waits on one action call from the script's thread and hands the script the
-/// decoded answer, the RPC error, or `on_timeout` once `timeout` has passed.
-fn block_on_action<F>(timeout: Duration, on_timeout: String, fut: F) -> String
+/// decoded answer, the RPC error, or `on_timeout` once `timeout` has passed,
+/// running `on_give_up` first in that last case.
+fn block_on_action<F, G>(timeout: Duration, on_timeout: String, fut: F, on_give_up: G) -> String
 where
     F: Future<Output = Result<String, ConnError>>,
+    G: Future<Output = ()>,
 {
     let Ok(handle) = Handle::try_current() else {
         return String::new();
@@ -403,6 +408,7 @@ where
             err.to_string()
         }
         Err(_) => {
+            handle.block_on(on_give_up);
             tracing::info!(comp = "", "LUA: failure: {on_timeout}");
             on_timeout
         }
@@ -425,38 +431,69 @@ where
 ///   arrives, and that frame is thrown away whenever he is picked up.
 /// - A planning failure arrives as `PATH_PLANNING_FAILED` (the proto's
 ///   `PATH_PLANNING_FAILED_ABORT`) or, for an unreachable goal, most likely as
-///   `code=67108866` (`FAILED_TRAVERSING_PATH`). It never arrives as
-///   `PATH_PLANNING_FAILED_RETRY`, which the engine never produces.
+///   `FAILED_TRAVERSING_PATH`. It never arrives as `PATH_PLANNING_FAILED_RETRY`,
+///   which the engine never produces.
+/// - On a timeout the action is cancelled by its tag, because the robot keeps
+///   it queued and would otherwise carry it out later, for instance the moment
+///   the script next takes behaviour control.
 fn go_to_pose(lua: &Lua, args: (Value, Value, Value, Value)) -> mlua::Result<String> {
     let x_mm = to_number(lua, args.0) as f32;
     let y_mm = to_number(lua, args.1) as f32;
     let rad = to_number(lua, args.2) as f32;
     let timeout = action_timeout(lua, args.3);
     let (mut client, session) = g_rf_ls_with_session(lua)?;
+    let mut canceller = client.clone();
+    let esn = session.esn().as_str().to_owned();
     let id_tag = next_sdk_tag();
     let sent = format!("x_mm={x_mm} y_mm={y_mm} rad={rad} id_tag={id_tag}");
     let on_timeout = format!(
         "timeout after {timeout:?}: GoToPose never answers unless the script holds behavior control (assumeBehaviorControl)"
     );
-    Ok(block_on_action(timeout, on_timeout, async move {
-        logged(
-            COMP_LUA,
-            &session,
-            "GoToPose",
-            &sent,
-            client.go_to_pose(pb::GoToPoseRequest {
-                x_mm,
-                y_mm,
-                rad,
-                motion_prof: None,
-                id_tag,
-                num_retries: 0,
-            }),
-        )
-        .await
-        .map(|response| response.get_ref().describe())
-        .map_err(|status| status_error(&status))
-    }))
+    Ok(block_on_action(
+        timeout,
+        on_timeout,
+        async move {
+            logged(
+                COMP_LUA,
+                &session,
+                "GoToPose",
+                &sent,
+                client.go_to_pose(pb::GoToPoseRequest {
+                    x_mm,
+                    y_mm,
+                    rad,
+                    motion_prof: None,
+                    id_tag,
+                    num_retries: 0,
+                }),
+            )
+            .await
+            .map(|response| response.get_ref().describe())
+            .map_err(|status| status_error(&status))
+        },
+        async move {
+            // Best effort: the answer goes to the log, and the script already has
+            // its timeout message.
+            let cancelled = tokio::time::timeout(
+                CANCEL_TIMEOUT,
+                canceller.cancel_action_by_id_tag(pb::CancelActionByIdTagRequest {
+                    id_tag: id_tag.unsigned_abs(),
+                }),
+            )
+            .await;
+            let outcome = match cancelled {
+                Ok(Ok(_)) => "sent".to_owned(),
+                Ok(Err(status)) => status_error(&status).to_string(),
+                Err(_) => format!("no answer within {CANCEL_TIMEOUT:?}"),
+            };
+            tracing::debug!(
+                target: "sdkapp",
+                comp = COMP_LUA,
+                bot = esn,
+                "motion CancelActionByIdTag(id_tag={id_tag}) after a GoToPose timeout: {outcome}"
+            );
+        },
+    ))
 }
 
 /// Has him look around where he stands, and returns his answer, such as
@@ -466,18 +503,23 @@ fn look_around_in_place(lua: &Lua, timeout: Value) -> mlua::Result<String> {
     let timeout = action_timeout(lua, timeout);
     let (mut client, session) = g_rf_ls_with_session(lua)?;
     let on_timeout = format!("timeout after {timeout:?}: LookAroundInPlace did not answer");
-    Ok(block_on_action(timeout, on_timeout, async move {
-        logged(
-            COMP_LUA,
-            &session,
-            "LookAroundInPlace",
-            "",
-            client.look_around_in_place(pb::LookAroundInPlaceRequest {}),
-        )
-        .await
-        .map(|response| response.get_ref().describe())
-        .map_err(|status| status_error(&status))
-    }))
+    Ok(block_on_action(
+        timeout,
+        on_timeout,
+        async move {
+            logged(
+                COMP_LUA,
+                &session,
+                "LookAroundInPlace",
+                "",
+                client.look_around_in_place(pb::LookAroundInPlaceRequest {}),
+            )
+            .await
+            .map(|response| response.get_ref().describe())
+            .map_err(|status| status_error(&status))
+        },
+        std::future::ready(()),
+    ))
 }
 
 /// get robot from LState. Go hands back the `*vector.Vector` and every caller
@@ -805,5 +847,24 @@ mod tests {
         assert!(validate_lua_script("this is not lua ===").is_err());
         // `Router::route` panics on a pattern axum cannot parse.
         let _router = register_scripting_api();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_timed_out_action_cancels_before_the_script_hears_the_timeout() {
+        let gave_up = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = Arc::clone(&gave_up);
+        // Scripts run on a blocking thread, so the test does too.
+        let answer = tokio::task::spawn_blocking(move || {
+            block_on_action(
+                Duration::from_millis(10),
+                "timeout".to_owned(),
+                std::future::pending::<Result<String, ConnError>>(),
+                async move { flag.store(true, std::sync::atomic::Ordering::SeqCst) },
+            )
+        })
+        .await
+        .expect("the blocking task finished");
+        assert_eq!(answer, "timeout");
+        assert!(gave_up.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

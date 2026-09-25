@@ -91,6 +91,13 @@ fn action_result(result: Option<&pb::action_result::ActionResultCode>) -> String
         pb::action_result::ActionResultCode::Abort => "ABORT",
         pb::action_result::ActionResultCode::AnimAborted => "ANIM_ABORTED",
         pb::action_result::ActionResultCode::PathPlanningFailedAbort => "PATH_PLANNING_FAILED",
+        // What an unreachable goal most likely reports: the planner found no
+        // path, so the path component went back to ready without the robot
+        // having arrived.
+        pb::action_result::ActionResultCode::FailedTraversingPath => "FAILED_TRAVERSING_PATH",
+        pb::action_result::ActionResultCode::FollowingPathButNotTraversing => {
+            "FOLLOWING_PATH_BUT_NOT_TRAVERSING"
+        }
         // Never produced by the robot; see the doc comment above.
         pb::action_result::ActionResultCode::PathPlanningFailedRetry => "PATH_PLANNING_RETRY",
         pb::action_result::ActionResultCode::StillOnCharger => "STILL_ON_CHARGER",
