@@ -306,10 +306,8 @@ async fn a_write_into_a_read_only_directory_leaves_the_original_and_no_temporary
 /// search indexer opening the state file just after it changed, and then lets
 /// go. The write has to land anyway.
 ///
-/// The budget is the test's rather than production's, and
-/// `write_atomic_with_retry_budget` says why: the production budget is shorter
-/// than the time this machine takes to create, fill and sync the temporary, so
-/// a test using it would be racing its own setup.
+/// The budget is the test's rather than production's, so that it can be sized
+/// for the attempt count asserted below.
 ///
 /// The attempt count is asserted, because without it the test passes vacuously
 /// whenever the writer reaches its first rename after the hold has already
@@ -404,11 +402,8 @@ async fn a_hold_that_clears_does_not_lose_the_write() {
 /// What is asserted about how it ends is that it does: the call comes back with
 /// the error rather than waiting on a hold that is never coming, and it comes
 /// back on the production budget rather than on the ceiling. How long that
-/// budget is is not asserted here, because it cannot be: creating, filling and
-/// syncing the temporary costs more on a busy machine than the fourteen
-/// milliseconds the whole budget spends waiting, so no elapsed time tells four
-/// attempts from one. The unit test beside `RetryBudget` pins the number
-/// instead.
+/// budget is is not asserted here, because a busy machine stretches every
+/// attempt; the unit test beside `RetryBudget` pins the number instead.
 #[cfg(windows)]
 #[tokio::test]
 async fn a_permanently_held_target_reports_an_error_rather_than_spinning() {
@@ -683,5 +678,75 @@ async fn concurrent_writers_never_leave_a_torn_file() {
         entry_names(directory.path()),
         ["botSdkInfo.json"],
         "a temporary survived the concurrent writes"
+    );
+}
+
+/// The concurrent writers again, with the target held the way an on-access
+/// scanner holds a file it has just seen change: shared for reading and writing
+/// but not for deletion, for longer than a rename takes. Every rename is
+/// refused with `ERROR_ACCESS_DENIED` until the hold clears, and the production
+/// budget has to outlast it.
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_writers_outlast_a_scanner_holding_the_target() {
+    use std::fs::OpenOptions;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::sync::mpsc;
+
+    /// `FILE_SHARE_READ | FILE_SHARE_WRITE`.
+    const SHARE_READ_WRITE: u32 = 1 | 2;
+    const HOLD: Duration = Duration::from_millis(100);
+    const WRITERS: u8 = 8;
+    const LENGTH: usize = 64 * 1024;
+
+    let directory = TempDir::new("scanned");
+    let target = directory.path().join("botSdkInfo.json");
+    fs::write(&target, b"original").expect("could not seed the target");
+
+    let (opened, is_open) = mpsc::channel();
+    let holder = {
+        let target = target.clone();
+        std::thread::spawn(move || {
+            let held = OpenOptions::new()
+                .read(true)
+                .share_mode(SHARE_READ_WRITE)
+                .open(&target)
+                .expect("could not hold the target open");
+            opened.send(()).expect("nobody is waiting for the hold");
+            std::thread::sleep(HOLD);
+            drop(held);
+        })
+    };
+    is_open.recv().expect("the holder never opened the target");
+
+    let writes = tokio::time::timeout(CEILING, async {
+        let mut handles = Vec::new();
+        for writer in 0..WRITERS {
+            let target = target.clone();
+            handles.push(tokio::spawn(async move {
+                write_atomic(target, vec![b'a' + writer; LENGTH], MODE).await
+            }));
+        }
+        for handle in handles {
+            handle
+                .await
+                .expect("a writer panicked")
+                .expect("a writer lost its write to the hold");
+        }
+    })
+    .await;
+    writes.expect("the writers did not finish within the ceiling");
+    holder.join().expect("the holder panicked");
+
+    let written = fs::read(&target).expect("the target is missing");
+    assert_eq!(written.len(), LENGTH, "the file is a partial write");
+    assert!(
+        written.iter().all(|byte| *byte == written[0]),
+        "the file mixes two writers' bytes"
+    );
+    assert_eq!(
+        entry_names(directory.path()),
+        ["botSdkInfo.json"],
+        "a temporary survived the held writes"
     );
 }

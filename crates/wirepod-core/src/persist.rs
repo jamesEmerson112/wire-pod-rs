@@ -63,11 +63,9 @@ const TEMPORARY_HEX_LEN: usize = 16;
 /// How many times [`rename_over`] tries, and how long it waits after the first
 /// failure; each later wait is double the last.
 ///
-/// It is a value rather than a pair of constants because the production budget
-/// is shorter than the time it takes to arrange a hold on the target from
-/// another thread, so a test that used it would be racing its own setup.
-/// `test_support::write_atomic_with_retry_budget` hands a test a wide budget
-/// and drives the same loop deterministically.
+/// It is a value rather than a pair of constants so that
+/// `test_support::write_atomic_with_retry_budget` can hand a test a budget
+/// sized for what it asserts and drive the same loop.
 ///
 /// The wait is a plain blocking sleep rather than a [`crate::timings`] field
 /// because nothing awaits it: it runs inside the `spawn_blocking` closure, and
@@ -85,9 +83,12 @@ pub(crate) struct RetryBudget {
 }
 
 impl RetryBudget {
-    /// Four attempts over fourteen milliseconds of waiting in total.
+    /// Ten attempts over about a second of waiting in total, which outlasts an
+    /// on-access scanner holding a file it has just seen change on a loaded
+    /// machine. Go's own toolchain retries Windows renames on the same two
+    /// errors for two seconds.
     pub(crate) const PRODUCTION: Self = Self {
-        attempts: 4,
+        attempts: 10,
         first_backoff: Duration::from_millis(2),
     };
 
@@ -751,7 +752,12 @@ fn rename_over(temporary: &Path, target: &Path, budget: RetryBudget) -> io::Resu
         match fs::rename(temporary, target) {
             Ok(()) => return Ok(attempts),
             Err(error) => {
-                let Some(wait) = waits.next().filter(|_| is_transient(&error)) else {
+                // A directory in the target's place answers the same code as a
+                // hold and never clears, so it is not waited on.
+                let Some(wait) = waits
+                    .next()
+                    .filter(|_| is_transient(&error) && !target.is_dir())
+                else {
                     return Err(error);
                 };
                 std::thread::sleep(wait);
@@ -764,8 +770,8 @@ fn rename_over(temporary: &Path, target: &Path, budget: RetryBudget) -> io::Resu
 ///
 /// `ERROR_ACCESS_DENIED` is what `MoveFileExW` answers both when another handle
 /// holds the target without delete sharing and when the target is a directory,
-/// so the error alone cannot tell the two apart and both spend the budget; the
-/// budget is small precisely because the hopeless case is in it.
+/// so the error alone cannot tell the two apart; [`rename_over`] asks the
+/// filesystem which it is before waiting.
 /// `ERROR_SHARING_VIOLATION` is the other code a hold can surface as. Anything
 /// else, and any error carrying no Windows code at all, is hopeless in a way
 /// waiting cannot change.
@@ -925,29 +931,20 @@ mod tests {
     /// second statement of the formula. [`rename_over`] takes its waits from
     /// here and ends when they run out, so a doubling that stopped doubling, or
     /// an attempt count that moved, changes this list.
-    ///
-    /// No elapsed time can tell four attempts from one: creating, filling and
-    /// syncing the temporary costs more on a busy machine than the whole budget
-    /// spends waiting. Widening the budget, which the side-by-side run may well
-    /// ask for, is then an edit here as well as above, which is the point.
     #[test]
-    fn the_production_budget_waits_two_then_four_then_eight_milliseconds() {
+    fn the_production_budget_doubles_from_two_milliseconds_for_about_a_second() {
         let budget = RetryBudget::PRODUCTION;
 
-        assert_eq!(budget.attempts, 4, "the production attempt count moved");
+        assert_eq!(budget.attempts, 10, "the production attempt count moved");
         assert_eq!(
             budget.waits().collect::<Vec<_>>(),
-            [
-                Duration::from_millis(2),
-                Duration::from_millis(4),
-                Duration::from_millis(8),
-            ],
+            [2, 4, 8, 16, 32, 64, 128, 256, 512].map(Duration::from_millis),
             "the production wait sequence moved"
         );
         assert_eq!(
             budget.waits().sum::<Duration>(),
-            Duration::from_millis(14),
-            "the production budget no longer waits fourteen milliseconds in total"
+            Duration::from_millis(1022),
+            "the production budget no longer waits 1022 milliseconds in total"
         );
     }
 
