@@ -43,7 +43,7 @@ Status is one of: done, partial, or the milestone that will translate it.
 | `pkg/initwirepod/startserver.go` | 231 | `wirepod-server/src/startserver.rs` | done |
 | `pkg/initwirepod/web.go` | 56 | `wirepod-server/src/initweb.rs` | done |
 | `pkg/logger/logger.go` | 248 | `wirepod-core/src/logger.rs` | done |
-| `pkg/logger/msg-and.go`, `msg-winmac.go` | 40 | `wirepod-core/src/msg.rs` | M6, stage 3 |
+| `pkg/logger/msg-and.go`, `msg-winmac.go` | 40 | `wirepod-core/src/msg.rs` | done |
 | `pkg/mdnshandler/mdns.go` | 90 | `wirepod-server/src/mdns.rs` | done |
 | `pkg/scripting/scripting.go` | 317 | `wirepod-plugins/src/scripting.rs` | done, apart from the `gopher-lua-libs` preload |
 | `pkg/scripting/bcontrol.go` | 92 | `wirepod-plugins/src/bcontrol.rs` | done |
@@ -92,13 +92,13 @@ The Windows shell comes from a second Go repo, `E:/GitHub/WirePod`, which is ker
 
 | Go file in the WirePod repo | Lines | Rust module | Status |
 |---|---|---|---|
-| `windows/cmd/main.go` | 10 | `wirepod-app/src/main.rs` | M6, stage 3 |
-| `cross/all/all.go` | 43 | `wirepod-app/src/tray/all.rs` | M6, stage 3 |
-| `cross/win/funcs.go` | 130 | `wirepod-app/src/tray/win/funcs.rs` | M6, stage 3 |
-| `cross/win/registry.go` | 194 | `wirepod-app/src/tray/win/registry.rs` | M6, stage 3 |
-| `cross/win/syscallstuff.go` | 29 | `wirepod-app/src/tray/win/syscallstuff.rs` | M6, stage 3 |
-| `cross/podapp/main.go` | 249 | `wirepod-app/src/tray/podapp.rs` | M6, stage 3 |
-| `cross/podapp/initwirepod.go` | 265 | `wirepod-app/src/tray/initwirepod.rs` | M6, stage 3; only what differs from `startserver.go` |
+| `windows/cmd/main.go` | 10 | `wirepod-app/src/main.rs` | done, behind the `tray` feature |
+| `cross/all/all.go` | 43 | `wirepod-app/src/tray/all.rs` | done |
+| `cross/win/funcs.go` | 130 | `wirepod-app/src/tray/win/funcs.rs` | done |
+| `cross/win/registry.go` | 194 | `wirepod-app/src/tray/win/registry.rs` | done |
+| `cross/win/syscallstuff.go` | 29 | `wirepod-app/src/tray/win/syscallstuff.rs` | done |
+| `cross/podapp/main.go` | 249 | `wirepod-app/src/tray/podapp.rs` | done; has not run on the desktop yet |
+| `cross/podapp/initwirepod.go` | 265 | `wirepod-app/src/tray/initwirepod.rs` | done; only what differs from `startserver.go` |
 | `cross/podapp/web.go` | 56 | `wirepod-server/src/initweb.rs` | done; identical to `pkg/initwirepod/web.go` |
 | `windows/installer/*.go`, `windows/uninstall/main.go` | 834 | none | kept as Go; the installed copies stay |
 
@@ -204,8 +204,8 @@ No robot is needed, and each item is its own commit.
 
 1. **Fix the log filter.** Put the `EnvFilter` on the console layer only, as `logger.rs` describes, and let the `LogLayer` admit every level of wire-pod's own targets. A test checks that a debug event on `sdkapp` reaches the ring under the default filter. More lines then land in the 500-slot ring. That is Go's behaviour, and the motion window was designed with that budget in mind. In the same commit, `serve` opens `LOG_FILE` as Go's `logger.Init` does. `LogRing::with_log_file` already exists, but `serve` built the ring without it, and the soak needs the file. Done.
 2. **Turn the mDNS browse on.** The jdocs pinger's browse is switched on in the full `serve` boot path, and never under `--web-only` or in tests. Done.
-3. **Fix the CI flake.** `concurrent_writers_never_leave_a_torn_file` fails intermittently on Windows and can fail a CI run.
-4. **Stop printing keys.** `ApiConfig` and `BotInfo` must not print keys through their derived `Debug`.
+3. **Fix the CI flake.** `concurrent_writers_never_leave_a_torn_file` fails intermittently on Windows and can fail a CI run. Done: a process outside ours, most likely a scanner, held the new file open, and the rename retry now waits about a second.
+4. **Stop printing keys.** `ApiConfig` and `BotInfo` must not print keys through their derived `Debug`. Done, for `Env` and the two on-disk bot-info types as well.
 5. **Add a local packaged gate, since CI cannot run one.** It runs clippy and a release build with `--features stt-vosk`, with `VOSK_LIB_DIR` set as in `RUNBOOK-SERVE.md`. Run it before any push that touches the voice path, and always before a deploy. Done: `scripts/gate-packaged.sh`.
 6. **Correct the docs.** Fix where `CLAUDE.md` and `RUNBOOK-SERVE.md` said the tray app supervises `chipper.exe`, name the WirePod checkout as read-only, and put the tray's registry keys out of bounds outside a session. This was done with this plan.
 
@@ -294,7 +294,7 @@ Stage 3 needs no robot, so it can run beside stages 1 and 2. The WirePod files i
 - Registry tests use a scratch key under `HKCU\Software\wire-pod-rs-test` and delete it afterwards. They are `cfg(windows)`, because the Ubuntu CI leg runs the same suite.
 - No test reads or writes `HKCU\Software\wire-pod` or the `wire-pod` value under the `Run` key, because the running Go tray reads them.
 
-This is the one stage that could be split between two translation agents, under rule 9 of `CLAUDE.md`. One would take the three `cross/win` files and the other `podapp`.
+Translated on 2026-09-26 by four lanes. The Win32 code for the tray icon, the menu and the dialogs has compiled and passed its tests but has not yet run on the desktop.
 
 ### Stage 4: packaging for this PC
 
