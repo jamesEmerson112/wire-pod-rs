@@ -37,3 +37,7 @@ wirepod-vector.workspace = true
 # The tray shell's Win32 calls.
 [target.'cfg(windows)'.dependencies]
 windows-sys.workspace = true
+
+[build-dependencies]
+# Compiles resources/app.rc with the Windows SDK's rc.exe; build.rs skips it off Windows.
+embed-resource = "3"

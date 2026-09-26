@@ -1,0 +1,14 @@
+// The five icons of Go's windows/cmd/rc/app.rc. Go names all five `id`; here
+// each has its own number, and the 256 px one is first because Explorer shows
+// the first icon in the executable.
+1 ICON "pod256x256.ico"
+2 ICON "pod16x16.ico"
+3 ICON "pod24x24.ico"
+4 ICON "pod32x32.ico"
+5 ICON "pod48x48.ico"
+
+// A deliberate addition with no Go counterpart: the application manifest,
+// which asks for Common Controls 6 so that the tray's dialogs can use
+// TaskDialogIndirect. 1 is CREATEPROCESS_MANIFEST_RESOURCE_ID and 24 is
+// RT_MANIFEST.
+1 24 "app.manifest"
