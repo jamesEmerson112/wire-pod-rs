@@ -9,7 +9,8 @@
 //! Without the tray, a bare invocation prints the usage and exits 2 rather than
 //! starting anything, because both subcommands bind ports and dial a robot.
 
-#![cfg_attr(all(windows, feature = "tray"), windows_subsystem = "windows")]
+// Not under test, so a `--features tray` test binary keeps its console output.
+#![cfg_attr(all(windows, feature = "tray", not(test)), windows_subsystem = "windows")]
 
 mod args;
 mod sdk_trial;
