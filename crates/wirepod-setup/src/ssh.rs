@@ -37,11 +37,6 @@ const VIC_CLOUD_PATH: &str = "../vector-cloud/build/vic-cloud";
 const VIC_CLOUD_URL: &str =
     "https://github.com/kercre123/wire-pod/raw/main/vector-cloud/build/vic-cloud";
 
-/// Go's `vars.Packaged`, which is false in every build this port makes, and
-/// its android branch, which the port does not have.
-// TODO(M5): vars.Packaged
-const PACKAGED: bool = false;
-
 /// Go's `HostKeyAlgorithms` (`ssh.go:71`).
 const HOST_KEY_ALGORITHMS: &[Algorithm] = &[
     Algorithm::Rsa { hash: None },
@@ -115,11 +110,14 @@ async fn set_cpu_ram_freq<T: Transport + ?Sized>(
         .await;
 }
 
+/// `packaged` is Go's `vars.Packaged`, passed down rather than read from a
+/// global.
 pub async fn setup_bot_via_ssh(
     paths: &Paths,
     server: &ServerConfig,
     ip: &str,
     key: &[u8],
+    packaged: bool,
 ) -> Result<(), SshError> {
     if !SSH_SETTING_UP.load(Ordering::SeqCst) {
         tracing::info!(comp = "", "Setting up {ip} via SSH");
@@ -130,7 +128,7 @@ pub async fn setup_bot_via_ssh(
         let mut client = Russh::dial(ip, signer)
             .await
             .map_err(|err| do_err(err, "ssh dial"))?;
-        run_setup(&mut client, paths, server).await
+        run_setup(&mut client, paths, server, packaged).await
     } else {
         Err(SshError::Other("a bot is already being setup".to_string()))
     }
@@ -146,6 +144,7 @@ pub async fn run_setup<T: Transport + ?Sized>(
     client: &mut T,
     paths: &Paths,
     server: &ServerConfig,
+    packaged: bool,
 ) -> Result<(), SshError> {
     set_setup_ssh_status("Checking if device is a Vector...");
     let output = client
@@ -201,7 +200,8 @@ pub async fn run_setup<T: Transport + ?Sized>(
         .await
         .map_err(|err| do_err(err, "copying server-config.json"))?;
     if do_cloud {
-        let cloud = if !PACKAGED {
+        // Go also downloads on android, which the port does not build for.
+        let cloud = if !packaged {
             std::fs::read(VIC_CLOUD_PATH)
                 .map_err(|err| do_err(err.into(), "transferring new vic-cloud"))?
         } else {
@@ -259,7 +259,13 @@ pub async fn run_setup<T: Transport + ?Sized>(
 
 /// `/api-ssh/setup`. The form parsing and the reply writing belong to
 /// `wirepod-server`; this is the body between them.
-pub fn ssh_setup(paths: Paths, server: ServerConfig, ip: &str, key: &[u8]) -> String {
+pub fn ssh_setup(
+    paths: Paths,
+    server: ServerConfig,
+    ip: &str,
+    key: &[u8],
+    packaged: bool,
+) -> String {
     if ip.is_empty() {
         return "error: must provide ip".to_string();
     }
@@ -269,7 +275,7 @@ pub fn ssh_setup(paths: Paths, server: ServerConfig, ip: &str, key: &[u8]) -> St
     }
     let (ip, key) = (ip.to_string(), key.to_vec());
     tokio::spawn(async move {
-        let _ = setup_bot_via_ssh(&paths, &server, &ip, &key).await;
+        let _ = setup_bot_via_ssh(&paths, &server, &ip, &key, packaged).await;
     });
     "running".to_string()
 }
@@ -460,7 +466,9 @@ mod tests {
             extra: Default::default(),
         };
         let mut client = Fake::default();
-        run_setup(&mut client, &paths, &server).await.expect("done");
+        run_setup(&mut client, &paths, &server, false)
+            .await
+            .expect("done");
 
         assert_eq!(client.commands[0], "uname -a");
         assert_eq!(client.commands[1], "head -n1 /anki/bin/vic-gateway");

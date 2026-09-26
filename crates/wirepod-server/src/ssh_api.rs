@@ -46,6 +46,7 @@ pub async fn ssh_setup(State(state): State<Arc<AppState>>, req: Request) -> Resp
                 state.config().server.clone(),
                 &ip,
                 &key,
+                state.packaged(),
             ))
         }
         GET_SETUP_STATUS => reply::text(wirepod_setup::ssh::get_setup_status()),
