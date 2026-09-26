@@ -6,7 +6,7 @@ The Go server and the Rust server cannot run at the same time in this mode, beca
 
 ## Switch to Rust
 
-1. Quit the WirePod tray app from its tray icon. It supervises `chipper.exe`, so killing only the process is not enough. Check in Task Manager that `chipper.exe` is gone.
+1. Quit WirePod from its tray icon. The icon and the Go server are one process, `chipper.exe`, so this stops the server, and quitting this way also clears its `LastRunningPID` in the registry. Check in Task Manager that `chipper.exe` is gone.
 2. Once only, in an elevated PowerShell, allow the Rust binary through Windows Firewall. Windows allows inbound connections per program, and the installed rule covers only the Go binary.
    `netsh advfirewall firewall add rule name="wirepod-rs-test" dir=in action=allow program="E:\GitHub\wire-pod-rs\target\debug\chipper.exe" enable=yes`
 3. Make a working copy of the state directory, so the live state stays untouched. From Git Bash:

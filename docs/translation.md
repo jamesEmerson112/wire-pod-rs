@@ -30,7 +30,7 @@ The user reordered these on 2026-09-19, after M1: the web UI moved ahead of voic
 | M3 | voice commands: audio, Vosk, intent matching, the request processors | about 3,100 |
 | M4 | LLM and knowledge graph. NOT TRANSLATED, by the user's decision on 2026-09-20. Weather, which shared the milestone, is done. | 1,535 not translated |
 | M5 | Lua scripting, certificates and SSH setup. Done. The rest of the milestone is cut or deferred: the five other speech engines and the Go plugin loader are cut, Bluetooth onboarding is deferred. | 823 translated |
-| M6 | debug against the robot, the optimization list, tray shell, packaging, cutover | none |
+| M6 | the Rust server replaces the Go one on this PC: the log fix, robot sessions, the findings triage, the Windows tray, a deploy script, a 24-hour soak and the cutover. Planned on 2026-09-26, see "M6 plan" below. | 976 in the WirePod repo, most of it new, and 40 in `pkg/logger` |
 
 ## File table
 
@@ -43,7 +43,7 @@ Status is one of: done, partial, or the milestone that will translate it.
 | `pkg/initwirepod/startserver.go` | 231 | `wirepod-server/src/startserver.rs` | done |
 | `pkg/initwirepod/web.go` | 56 | `wirepod-server/src/initweb.rs` | done |
 | `pkg/logger/logger.go` | 248 | `wirepod-core/src/logger.rs` | done |
-| `pkg/logger/msg-and.go`, `msg-winmac.go` | 40 | `wirepod-app` | M6 |
+| `pkg/logger/msg-and.go`, `msg-winmac.go` | 40 | `wirepod-core/src/msg.rs` | M6, stage 3 |
 | `pkg/mdnshandler/mdns.go` | 90 | `wirepod-server/src/mdns.rs` | done |
 | `pkg/scripting/scripting.go` | 317 | `wirepod-plugins/src/scripting.rs` | done, apart from the `gopher-lua-libs` preload |
 | `pkg/scripting/bcontrol.go` | 92 | `wirepod-plugins/src/bcontrol.rs` | done |
@@ -88,6 +88,20 @@ Status is one of: done, partial, or the milestone that will translate it.
 | `pkg/wirepod/ttr/weather.go` | 432 | `wirepod-ttr/src/weather.rs` | done |
 | `pkg/wirepod/ttr/plugins.go` | 81 | none | cut; Rust cannot load Go `.so` plugins at all |
 
+The Windows shell comes from a second Go repo, `E:/GitHub/WirePod`, which is kercre123/WirePod at `9b5ff6e`. It builds the installed `chipper.exe` by importing the `chipper` module. It is read-only here, like the Go checkout. Only its Windows files are listed. The `android`, `debian`, `macos` and `cross/mac` trees are not used on this machine.
+
+| Go file in the WirePod repo | Lines | Rust module | Status |
+|---|---|---|---|
+| `windows/cmd/main.go` | 10 | `wirepod-app/src/main.rs` | M6, stage 3 |
+| `cross/all/all.go` | 43 | `wirepod-app/src/tray/all.rs` | M6, stage 3 |
+| `cross/win/funcs.go` | 130 | `wirepod-app/src/tray/win/funcs.rs` | M6, stage 3 |
+| `cross/win/registry.go` | 194 | `wirepod-app/src/tray/win/registry.rs` | M6, stage 3 |
+| `cross/win/syscallstuff.go` | 29 | `wirepod-app/src/tray/win/syscallstuff.rs` | M6, stage 3 |
+| `cross/podapp/main.go` | 249 | `wirepod-app/src/tray/podapp.rs` | M6, stage 3 |
+| `cross/podapp/initwirepod.go` | 265 | `wirepod-app/src/tray/initwirepod.rs` | M6, stage 3; only what differs from `startserver.go` |
+| `cross/podapp/web.go` | 56 | `wirepod-server/src/initweb.rs` | done; identical to `pkg/initwirepod/web.go` |
+| `windows/installer/*.go`, `windows/uninstall/main.go` | 834 | none | kept as Go; the installed copies stay |
+
 ## Progress
 
 | Date | Go lines translated | Server can |
@@ -114,8 +128,10 @@ Go line the user wants in Rust is in Rust. The file table adds up like this:
 | left for M6: the tray notification helper, which needs the tray shell first | 40 |
 | total | 12,130 |
 
-What is left is not translation. M6 is the robot debugging, the list below, the
-tray shell, packaging and cutover. The one thing owed from M3 is still owed: the
+What is left is M6: the robot debugging, the list below, the tray shell,
+packaging and cutover, planned under "M6 plan" below. The 12,130 counts the
+`chipper` module only. The Windows tray M6 translates lives in a second repo and
+is counted in its own table. The one thing owed from M3 is still owed: the
 voice pipeline has never met real audio, and the test is ten minutes with the
 user present, running `chipper serve --features stt-vosk` against a copy of the
 data directory and saying "Hey Vector, what time is it".
@@ -135,6 +151,201 @@ Three decisions the user made on 2026-09-20, all reversible, all recorded so nob
 On 2026-09-20 the user decided not to translate the LLM and knowledge-graph work: `kgsim.go`, `kgsim_cmds.go` and `kgsim_interrupt.go`, 1,535 Go lines. They are not interested in the feature. The `wirepod-llm` crate stays a stub and the prep commit for the milestone was reverted, so the tree carries no scaffolding for it.
 
 What this costs, so that the decision is reversible with open eyes. A voice command the intent list does not match reaches `intent_system_unmatched` instead of an answer, which is where the port already stood. The dashboard's talk panel and the knowledge-graph RPC have nothing behind them. `preqs` carries three `TODO(M4)` markers at the exact call sites, so picking the work up later means filling those three holes rather than finding them. Weather shared the milestone and is translated.
+
+## M6 plan
+
+Planned on 2026-09-26. M6 ends when the Rust server has replaced the Go one on this PC and the Go binary has sat unused beside it for a month. Four decisions the user made that day shape it:
+
+- The Windows tray is translated from the Go wrapper, not dropped.
+- Packaging covers this PC only.
+- A 24-hour soak comes before the cutover.
+- The findings list is triaged, not cleared.
+
+Out of scope, by the same decisions and the earlier ones:
+
+- a redistributable installer
+- the Linux, Jetson and Docker builds from the old P9
+- Bluetooth onboarding, which stays deferred
+- everything cut in M4 and M5
+
+### What the planning found
+
+**The shipped debug lines are dropped before the log ring.**
+
+- `serve.rs` installs its `EnvFilter` as a global filter, ahead of the `LogLayer`. The default filter raises only the three crate targets to debug.
+- So a `debug` event on the component targets `sdkapp`, `stt`, `voice` and `conn` never reaches the ring or the console.
+- That covers every motion, state and map line from the 2026-09-25 work, and the speech engine's debug lines.
+- It was checked with a scratch program against the same `tracing-subscriber` 0.3.23.
+- Go's ring keeps every level, and `DEBUG_LOGGING` gates only its stdout copy. `logger.rs` already says the filter belongs on the formatting layer.
+- The runbook's advice to choose `debug` on the log page cannot help, because the lines are gone before the page asks.
+
+**There is no supervisor.**
+
+- The installed `chipper.exe` is the tray icon and the server in one process.
+- It is built from the WirePod repo, listed under the file table. There, `cross/podapp` starts the tray and then runs its own copy of `startserver.go`.
+- So the Rust binary has to become the tray, and replacing the Go server means replacing one file.
+
+**The install matches this port's assets.**
+
+- The installed build is the user's fork, version `v1.2.18-custom`.
+- Its `webroot` is byte-identical to `assets/webroot`, and its `intent-data` differs only in line endings, so the Rust binary can run from the install folder as it is.
+- Several things name the exact path `C:\Program Files\wire-pod\chipper\chipper.exe`: the per-program firewall rule, the `Run` key's `chipper.exe -d`, the uninstaller's registry entry and the shortcuts. They all carry over to whatever binary sits there.
+- `libvosk.dll` and the MinGW runtime DLLs it needs are already beside it.
+
+**Three gaps.**
+
+- CI never builds the `stt-vosk` feature, because the libvosk import library is not in the repository. That feature is in the build that ships.
+- Nothing in the port reads `WEBSERVER_PORT`. The tray sets it from the registry when the web port is not 8080, and Go reads it in `vars.go`.
+- The jdocs pinger's mDNS browse is switched off by `set_mdns_enabled`, which no boot path calls. Go runs that browse when a conn check arrives from an address it does not know, which is how it follows a robot whose IP address has changed. Left off, an unattended Rust server loses him on the first address change.
+
+### Stage 0: before any robot session
+
+No robot is needed, and each item is its own commit.
+
+1. **Fix the log filter.** Put the `EnvFilter` on the console layer only, as `logger.rs` describes, and let the `LogLayer` admit every level of wire-pod's own targets. A test checks that a debug event on `sdkapp` reaches the ring under the default filter. More lines then land in the 500-slot ring. That is Go's behaviour, and the motion window was designed with that budget in mind. In the same commit, `serve` opens `LOG_FILE` as Go's `logger.Init` does. `LogRing::with_sink` already exists, but `serve` builds the ring without it, and the soak needs the file.
+2. **Turn the mDNS browse on.** The jdocs pinger's browse is switched on in the full `serve` boot path, and never under `--web-only` or in tests.
+3. **Fix the CI flake.** `concurrent_writers_never_leave_a_torn_file` fails intermittently on Windows and can fail a CI run.
+4. **Stop printing keys.** `ApiConfig` and `BotInfo` must not print keys through their derived `Debug`.
+5. **Add a local packaged gate, since CI cannot run one.** It runs clippy and a release build with `--features stt-vosk`, with `VOSK_LIB_DIR` set as in `RUNBOOK-SERVE.md`. Run it before any push that touches the voice path, and always before a deploy.
+6. **Correct the docs.** Fix where `CLAUDE.md` and `RUNBOOK-SERVE.md` said the tray app supervises `chipper.exe`, name the WirePod checkout as read-only, and put the tray's registry keys out of bounds outside a session. This was done with this plan.
+
+### Stage 1: robot sessions, with the user present
+
+Every session follows `RUNBOOK-SERVE.md`:
+
+- Quit WirePod from the tray.
+- Run the Rust `stt-vosk` build against a copy of the data directory.
+- End with the Go server back and `is_running` answering `true`.
+
+Findings go on the list. The four sessions fit in one or two sittings of about an hour.
+
+1. **Voice**, the test owed since M3. Ask "Hey Vector, what time is it", ask a weather question, and trigger a custom intent that has a Lua script attached. It passes when he answers each one, and the `stt` and `voice` lines show the transcription and the matched intent.
+2. **Web UI and dashboard on the live robot.** Try the dashboard's controls, a settings change, the battery watchdog and the jdocs pinger. Measure the camera frame rate against the Go figure on the list, 3.55 frames per second.
+3. **Motion and the map, on the floor.** Use the checklist from the 2026-09-25 plan:
+   - Drive him from the dashboard, and from a script at priority 20.
+   - Watch three things line up: the call, the state change or its absence, and the map.
+   - Pick him up once and see the map reset twice.
+   - Leave him idle and confirm the log stays quiet.
+
+   Also check the robot-dependent items on the list from that work: cliff flicker, the state stream while he sleeps, and `BAD_TAG` after a server restart.
+4. **Setup, optional.** Certificate and server-config generation run against the data copy only. SSH onboarding re-onboards him, so it runs only if the user asks for it on the day.
+
+### Stage 2: triage the findings list
+
+What the sessions find joins the list at the bottom. Each item goes into one of three groups.
+
+**Fix.** Anything that breaks this PC's use, CI or key safety. Stage 0 already takes the known ones.
+
+**Settle on the robot.** Items the sessions or the soak can decide:
+
+- the retry on the cached connection in `pingJdocs`
+- the battery watchdog holding an evicted connection
+- the stim stream a closed tab leaves running
+- the nav map channel's missing HTTP/2 keep-alive
+
+**Keep as Go.** Items where the port matches Go on purpose, or where the difference is invisible:
+
+- the camera hanging while he sleeps
+- the missing 301 redirects
+- the `get_ota` 500
+- the unbounded token store
+- the `gopher-lua-libs` preload
+- the 404 for an unrouted gRPC path
+
+The camera frame rate and the wake-before-camera fix are improvements, not parity, so they wait until after the cutover.
+
+### Stage 3: the tray, translated
+
+Stage 3 needs no robot, so it can run beside stages 1 and 2. The WirePod files in the table below become modules under `crates/wirepod-app/src/tray/`, following rule 1. Two of those Go files are copies of code already translated:
+
+- `cross/podapp/web.go` is identical to `pkg/initwirepod/web.go`.
+- `cross/podapp/initwirepod.go` is `startserver.go` with dialogs and tooltips added. Only those additions are translated, and the rest calls `startserver.rs`.
+
+**What the translation must reproduce:**
+
+- the tray menu: Quit, Web Interface, Config Folder, Run On Startup and About
+- the tooltip changes
+- the single-instance check against `LastRunningPID` under `HKCU\Software\wire-pod`
+- the `NeedsRestart` check
+- the crash dump to `%APPDATA%\wire-pod\dump.txt`
+- the `-d` flag that suppresses the start-up message box
+- the environment Go sets before starting the server: `STT_SERVICE=vosk`, and `WEBSERVER_PORT` when the registry's `WebPort` is not 8080. Edition 2024 makes `set_var` unsafe, so the tray does not set these variables. It writes both values into the `Env` that `Env::from_process` builds, and `WEBSERVER_PORT` gains a field there. Go also sets `DEBUG_LOGGING=true`. It has no counterpart here, because `logger.rs` sends the stdout copy through the formatting layer instead.
+
+**Go's `vars.Packaged` becomes real.** It becomes a field on `AppState`, set only by the tray. Its consumers are:
+
+- the two `TODO(M5)` markers in `ssh.rs`
+- the port-bind failures in `webserver.go` and `server.go`, which show a message box in a packaged build
+
+`pkg/logger/msg-winmac.go` and `msg-and.go` supply that message box. The box is Win32 on Windows and a log line elsewhere, as on Android.
+
+**Build choices:**
+
+- **Win32 calls.** The tray, the message boxes, the registry and the process check call Win32 directly through `windows-sys`, which `Cargo.lock` already carries. A tray crate with its own event loop would be a redesign of `getlantern/systray`, not a translation of the calls it makes.
+- **The Open browser button.** zenity's extra "Open browser" button needs a task dialog, and a task dialog needs a Common Controls 6 manifest.
+- **Resources.** `windows/cmd/rc/app.rc` embeds only the five `.ico` files. The manifest is an addition with no Go counterpart, and it goes on the list of deliberate differences.
+- **The icons.** They are copied byte-identically from the WirePod repo into `crates/wirepod-app/resources/`, because `cargo xtask sync-assets` covers only the Go checkout.
+- **The resource compiler.** Embedding needs `rc.exe` from the Windows SDK. It is installed here, under `10.0.26100.0`, but it is not on `PATH`.
+- **The window subsystem.** A `tray` Cargo feature sets the Windows GUI subsystem, as Go's `-H=windowsgui` does. With it, a bare `chipper` or `chipper -d` starts the tray, which is how the Start menu and the `Run` key launch it. Without it, the binary stays the console program `serve` and `sdk-trial` need.
+- **Threads.** The Win32 message loop owns the main thread, and the server runs on a Tokio runtime built beside it.
+
+**Tests:**
+
+- The `OSFuncs` interface is Go's own seam, so `podapp` is tested against a fake of it.
+- Registry tests use a scratch key under `HKCU\Software\wire-pod-rs-test` and delete it afterwards. They are `cfg(windows)`, because the Ubuntu CI leg runs the same suite.
+- No test reads or writes `HKCU\Software\wire-pod` or the `wire-pod` value under the `Run` key, because the running Go tray reads them.
+
+This is the one stage that could be split between two translation agents, under rule 9 of `CLAUDE.md`. One would take the three `cross/win` files and the other `podapp`.
+
+### Stage 4: packaging for this PC
+
+The build is `cargo build --release -p wirepod-app --features stt-vosk,tray`.
+
+`scripts/deploy-windows.ps1` replaces the Go binary in place. It is modelled on the fork's `scripts/build-windows.ps1 -Deploy`, with one difference: it never stops a process by name. Run from an elevated PowerShell, it does the following:
+
+1. Read `LastRunningPID` from the registry. Check that the PID belongs to the `chipper.exe` in the install folder, then stop it by that PID.
+2. The first time only, rename the Go binary to `chipper-go.exe` beside it, and never overwrite that copy.
+3. Copy the Rust binary in as `chipper.exe`.
+4. Suffix the install's `version` file with `-rs`.
+5. Launch it as the `Run` key does, with `-d` and the `chipper` folder as the working directory.
+6. Wait up to thirty seconds for `is_running` to answer `true`.
+
+`-Rollback` does the same in reverse and restores `chipper-go.exe` and the version file.
+
+Nothing else in the install is touched. The firewall rule, the `Run` key, the uninstaller, the shortcuts, the DLLs and the assets all stay. Re-running the WirePod installer wipes the folder and brings back upstream Go, so it is not run during M6.
+
+### Stage 5: soak and cutover
+
+**Before the soak.** Make timestamped backups of `%APPDATA%\wire-pod` and `~/.anki_vector`. Then deploy the Rust binary with the stage 4 script.
+
+**The soak is a standing session.** It runs the Rust server on the production ports with the real robot for 24 hours, mostly unattended. `CLAUDE.md` forbids that outside a session with the user present, so it needs the user's explicit go-ahead as one session, with a start and an end.
+
+**The hourly check.** The soak runs with `LOG_FILE` set, because the 500-slot ring can wrap within an hour on an active robot. A script checks the server over localhost only and reads that file. It appends one line per check to a file in the scratch area, and it never copies a jdoc or anything else from the live state. Each line records:
+
+- `is_running`
+- the server's memory, read by its PID
+- whether `escapepod.local` resolves
+- whether the robot answers through the SDK routes
+- his jdoc version numbers, and nothing else from those documents
+- the count of behaviour-control grants against releases, from the log file now that stage 0 lets those lines in
+
+The user talks to him as usual through the day.
+
+**It passes when:**
+
+- no control grant goes unreleased
+- memory shows no upward trend
+- mDNS answers all day
+- jdoc versions only ever increase
+- he stays connected
+- voice works whenever it is used
+
+**Rehearse the rollback.** Afterwards, run `-Rollback`. Let the Go server run for an hour on the state the Rust server wrote, and check the web UI and one voice command. This proves both directions are schema-safe.
+
+**The cutover.** Deploy the Rust binary again. That is the cutover. Then:
+
+- Keep `chipper-go.exe` and the backups for a month.
+- Change the "Live environment" section of `CLAUDE.md` to name the Rust server as production.
+- Close M6 in the progress table.
 
 ## Added on purpose, beyond the Go server
 
@@ -194,7 +405,7 @@ The engine facts all of this rests on are in section 6 of `docs/robot-api.md`.
 
 ## Debug and optimization list
 
-Nothing here is acted on until translation is 100%.
+Translation reached 100% of its scope on 2026-09-20. Stage 2 of the M6 plan triages this list.
 
 From the motion and map logging work of 2026-09-25, to check against the robot:
 
@@ -245,7 +456,7 @@ From the browser session of 2026-09-19, with the robot attached to the Rust serv
 - Neither server reads the timestamp the robot sends on each camera frame, so glass-to-glass latency cannot be measured. Reading it would be an addition rather than a translation.
 - Go's `get_ota` indexes a path segment that the only matching route cannot have, so the handler panics on every call. The port answers Go's own `failed to parse URL` 500 instead, and the proxy below it is unreachable in both.
 - `print_robot_info` prints the robot's GUID in Go. The port leaves it out.
-- The `sdkapp` log target is not in the default filter, so lines logged to it at debug never appear. Either add it to `DEFAULT_FILTER` or move those lines to a crate target.
+- The `sdkapp` log target is not in the default filter, so lines logged to it at debug never appear. The same holds for `stt`, `voice` and `conn`, and the cause is that `serve` filters globally, ahead of the ring. It is M6 stage 0, item 1.
 
 Checked against the running Go server, web-only on 18080 beside it:
 
@@ -262,7 +473,7 @@ Checked against the running Go server, web-only on 18080 beside it:
 - `mdns_sd` logs `failed to send response of shutdown` every 32 seconds, each time the registration loop re-registers. The name still resolves.
 - An unrouted gRPC path on the TLS listener answers the router's 404 rather than tonic's `Unimplemented`, because `/ok:80` is matched in the fallback.
 - `pingJdocs` retries on the cached robot connection where Go dials a second one.
-- The mDNS browse in `jdocspinger.rs` sits behind `set_mdns_enabled`, which no boot path turns on yet.
+- The mDNS browse in `jdocspinger.rs` sits behind `set_mdns_enabled`, which no boot path turns on yet. Go uses it to follow a robot whose address changed. It is M6 stage 0, item 2.
 - Log lines with ANSI colour codes print the escape as text under the `tracing` formatter.
 - `/api-chipper` without the trailing slash has no redirect to `/api-chipper/`.
 - `download.rs` skips zip entries that would leave the destination, and ignores file modes.

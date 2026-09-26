@@ -102,9 +102,10 @@ Conventions that the existing code depends on:
 
 ## Live environment
 
-- The Go `chipper.exe`, supervised by the WirePod tray app, is the production server here. It listens on 80, 443, 8080 and 8084 with state in `%APPDATA%\wire-pod`. Health probe: `curl http://localhost:8080/api/is_running` returns `true`.
+- The Go `chipper.exe` is the production server here, and it is also the WirePod tray icon: one process, not a tray app supervising a server. It listens on 80, 443, 8080 and 8084 with state in `%APPDATA%\wire-pod`, and keeps its tray settings and `LastRunningPID` under `HKCU\Software\wire-pod`. Health probe: `curl http://localhost:8080/api/is_running` returns `true`.
+- The installed binary is built from `E:/GitHub/WirePod`, the Go wrapper that holds the Windows tray and installer, and M6 translates its tray. That checkout is read-only reference, like the Go one. Its uncommitted `go.mod` and `go.sum` changes are the user's and stay.
 - The robot is ESN 00303f28 at 192.168.8.203 in escape-pod mode, and it finds the server through the mDNS name `escapepod`.
-- Outside a session with the user present: nothing binds 80, 443, 8080 or 8084, nothing registers or browses mDNS, nothing contacts the robot, and nothing reads or writes `%APPDATA%\wire-pod` or `~/.anki_vector`. Tests bind `127.0.0.1:0` and use temporary directories.
+- Outside a session with the user present: nothing binds 80, 443, 8080 or 8084, nothing registers or browses mDNS, nothing contacts the robot, nothing reads or writes `%APPDATA%\wire-pod` or `~/.anki_vector`, and nothing reads or writes `HKCU\Software\wire-pod` or the `wire-pod` value under `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. Tests that need the registry use a scratch key under `HKCU\Software\wire-pod-rs-test`. Tests bind `127.0.0.1:0` and use temporary directories.
 - Never write a token, GUID, key or hash value from the live state into any file, commit message or report.
 - `.env` is gitignored and holds a key for local experiments. The server reads its key from `apiConfig.json` in the data dir.
 
