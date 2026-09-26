@@ -31,6 +31,9 @@ use crate::sdk_trial::{DEFAULT_FILTER, FILTER_ENV};
 /// Go's `logger.Init` appends every line to this file when it is set.
 const LOG_FILE_ENV: &str = "LOG_FILE";
 
+/// Go's `vars.Init` reads the web port from this variable.
+const WEBSERVER_PORT_ENV: &str = "WEBSERVER_PORT";
+
 #[derive(Debug)]
 pub enum ServeError {
     NoAppData,
@@ -55,9 +58,42 @@ impl fmt::Display for ServeError {
 
 impl std::error::Error for ServeError {}
 
+/// What `serve` and the tray boot from. The tray cannot set variables, so it
+/// passes what Go's `StartWirePod` and `onReady` set in the environment.
+pub struct Boot {
+    pub args: ServeArgs,
+    pub env: Env,
+    /// `WEBSERVER_PORT`.
+    pub webserver_port: Option<String>,
+    /// Go's `vars.Packaged`, which only the tray sets. `--packaged` selects the
+    /// data layout alone.
+    pub packaged: bool,
+}
+
+impl Boot {
+    /// The console's boot, which reads the process environment.
+    pub fn from_process(args: ServeArgs) -> Self {
+        Self {
+            args,
+            env: Env::from_process(),
+            webserver_port: std::env::var(WEBSERVER_PORT_ENV).ok(),
+            packaged: false,
+        }
+    }
+}
+
+/// What [`init`] loaded.
+pub struct Booted {
+    pub state: Arc<AppState>,
+    /// Go's `vars.WebPort`.
+    pub web_port: String,
+}
+
 /// The part of Go's `vars.Init` that reads the state files.
 async fn load_state(
     args: &ServeArgs,
+    env: &Env,
+    packaged: bool,
     logs: Arc<LogRing>,
     wall: Arc<dyn WallClock>,
 ) -> Result<Arc<AppState>, ServeError> {
@@ -80,7 +116,7 @@ async fn load_state(
     };
 
     let gate = wirepod_core::config::config_gate(&data);
-    let mut config = read_config(&Env::from_process(), &gate).await.config;
+    let mut config = read_config(env, &gate).await.config;
     if let Some(port) = args.tls_port {
         // A trial override, held in memory only.
         config.server.port = port.to_string();
@@ -103,6 +139,7 @@ async fn load_state(
         // Go's connect-time event stream, which this server reads for the
         // robot's own state.
         .state_stream(true)
+        .packaged(packaged)
         .build();
     *state
         .custom_intents()
@@ -111,7 +148,28 @@ async fn load_state(
     Ok(state)
 }
 
-pub async fn run(args: ServeArgs) -> Result<(), ServeError> {
+/// Go's `WebPort` rule from `vars.Init`. `--web-port` overrides it.
+pub fn web_port(flag: Option<u16>, webserver_port: Option<&str>) -> String {
+    if let Some(port) = flag {
+        return port.to_string();
+    }
+    match webserver_port {
+        // Go's `strconv.Atoi`, which takes a sign and a number too large for a
+        // port; the bind refuses those.
+        Some(value) if !value.is_empty() => {
+            if value.parse::<i64>().is_ok() {
+                value.to_owned()
+            } else {
+                tracing::info!("WEBSERVER_PORT contains letters, using default of 8080");
+                DEFAULT_WEB_PORT.to_string()
+            }
+        }
+        _ => DEFAULT_WEB_PORT.to_string(),
+    }
+}
+
+/// Go's `logger.Init` and `vars.Init`.
+pub async fn init(boot: &Boot) -> Result<Booted, ServeError> {
     // Go's `logger.Init`: the ring the web UI's log page reads, fed by every
     // `tracing` event alongside the console.
     let wall: Arc<dyn WallClock> = Arc::new(SystemWallClock::new());
@@ -121,8 +179,15 @@ pub async fn run(args: ServeArgs) -> Result<(), ServeError> {
         _ => LogRing::new(clock),
     });
     install_logging(Arc::clone(&logs));
-    let state = load_state(&args, logs, wall).await?;
+    let state = load_state(&boot.args, &boot.env, boot.packaged, logs, wall).await?;
+    let web_port = web_port(boot.args.web_port, boot.webserver_port.as_deref());
     wirepod_server::jdocspinger::init_jdocs_pinger(&state);
+    Ok(Booted { state, web_port })
+}
+
+pub async fn run(args: ServeArgs) -> Result<(), ServeError> {
+    let boot = Boot::from_process(args);
+    let booted = init(&boot).await?;
 
     let cancel = CancellationToken::new();
     let stopper = cancel.clone();
@@ -132,6 +197,69 @@ pub async fn run(args: ServeArgs) -> Result<(), ServeError> {
         }
         stopper.cancel();
     });
+
+    start(&boot.args, booted, cancel).await
+}
+
+/// Go serves one mux on the web port, from `StartWebServer`, and on port 80,
+/// from `BeginServer`. Only the web port is fatal.
+async fn bind_listeners(
+    bind: &str,
+    web_port: &str,
+    http_port: u16,
+    packaged: bool,
+) -> Result<Vec<TcpListener>, ServeError> {
+    let mut listeners = Vec::new();
+
+    let addr = format!("{bind}:{web_port}");
+    match TcpListener::bind(&addr).await {
+        Ok(listener) => {
+            println!("serve: http on {addr}");
+            listeners.push(listener);
+        }
+        Err(err) => {
+            tracing::info!("Error binding to {web_port}: {err}");
+            if packaged {
+                let msg = format!(
+                    "FATAL: Wire-pod was unable to bind to port {web_port}. Another process is likely using it. Exiting."
+                );
+                let _ = tokio::task::spawn_blocking(move || wirepod_core::msg::err_msg(&msg)).await;
+            }
+            return Err(ServeError::Bind(addr, err));
+        }
+    }
+
+    let addr = format!("{bind}:{http_port}");
+    match TcpListener::bind(&addr).await {
+        Ok(listener) => {
+            println!("serve: http on {addr}");
+            listeners.push(listener);
+        }
+        Err(_) => {
+            // Go shows the box on the goroutine that bound port 80, so the rest
+            // of the server starts beside it.
+            tokio::task::spawn_blocking(move || {
+                if packaged {
+                    wirepod_core::msg::warn_msg(
+                        "A process is using port 80. Wire-pod will keep running, but connCheck functionality will not work, so your bot may not always stay connected to your wire-pod instance.",
+                    );
+                }
+                tracing::info!(
+                    "A process is already using port 80 - connCheck functionality will not work"
+                );
+            });
+        }
+    }
+    Ok(listeners)
+}
+
+/// The listeners and Go's `StartFromProgramInit`, until `cancel` fires.
+pub async fn start(
+    args: &ServeArgs,
+    booted: Booted,
+    cancel: CancellationToken,
+) -> Result<(), ServeError> {
+    let Booted { state, web_port } = booted;
 
     // Go's `BeginServer` starts both of these beside the HTTP surface.
     // Beside the Go server its own watchdog is already sending Vector home.
@@ -143,18 +271,16 @@ pub async fn run(args: ServeArgs) -> Result<(), ServeError> {
         tokio::spawn(async move { state.registry().run_conn_timer(cancel).await });
     }
 
-    // Go serves one mux on the web port and on port 80.
     let router = wirepod_server::build_router(Arc::clone(&state));
     let mut plain = Vec::new();
-    for port in [
-        args.web_port.unwrap_or(DEFAULT_WEB_PORT),
+    for listener in bind_listeners(
+        &args.bind,
+        &web_port,
         args.http_port.unwrap_or(CONN_CHECK_PORT),
-    ] {
-        let addr = format!("{}:{port}", args.bind);
-        let listener = TcpListener::bind(&addr)
-            .await
-            .map_err(|err| ServeError::Bind(addr.clone(), err))?;
-        println!("serve: http on {addr}");
+        state.packaged(),
+    )
+    .await?
+    {
         plain.push(tokio::spawn(wirepod_server::serve_plain(
             listener,
             router.clone(),
@@ -283,5 +409,31 @@ mod tests {
             .map(|entry| entry.msg)
             .collect();
         assert_eq!(messages, ["motion line", "transcription line"]);
+    }
+
+    #[test]
+    fn webserver_port_sets_the_web_port_unless_it_has_letters_and_the_flag_wins() {
+        assert_eq!(web_port(None, Some("8081")), "8081");
+        assert_eq!(web_port(None, Some("80a")), "8080");
+        assert_eq!(web_port(None, Some("")), "8080");
+        assert_eq!(web_port(None, None), "8080");
+        assert_eq!(web_port(Some(18080), Some("8081")), "18080");
+        assert_eq!(web_port(Some(18080), Some("80a")), "18080");
+    }
+
+    #[tokio::test]
+    async fn a_taken_conn_check_port_is_not_fatal_and_a_taken_web_port_is() {
+        let held = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let taken = held.local_addr().expect("local addr").port();
+
+        let listeners = bind_listeners("127.0.0.1", "0", taken, false)
+            .await
+            .expect("the web port binds and port 80 is only logged");
+        assert_eq!(listeners.len(), 1);
+
+        let err = bind_listeners("127.0.0.1", &taken.to_string(), 0, false)
+            .await
+            .expect_err("the web port is taken");
+        assert!(matches!(err, ServeError::Bind(..)), "{err}");
     }
 }
