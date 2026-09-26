@@ -92,9 +92,21 @@ webrtc-vad = "0.4"
 # Reading a generated certificate back, in the cert tests only.
 x509-parser = "0.18"
 # `SystemTimeToTzSpecificLocalTime` for the local UTC offset at a given instant,
-# which is what Go resolves through the timezone database. Features are cfg
-# gates over generated bindings inside the one crate and pull no package.
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_System_Time"] }
+# which is what Go resolves through the timezone database, and the Win32 calls
+# the tray shell makes in place of Go's systray, zenity and registry packages.
+# Features are cfg gates over generated bindings inside the one crate and pull
+# no package.
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_System_Time",
+    "Win32_UI_Controls",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 wirepod-audio = { path = "crates/wirepod-audio" }
 wirepod-core = { path = "crates/wirepod-core" }

@@ -38,6 +38,7 @@ pub mod gofmt;
 pub mod gojson;
 pub mod intents;
 pub mod logger;
+pub mod msg;
 pub mod paths;
 pub mod persist;
 pub mod robot;

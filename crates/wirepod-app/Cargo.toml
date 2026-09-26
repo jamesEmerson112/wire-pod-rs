@@ -13,6 +13,10 @@ default = []
 # Builds the Vosk engine into the binary, which links against libvosk. Off by
 # default so a plain `cargo build` needs no native library.
 stt-vosk = ["wirepod-stt/stt-vosk"]
+# Builds the Windows tray: the binary uses the GUI subsystem, as Go's
+# `-H=windowsgui` does, and a bare invocation starts the tray. Off by default so
+# `serve` and `sdk-trial` keep their console.
+tray = []
 
 [dependencies]
 serde_json.workspace = true
@@ -29,3 +33,7 @@ wirepod-stt.workspace = true
 wirepod-ttr.workspace = true
 wirepod-server.workspace = true
 wirepod-vector.workspace = true
+
+# The tray shell's Win32 calls.
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true

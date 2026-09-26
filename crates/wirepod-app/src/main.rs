@@ -18,6 +18,8 @@
 mod args;
 mod sdk_trial;
 mod serve;
+#[cfg(windows)]
+mod tray;
 
 use std::process::ExitCode;
 

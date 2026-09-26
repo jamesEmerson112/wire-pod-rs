@@ -210,6 +210,8 @@ pub struct AppState {
     /// the token server's claims and the log ring's stamps can both be frozen
     /// in a test.
     wall: Arc<dyn WallClock>,
+    /// Go's `vars.Packaged` (`vars.go:29`), which only the tray sets.
+    packaged: bool,
 }
 
 impl AppState {
@@ -266,6 +268,12 @@ impl AppState {
     /// Every connected robot.
     pub fn registry(&self) -> &RobotRegistry {
         &self.registry
+    }
+
+    /// Whether this is the tray build, which shows message boxes where the
+    /// console build only logs.
+    pub fn packaged(&self) -> bool {
+        self.packaged
     }
 
     /// The durations the handlers wait on.
@@ -420,6 +428,7 @@ pub struct AppStateBuilder {
     clock: Option<Arc<dyn Clock>>,
     liveness_deadline: Option<Duration>,
     state_stream: bool,
+    packaged: bool,
     paths: Paths,
     config: ApiConfig,
     config_gate: Option<WriteGate>,
@@ -441,6 +450,7 @@ impl AppStateBuilder {
             clock: None,
             liveness_deadline: None,
             state_stream: false,
+            packaged: false,
             paths: Paths::default(),
             config: ApiConfig::default(),
             config_gate: None,
@@ -482,6 +492,12 @@ impl AppStateBuilder {
     /// Off by default; the server turns it on.
     pub fn state_stream(mut self, on: bool) -> Self {
         self.state_stream = on;
+        self
+    }
+
+    /// Marks the tray build, Go's `vars.Packaged = true`. Off by default.
+    pub fn packaged(mut self, on: bool) -> Self {
+        self.packaged = on;
         self
     }
 
@@ -639,6 +655,7 @@ impl AppStateBuilder {
             tokens: self.tokens,
             logs,
             wall,
+            packaged: self.packaged,
         })
     }
 }
