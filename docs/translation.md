@@ -202,8 +202,8 @@ Out of scope, by the same decisions and the earlier ones:
 
 No robot is needed, and each item is its own commit.
 
-1. **Fix the log filter.** Put the `EnvFilter` on the console layer only, as `logger.rs` describes, and let the `LogLayer` admit every level of wire-pod's own targets. A test checks that a debug event on `sdkapp` reaches the ring under the default filter. More lines then land in the 500-slot ring. That is Go's behaviour, and the motion window was designed with that budget in mind. In the same commit, `serve` opens `LOG_FILE` as Go's `logger.Init` does. `LogRing::with_sink` already exists, but `serve` builds the ring without it, and the soak needs the file.
-2. **Turn the mDNS browse on.** The jdocs pinger's browse is switched on in the full `serve` boot path, and never under `--web-only` or in tests.
+1. **Fix the log filter.** Put the `EnvFilter` on the console layer only, as `logger.rs` describes, and let the `LogLayer` admit every level of wire-pod's own targets. A test checks that a debug event on `sdkapp` reaches the ring under the default filter. More lines then land in the 500-slot ring. That is Go's behaviour, and the motion window was designed with that budget in mind. In the same commit, `serve` opens `LOG_FILE` as Go's `logger.Init` does. `LogRing::with_log_file` already exists, but `serve` built the ring without it, and the soak needs the file. Done.
+2. **Turn the mDNS browse on.** The jdocs pinger's browse is switched on in the full `serve` boot path, and never under `--web-only` or in tests. Done.
 3. **Fix the CI flake.** `concurrent_writers_never_leave_a_torn_file` fails intermittently on Windows and can fail a CI run.
 4. **Stop printing keys.** `ApiConfig` and `BotInfo` must not print keys through their derived `Debug`.
 5. **Add a local packaged gate, since CI cannot run one.** It runs clippy and a release build with `--features stt-vosk`, with `VOSK_LIB_DIR` set as in `RUNBOOK-SERVE.md`. Run it before any push that touches the voice path, and always before a deploy.
@@ -456,7 +456,7 @@ From the browser session of 2026-09-19, with the robot attached to the Rust serv
 - Neither server reads the timestamp the robot sends on each camera frame, so glass-to-glass latency cannot be measured. Reading it would be an addition rather than a translation.
 - Go's `get_ota` indexes a path segment that the only matching route cannot have, so the handler panics on every call. The port answers Go's own `failed to parse URL` 500 instead, and the proxy below it is unreachable in both.
 - `print_robot_info` prints the robot's GUID in Go. The port leaves it out.
-- The `sdkapp` log target is not in the default filter, so lines logged to it at debug never appear. The same holds for `stt`, `voice` and `conn`, and the cause is that `serve` filters globally, ahead of the ring. It is M6 stage 0, item 1.
+- The `sdkapp` log target is not in the default filter, so lines logged to it at debug never appear. The same holds for `stt`, `voice` and `conn`, and the cause was that `serve` filtered globally, ahead of the ring. Fixed in M6 stage 0: the filter is on the console layer only.
 
 Checked against the running Go server, web-only on 18080 beside it:
 
@@ -473,7 +473,7 @@ Checked against the running Go server, web-only on 18080 beside it:
 - `mdns_sd` logs `failed to send response of shutdown` every 32 seconds, each time the registration loop re-registers. The name still resolves.
 - An unrouted gRPC path on the TLS listener answers the router's 404 rather than tonic's `Unimplemented`, because `/ok:80` is matched in the fallback.
 - `pingJdocs` retries on the cached robot connection where Go dials a second one.
-- The mDNS browse in `jdocspinger.rs` sits behind `set_mdns_enabled`, which no boot path turns on yet. Go uses it to follow a robot whose address changed. It is M6 stage 0, item 2.
+- The mDNS browse in `jdocspinger.rs` sits behind `set_mdns_enabled`, which no boot path turns on yet. Go uses it to follow a robot whose address changed. Fixed in M6 stage 0: the full `serve` boot path turns it on.
 - Log lines with ANSI colour codes print the escape as text under the `tracing` formatter.
 - `/api-chipper` without the trailing slash has no redirect to `/api-chipper/`.
 - `download.rs` skips zip entries that would leave the destination, and ignores file modes.

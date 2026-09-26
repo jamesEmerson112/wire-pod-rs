@@ -6,14 +6,15 @@
 //! processor and answers the three streaming RPCs as unimplemented.
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::prelude::*;
-use wirepod_core::logger::{LogLayer, LogRing};
+use tracing_subscriber::{EnvFilter, Layer};
+use wirepod_core::logger::{LogLayer, LogRing, is_wire_pod_target};
 use wirepod_core::paths::{AssetDir, DataDir, sdk_ini_dir};
 use wirepod_core::wallclock::{SystemWallClock, WallClock};
 use wirepod_core::{
@@ -26,6 +27,9 @@ use wirepod_vector::TonicConnFactory;
 
 use crate::args::ServeArgs;
 use crate::sdk_trial::{DEFAULT_FILTER, FILTER_ENV};
+
+/// Go's `logger.Init` appends every line to this file when it is set.
+const LOG_FILE_ENV: &str = "LOG_FILE";
 
 #[derive(Debug)]
 pub enum ServeError {
@@ -111,7 +115,11 @@ pub async fn run(args: ServeArgs) -> Result<(), ServeError> {
     // Go's `logger.Init`: the ring the web UI's log page reads, fed by every
     // `tracing` event alongside the console.
     let wall: Arc<dyn WallClock> = Arc::new(SystemWallClock::new());
-    let logs = Arc::new(LogRing::new(Arc::new(WallLogClock::new(Arc::clone(&wall)))));
+    let clock = Arc::new(WallLogClock::new(Arc::clone(&wall)));
+    let logs = Arc::new(match std::env::var_os(LOG_FILE_ENV) {
+        Some(path) if !path.is_empty() => LogRing::with_log_file(clock, Path::new(&path)),
+        _ => LogRing::new(clock),
+    });
     install_logging(Arc::clone(&logs));
     let state = load_state(&args, logs, wall).await?;
     wirepod_server::jdocspinger::init_jdocs_pinger(&state);
@@ -157,6 +165,8 @@ pub async fn run(args: ServeArgs) -> Result<(), ServeError> {
     if args.web_only {
         println!("serve: web only, the chipper listeners and mDNS stay off");
     } else {
+        // Go's conn check browses for a robot whose address it does not know.
+        wirepod_server::jdocspinger::set_mdns_enabled(true);
         startserver::start_from_program_init(Arc::clone(&state), voice_processor(&state)).await;
     }
 
@@ -176,11 +186,19 @@ fn install_logging(logs: Arc<LogRing>) {
         Ok(value) => EnvFilter::new(value),
         Err(_) => EnvFilter::new(DEFAULT_FILTER),
     };
+    subscriber(logs, filter).init();
+}
+
+/// Go's ring keeps every level and `DEBUG_LOGGING` gates only the stdout copy,
+/// so the filter goes on the console layer alone and the ring takes every level
+/// of wire-pod's own targets.
+fn subscriber(
+    logs: Arc<LogRing>,
+    console: EnvFilter,
+) -> impl tracing::Subscriber + Send + Sync + 'static {
     tracing_subscriber::registry()
-        .with(filter)
-        .with(tracing_subscriber::fmt::layer())
-        .with(LogLayer::new(logs))
-        .init();
+        .with(tracing_subscriber::fmt::layer().with_filter(console))
+        .with(LogLayer::new(logs).with_filter(filter_fn(|meta| is_wire_pod_target(meta.target()))))
 }
 
 /// Go's `wp.New(stt.Init, stt.STT, stt.Name)`, which builds the voice processor
@@ -239,4 +257,31 @@ fn voice_processor(state: &Arc<AppState>) -> Server {
 fn voice_processor(_state: &Arc<AppState>) -> Server {
     println!("serve: built without a speech engine, so voice commands are off");
     Server::new(Options::new())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wirepod_core::logger::{LogLevel, ManualLogClock};
+
+    #[test]
+    fn debug_lines_on_wire_pod_targets_reach_the_ring_under_the_default_filter() {
+        let ring = Arc::new(LogRing::new(Arc::new(ManualLogClock::new(
+            1_000,
+            "2026.01.02 03:04:05",
+        ))));
+        let subscriber = subscriber(Arc::clone(&ring), EnvFilter::new(DEFAULT_FILTER));
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::debug!(target: "sdkapp", "motion line");
+            tracing::debug!(target: "stt", "transcription line");
+            tracing::debug!(target: "h2::codec", "a library's frame");
+        });
+
+        let messages: Vec<String> = ring
+            .get_entries(LogLevel::Debug, 0)
+            .into_iter()
+            .map(|entry| entry.msg)
+            .collect();
+        assert_eq!(messages, ["motion line", "transcription line"]);
+    }
 }
