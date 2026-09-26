@@ -958,13 +958,12 @@ impl SinkLog {
 /// [`crate::persist::write_atomic`] with the Windows rename retry's budget
 /// chosen by the caller, answering how many rename attempts it took.
 ///
-/// The production budget is four attempts over fourteen milliseconds of
-/// waiting, which is shorter than the few milliseconds it takes to create, fill
-/// and `sync_all` the temporary, so a test that arranges a hold on the target
-/// and then uses the production budget is racing its own setup: whether the
-/// hold is still there when the first rename is attempted decides what the test
-/// measures. A test that passes a wide budget drives the same loop with the
-/// race gone.
+/// The production budget is ten attempts over about a second of waiting. A
+/// test that arranges a hold on the target races its own setup whatever the
+/// budget: the few milliseconds it takes to create, fill and `sync_all` the
+/// temporary decide whether the hold is still there when the first rename is
+/// attempted, and so what the test measures. A test that passes a wide budget
+/// drives the same loop with the race gone.
 ///
 /// The attempt count is what lets such a test say it exercised the retry. A
 /// hold that has already cleared by the time the first rename runs produces a

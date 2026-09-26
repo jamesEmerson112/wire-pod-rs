@@ -469,6 +469,8 @@ Checked against the running Go server, web-only on 18080 beside it:
 - A JSON key with a malformed Unicode escape makes the Rust decoder drop the whole file where Go loads it (`gojson::merge_object`).
 - The in-memory token store grows without bound, as in Go.
 - Session-certificate writes build a fresh write gate per call.
+- `botSdkInfo.json` is written through a fresh write gate on every call too, in `store/bot_info.rs` and in `jdocspinger.rs`, so nothing orders two writers of that file in production. The M6 flake work measured that this was not the flake's cause.
+- `a_hold_that_clears_does_not_lose_the_write` in `tests/persist.rs` depends on timing: with 48 copies of the test binary running at once, the hold often clears before the first rename, and its `attempts > 1` assertion fails. Normal CI load does not come close.
 - `ApiConfig` and `BotInfo` derive a full `Debug` and could leak keys into a log line.
 - `mdns_sd` logs `failed to send response of shutdown` every 32 seconds, each time the registration loop re-registers. The name still resolves.
 - An unrouted gRPC path on the TLS listener answers the router's 404 rather than tonic's `Unimplemented`, because `/ok:80` is matched in the fallback.
