@@ -28,6 +28,8 @@ pub trait OsFuncs: Send + Sync {
     fn write_config(&self, config: &WpConfig) -> io::Result<()>;
     fn is_pod_already_running(&self) -> bool;
     fn is_pid_process_running(&self, pid: u32) -> io::Result<bool>;
+    // Go's interface declares it, but nothing in the tray calls it.
+    #[allow(dead_code)]
     fn kill_existing_pod(&self) -> io::Result<()>;
     fn resources_path(&self) -> PathBuf;
     fn hostname(&self) -> String;

@@ -37,6 +37,8 @@ const BUTTON_EXTRA: i32 = 101;
 pub enum Icon<'a> {
     Error,
     Warning,
+    // zenity's `InfoIcon`; the tray passes its own icon file instead.
+    #[allow(dead_code)]
     Info,
     /// A `.ico` file, or a PNG, which is what Go passes.
     File(&'a Path),

@@ -112,6 +112,8 @@ pub fn init_reg() -> io::Result<Registry> {
     })
 }
 
+// Only Go's installer and uninstaller call this; the tray never does.
+#[allow(dead_code)]
 pub fn delete_everything_from_registry(registry: &Registry) -> io::Result<()> {
     if !registry.is_installer {
         return Err(io::Error::other("must be run from installer"));
@@ -122,6 +124,7 @@ pub fn delete_everything_from_registry(registry: &Registry) -> io::Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 pub fn delete_registry_key(key_info: &KeyInfo) -> io::Result<()> {
     delete_key(key_info.key, &key_info.key_path)
 }
@@ -216,6 +219,7 @@ fn create_key(root: RootKey, path: &str, access: u32) -> io::Result<Key> {
     Ok(Key(h))
 }
 
+#[allow(dead_code)]
 fn delete_key(root: RootKey, path: &str) -> io::Result<()> {
     let path = utf16(path)?;
     // SAFETY: `path` is NUL-terminated and outlives the call.

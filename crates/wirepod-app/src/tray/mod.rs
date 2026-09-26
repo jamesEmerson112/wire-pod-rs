@@ -5,8 +5,9 @@
 //! `systray` and `zenity` stand in for the two Go libraries the shell calls,
 //! `github.com/getlantern/systray` and `github.com/ncruces/zenity`, over Win32.
 
-// Scaffolding for M6 stage 3: nothing calls into the tray until `main` does.
-#![allow(dead_code)]
+// Without the `tray` feature nothing calls into the tray, but it still
+// compiles, so the default build and CI run its tests.
+#![cfg_attr(not(feature = "tray"), allow(dead_code))]
 
 pub mod all;
 pub mod initwirepod;

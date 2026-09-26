@@ -187,6 +187,8 @@ impl OsFuncs for Windows {
 // What follows stands in for Go's `os.FindProcess`, `Process.Kill` and
 // `os.Hostname` on Windows.
 
+// Reached only from `kill_existing_pod`, which the tray never calls.
+#[allow(dead_code)]
 fn find_process(pid: u32) -> io::Result<OwnedHandle> {
     // SAFETY: plain call; a null handle is checked below.
     let h = unsafe {
@@ -203,6 +205,7 @@ fn find_process(pid: u32) -> io::Result<OwnedHandle> {
     Ok(unsafe { OwnedHandle::from_raw_handle(h) })
 }
 
+#[allow(dead_code)]
 fn kill(process: &OwnedHandle) -> io::Result<()> {
     let mut termination: HANDLE = ptr::null_mut();
     // SAFETY: `process` is open, and the current-process pseudo-handle needs no

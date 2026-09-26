@@ -10,7 +10,10 @@
 //! starting anything, because both subcommands bind ports and dial a robot.
 
 // Not under test, so a `--features tray` test binary keeps its console output.
-#![cfg_attr(all(windows, feature = "tray", not(test)), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(windows, feature = "tray", not(test)),
+    windows_subsystem = "windows"
+)]
 
 mod args;
 mod sdk_trial;
