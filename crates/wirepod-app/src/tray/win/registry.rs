@@ -1,7 +1,6 @@
 //! `cross/win/registry.go`: the tray's registry keys and the calls that read
 //! and write them.
 
-use std::ffi::c_void;
 use std::fs::File;
 use std::io;
 use std::ptr;
@@ -10,9 +9,9 @@ use windows_sys::Win32::Foundation::{ERROR_MORE_DATA, ERROR_SUCCESS, WIN32_ERROR
 use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_ALL_ACCESS, KEY_QUERY_VALUE, KEY_READ,
     KEY_WRITE, REG_DWORD, REG_EXPAND_SZ, REG_OPTION_NON_VOLATILE, REG_QWORD, REG_SZ, RegCloseKey,
-    RegDeleteKeyW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
+    RegCreateKeyExW, RegDeleteKeyW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW,
+    RegSetValueExW,
 };
-use windows_sys::core::PCWSTR;
 
 // `Software\Microsoft\Windows\CurrentVersion\Uninstall\wire-pod`
 
@@ -158,23 +157,6 @@ pub fn check_if_elevated() -> bool {
 }
 
 // What follows stands in for `golang.org/x/sys/windows/registry`.
-
-// windows-sys gates its `RegCreateKeyExW` behind `Win32_Security`, which the
-// workspace does not enable, so the call is declared here.
-#[link(name = "advapi32")]
-unsafe extern "system" {
-    fn RegCreateKeyExW(
-        hkey: HKEY,
-        lpsubkey: PCWSTR,
-        reserved: u32,
-        lpclass: PCWSTR,
-        dwoptions: u32,
-        samdesired: u32,
-        lpsecurityattributes: *const c_void,
-        phkresult: *mut HKEY,
-        lpdwdisposition: *mut u32,
-    ) -> WIN32_ERROR;
-}
 
 const ERR_UNEXPECTED_TYPE: &str = "unexpected key value type";
 
