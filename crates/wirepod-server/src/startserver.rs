@@ -3,7 +3,7 @@
 use std::io;
 use std::net::SocketAddr;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use axum::Router;
 use axum::extract::Request;
@@ -52,6 +52,34 @@ static CHIPPER: Mutex<Option<Server>> = Mutex::new(None);
 struct Serving {
     cancel: CancellationToken,
     task: JoinHandle<()>,
+}
+
+/// The points where the tray's copy of this file, `cross/podapp/initwirepod.go`,
+/// shows a tooltip or a message box.
+pub enum Event<'a> {
+    /// One of the three branches of `StartFromProgramInit` that leave wire-pod
+    /// waiting to be set up.
+    NotSetUp,
+    /// `StartChipper` is serving. `from_init` is false after a restart.
+    Started { from_init: bool },
+    /// `StartChipper` could not load the key pair or bind a listener.
+    Failed(&'a io::Error),
+}
+
+pub type Hook = Box<dyn Fn(Event<'_>) + Send + Sync>;
+
+/// The tray's hook. The console build installs none.
+static HOOK: OnceLock<Hook> = OnceLock::new();
+
+/// Installs the tray's hook, once per process.
+pub fn set_hook(hook: Hook) {
+    let _ = HOOK.set(hook);
+}
+
+fn notify(event: Event<'_>) {
+    if let Some(hook) = HOOK.get() {
+        hook(event);
+    }
 }
 
 async fn serve_ok() -> Response {
@@ -183,8 +211,10 @@ pub async fn start_from_program_init(state: Arc<AppState>, chipper: Server) {
     let config = state.config();
     if begin_wirepod_specific().is_err() {
         tracing::info!("{NOT_SETUP}");
+        notify(Event::NotSetUp);
     } else if !config.past_initial_setup {
         tracing::info!("{NOT_SETUP}");
+        notify(Event::NotSetUp);
     } else if (config.stt.provider == "vosk" || config.stt.provider == "whisper.cpp")
         && config.stt.language.is_empty()
     {
@@ -193,9 +223,16 @@ pub async fn start_from_program_init(state: Arc<AppState>, chipper: Server) {
             config.stt.provider
         );
         tracing::info!("{NOT_SETUP}");
+        notify(Event::NotSetUp);
         state.update_config(|config| config.past_initial_setup = false);
-    } else if let Err(err) = start_chipper(&state, chipper).await {
-        tracing::info!("{err}");
+    } else {
+        match start_chipper(&state, chipper).await {
+            Ok(()) => notify(Event::Started { from_init: true }),
+            Err(err) => {
+                tracing::info!("{err}");
+                notify(Event::Failed(&err));
+            }
+        }
     }
     // TODO(M2): wpweb.StartWebServer()
 }
@@ -207,7 +244,14 @@ pub async fn restart_server(state: &Arc<AppState>) -> io::Result<()> {
         .unwrap_or_else(|err| err.into_inner())
         .clone();
     match chipper {
-        Some(chipper) => start_chipper(state, chipper).await,
+        Some(chipper) => {
+            let started = start_chipper(state, chipper).await;
+            match &started {
+                Ok(()) => notify(Event::Started { from_init: false }),
+                Err(err) => notify(Event::Failed(err)),
+            }
+            started
+        }
         None => Err(io::Error::other(
             "the chipper service was never initialised",
         )),
@@ -265,4 +309,47 @@ pub async fn start_chipper(state: &Arc<AppState>, chipper: Server) -> io::Result
 
     tracing::info!("\x1b[33m\x1b[1mwire-pod started successfully!\x1b[0m");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chipper::Options;
+    use crate::test_support::unreachable_error;
+    use wirepod_core::RobotConnFactory;
+    use wirepod_core::test_support::FakeConnFactory;
+
+    /// The hook is set once per process, so this is the only test that sets it.
+    #[tokio::test]
+    async fn a_server_that_is_not_set_up_tells_the_hook_and_binds_nothing() {
+        static EVENTS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+        set_hook(Box::new(|event| {
+            let name = match event {
+                Event::NotSetUp => "not set up",
+                Event::Started { .. } => "started",
+                Event::Failed(_) => "failed",
+            };
+            EVENTS
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .push(name);
+        }));
+
+        let factory: Arc<dyn RobotConnFactory> =
+            Arc::new(FakeConnFactory::failing(unreachable_error()));
+        let state = AppState::builder(factory).build();
+        assert!(!state.config().past_initial_setup);
+        start_from_program_init(state, Server::new(Options::new())).await;
+
+        assert_eq!(
+            *EVENTS.lock().unwrap_or_else(|err| err.into_inner()),
+            ["not set up"]
+        );
+        assert!(
+            SERVING
+                .lock()
+                .unwrap_or_else(|err| err.into_inner())
+                .is_none()
+        );
+    }
 }
