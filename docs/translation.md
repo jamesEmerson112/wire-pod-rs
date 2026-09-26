@@ -206,7 +206,7 @@ No robot is needed, and each item is its own commit.
 2. **Turn the mDNS browse on.** The jdocs pinger's browse is switched on in the full `serve` boot path, and never under `--web-only` or in tests. Done.
 3. **Fix the CI flake.** `concurrent_writers_never_leave_a_torn_file` fails intermittently on Windows and can fail a CI run.
 4. **Stop printing keys.** `ApiConfig` and `BotInfo` must not print keys through their derived `Debug`.
-5. **Add a local packaged gate, since CI cannot run one.** It runs clippy and a release build with `--features stt-vosk`, with `VOSK_LIB_DIR` set as in `RUNBOOK-SERVE.md`. Run it before any push that touches the voice path, and always before a deploy.
+5. **Add a local packaged gate, since CI cannot run one.** It runs clippy and a release build with `--features stt-vosk`, with `VOSK_LIB_DIR` set as in `RUNBOOK-SERVE.md`. Run it before any push that touches the voice path, and always before a deploy. Done: `scripts/gate-packaged.sh`.
 6. **Correct the docs.** Fix where `CLAUDE.md` and `RUNBOOK-SERVE.md` said the tray app supervises `chipper.exe`, name the WirePod checkout as read-only, and put the tray's registry keys out of bounds outside a session. This was done with this plan.
 
 ### Stage 1: robot sessions, with the user present
@@ -300,7 +300,7 @@ This is the one stage that could be split between two translation agents, under 
 
 The build is `cargo build --release -p wirepod-app --features stt-vosk,tray`.
 
-`scripts/deploy-windows.ps1` replaces the Go binary in place. It is modelled on the fork's `scripts/build-windows.ps1 -Deploy`, with one difference: it never stops a process by name. Run from an elevated PowerShell, it does the following:
+`scripts/deploy-windows.ps1` replaces the Go binary in place. It is written, and it refuses any build that is not a tray build. It is modelled on the fork's `scripts/build-windows.ps1 -Deploy`, with one difference: it never stops a process by name. Run from an elevated PowerShell, it does the following:
 
 1. Read `LastRunningPID` from the registry. Check that the PID belongs to the `chipper.exe` in the install folder, then stop it by that PID.
 2. The first time only, rename the Go binary to `chipper-go.exe` beside it, and never overwrite that copy.
