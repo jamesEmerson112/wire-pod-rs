@@ -162,6 +162,20 @@ impl fmt::Display for ParseError {
     }
 }
 
+/// Go's check of `os.Args[1]` for `-d`, which the `Run` key passes so the tray
+/// starts without its message box.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn discrete(first: Option<&str>) -> bool {
+    first.is_some_and(|arg| arg.contains("-d"))
+}
+
+/// Whether the tray build starts the tray rather than a subcommand: a bare
+/// `chipper`, as the Start menu runs it, or the `Run` key's `-d`.
+#[cfg_attr(not(all(windows, feature = "tray")), allow(dead_code))]
+pub fn starts_tray(first: Option<&str>) -> bool {
+    first.is_none() || discrete(first)
+}
+
 /// Parses the arguments after the program name.
 ///
 /// Flags may appear in any order, and a repeated flag takes its last value.
@@ -364,6 +378,17 @@ mod tests {
             parse(argv(&["serve", "--tls"])),
             Err(ParseError::UnknownFlag("--tls".to_owned()))
         );
+    }
+
+    #[test]
+    fn a_bare_invocation_or_a_first_argument_with_dash_d_starts_the_tray() {
+        assert!(starts_tray(None));
+        assert!(starts_tray(Some("-d")));
+        assert!(starts_tray(Some("--daemon")));
+        assert!(!starts_tray(Some(SERVE)));
+        assert!(!starts_tray(Some(SUBCOMMAND)));
+        assert!(discrete(Some("-d")));
+        assert!(!discrete(None));
     }
 
     #[test]

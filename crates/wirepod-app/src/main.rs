@@ -1,19 +1,15 @@
 //! The `chipper` binary.
 //!
-//! Go's entry point is `cmd/<engine>/main.go`, one per STT engine, each of
-//! which reads the environment and `apiConfig.json` and calls
-//! `initwirepod.StartFromProgramInit`. This binary is nowhere near that yet: P1
-//! brings the configuration, the TLS listener and the tonic services, and P9 the
-//! Windows tray shell.
+//! Built with the `tray` feature on Windows, it is Go's `windows/cmd/main.go`:
+//! a bare invocation, or the `-d` the `Run` key passes, starts the tray and the
+//! server behind it. Otherwise it takes a subcommand. `serve` runs the server
+//! from a console, and `sdk-trial` serves the SDK-app router beside the Go
+//! server, as `RUNBOOK-SDK-TRIAL.md` describes.
 //!
-//! What it has today is one subcommand, `sdk-trial`, which serves the finished
-//! SDK-app router against the real robot so that the parity diff in
-//! `scripts/sdk-trial-diff.sh` has something to diff. `RUNBOOK-SDK-TRIAL.md` is
-//! the procedure.
-//!
-//! A bare invocation prints the usage and exits 2 rather than starting
-//! anything. The trial binds a port and dials a robot, so it is not something to
-//! start by accident, and P1's real default is a different thing entirely.
+//! Without the tray, a bare invocation prints the usage and exits 2 rather than
+//! starting anything, because both subcommands bind ports and dial a robot.
+
+#![cfg_attr(all(windows, feature = "tray"), windows_subsystem = "windows")]
 
 mod args;
 mod sdk_trial;
@@ -29,9 +25,31 @@ use std::process::ExitCode;
 /// run that started and failed. The trial's own failures exit 1.
 const USAGE_EXIT: u8 = 2;
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
+
+    // The tray's message loop owns this thread, so it starts before any runtime
+    // and builds the server's on a thread of its own.
+    #[cfg(all(windows, feature = "tray"))]
+    if args::starts_tray(argv.first().map(String::as_str)) {
+        tray::podapp::start_wire_pod(tray::win::funcs::Windows::new());
+        return ExitCode::SUCCESS;
+    }
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("chipper: cannot start the runtime: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    runtime.block_on(console(argv))
+}
+
+async fn console(argv: Vec<String>) -> ExitCode {
     let trial = match args::parse(argv) {
         Ok(args::Command::SdkTrial(trial)) => trial,
         Ok(args::Command::Serve(serve)) => {
