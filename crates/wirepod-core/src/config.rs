@@ -261,7 +261,7 @@ fn allocate(slot: &mut Option<i32>) {
 /// marshals in and therefore the order of the file on disk. The names are Go's
 /// tags. Both are a contract: the web UI reads this document, and so does the
 /// Go server after a rollback.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 pub struct ApiConfig {
     /// `config.go:18-23`.
     pub weather: WeatherConfig,
@@ -290,7 +290,7 @@ pub struct ApiConfig {
 }
 
 /// Go's anonymous weather struct (`config.go:18-23`).
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 pub struct WeatherConfig {
     /// `config.go:19`.
     pub enable: bool,
@@ -314,7 +314,7 @@ pub struct WeatherConfig {
 /// and [`KnowledgeConfig::temp`] read them back as numbers and
 /// [`KnowledgeConfig::set_top_p`] and [`KnowledgeConfig::set_temp`] are the
 /// only way to change them.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Serialize)]
 pub struct KnowledgeConfig {
     /// `config.go:25`.
     pub enable: bool,
@@ -456,7 +456,7 @@ fn parse_rendered(raw: &RawValue) -> f32 {
 ///
 /// Go's field is `Service` and its tag is `provider`; the tag wins here,
 /// because the tag is what the file and the web UI use.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 pub struct SttConfig {
     /// Go's `Service` (`config.go:44`). The one setting the shell still
     /// controls, through `STT_SERVICE` (`config.go:133-136`).
@@ -470,7 +470,7 @@ pub struct SttConfig {
 }
 
 /// Go's anonymous server struct (`config.go:47-51`).
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 pub struct ServerConfig {
     /// `config.go:49`, with Go's comment at `:48`: "false for ip, true for
     /// escape pod".
@@ -484,7 +484,7 @@ pub struct ServerConfig {
 }
 
 /// Go's anonymous battery struct (`config.go:52-56`).
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 pub struct BatteryConfig {
     /// Go's `GoHomePercent *int` (`config.go:55`), with no `omitempty`, so an
     /// absent value is written as `null` rather than dropped.
@@ -504,6 +504,171 @@ pub struct BatteryConfig {
     /// Keys inside `battery` this struct does not name.
     #[serde(flatten)]
     pub extra: Extra,
+}
+
+// ---------------------------------------------------------------------------
+// Debug output
+// ---------------------------------------------------------------------------
+
+// Go's `%v` prints every field. These print each key, token and client ID as
+// `<redacted>`, and each unknown key without its value, since a key a newer Go
+// version adds may hold a credential.
+
+/// Stands in for a secret in `Debug` output.
+pub(crate) struct Redacted;
+
+impl fmt::Debug for Redacted {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("<redacted>")
+    }
+}
+
+/// An [`Extra`] map in `Debug` output, with every value redacted.
+pub(crate) struct ExtraKeys<'a>(pub(crate) &'a Extra);
+
+impl fmt::Debug for ExtraKeys<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_map()
+            .entries(self.0.keys().map(|key| (key, Redacted)))
+            .finish()
+    }
+}
+
+impl fmt::Debug for ApiConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            weather,
+            knowledge,
+            stt,
+            server,
+            battery,
+            has_read_from_env,
+            past_initial_setup,
+            extra,
+        } = self;
+        formatter
+            .debug_struct("ApiConfig")
+            .field("weather", weather)
+            .field("knowledge", knowledge)
+            .field("stt", stt)
+            .field("server", server)
+            .field("battery", battery)
+            .field("has_read_from_env", has_read_from_env)
+            .field("past_initial_setup", past_initial_setup)
+            .field("extra", &ExtraKeys(extra))
+            .finish()
+    }
+}
+
+impl fmt::Debug for WeatherConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            enable,
+            provider,
+            key: _,
+            unit,
+            extra,
+        } = self;
+        formatter
+            .debug_struct("WeatherConfig")
+            .field("enable", enable)
+            .field("provider", provider)
+            .field("key", &Redacted)
+            .field("unit", unit)
+            .field("extra", &ExtraKeys(extra))
+            .finish()
+    }
+}
+
+impl fmt::Debug for KnowledgeConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            enable,
+            provider,
+            key: _,
+            id: _,
+            model,
+            intentgraph,
+            robot_name,
+            openai_prompt,
+            openai_voice,
+            openai_voice_with_english,
+            save_chat,
+            commands_enable,
+            endpoint,
+            top_p,
+            temp,
+            reasoning_effort,
+            extra,
+        } = self;
+        formatter
+            .debug_struct("KnowledgeConfig")
+            .field("enable", enable)
+            .field("provider", provider)
+            .field("key", &Redacted)
+            .field("id", &Redacted)
+            .field("model", model)
+            .field("intentgraph", intentgraph)
+            .field("robot_name", robot_name)
+            .field("openai_prompt", openai_prompt)
+            .field("openai_voice", openai_voice)
+            .field("openai_voice_with_english", openai_voice_with_english)
+            .field("save_chat", save_chat)
+            .field("commands_enable", commands_enable)
+            .field("endpoint", endpoint)
+            .field("top_p", top_p)
+            .field("temp", temp)
+            .field("reasoning_effort", reasoning_effort)
+            .field("extra", &ExtraKeys(extra))
+            .finish()
+    }
+}
+
+impl fmt::Debug for SttConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            provider,
+            language,
+            extra,
+        } = self;
+        formatter
+            .debug_struct("SttConfig")
+            .field("provider", provider)
+            .field("language", language)
+            .field("extra", &ExtraKeys(extra))
+            .finish()
+    }
+}
+
+impl fmt::Debug for ServerConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            epconfig,
+            port,
+            extra,
+        } = self;
+        formatter
+            .debug_struct("ServerConfig")
+            .field("epconfig", epconfig)
+            .field("port", port)
+            .field("extra", &ExtraKeys(extra))
+            .finish()
+    }
+}
+
+impl fmt::Debug for BatteryConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            gohome_percent,
+            extra,
+        } = self;
+        formatter
+            .debug_struct("BatteryConfig")
+            .field("gohome_percent", gohome_percent)
+            .field("extra", &ExtraKeys(extra))
+            .finish()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -783,7 +948,7 @@ impl<'de> Deserialize<'de> for BatteryConfig {
 /// because that is exactly what `os.Getenv` answers for an unset variable: Go
 /// cannot tell "unset" from "set to the empty string" here and neither can any
 /// rule ported from it.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Default, Eq, PartialEq)]
 pub struct Env {
     /// `config.go:69`. Compared against `"true"`; anything else disables
     /// weather.
@@ -815,6 +980,40 @@ pub struct Env {
     pub stt_language: String,
     /// `config.go:138`, compared against the stored `server.port`.
     pub ddl_rpc_port: String,
+}
+
+impl fmt::Debug for Env {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            weatherapi_enabled,
+            weatherapi_provider,
+            weatherapi_key: _,
+            weatherapi_unit,
+            knowledge_enabled,
+            knowledge_provider,
+            knowledge_id: _,
+            knowledge_key: _,
+            gohome_battery_percent,
+            stt_service,
+            stt_language,
+            ddl_rpc_port,
+        } = self;
+        formatter
+            .debug_struct("Env")
+            .field("weatherapi_enabled", weatherapi_enabled)
+            .field("weatherapi_provider", weatherapi_provider)
+            .field("weatherapi_key", &Redacted)
+            .field("weatherapi_unit", weatherapi_unit)
+            .field("knowledge_enabled", knowledge_enabled)
+            .field("knowledge_provider", knowledge_provider)
+            .field("knowledge_id", &Redacted)
+            .field("knowledge_key", &Redacted)
+            .field("gohome_battery_percent", gohome_battery_percent)
+            .field("stt_service", stt_service)
+            .field("stt_language", stt_language)
+            .field("ddl_rpc_port", ddl_rpc_port)
+            .finish()
+    }
 }
 
 /// The names [`Env`] carries, in declaration order.

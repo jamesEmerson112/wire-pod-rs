@@ -1,6 +1,7 @@
 //! The bot-info file: the list of authenticated robots and their GUIDs.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
@@ -8,6 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use serde_json::value::RawValue;
 
+use crate::config::{ExtraKeys, Redacted};
 use crate::esn::Esn;
 use crate::gojson::{
     Decoded, Extra, Faults, GoObject, go_marshal, store_bool, store_list, store_string,
@@ -44,7 +46,7 @@ pub const BOT_INFO_FILE_MODE: u32 = 0o644;
 /// `serde_json`'s object map is a `BTreeMap` without the `preserve_order`
 /// feature. That is a recorded deviation; it never reaches the wire, because
 /// `/api-sdk/get_sdk_info` serialises [`BotInfoWire`] instead.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 pub struct BotInfo {
     /// The GUID used for any robot whose own GUID is empty.
     #[serde(default)]
@@ -61,7 +63,7 @@ pub struct BotInfo {
 ///
 /// The field order is Go's declaration order (`vars.go:90-97`), which is also
 /// its marshal order and therefore part of the `get_sdk_info` contract.
-#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+#[derive(Clone, Default, PartialEq, Serialize)]
 pub struct BotInfoRobot {
     /// The robot's serial, in whatever case the file stores it.
     #[serde(default)]
@@ -79,6 +81,45 @@ pub struct BotInfoRobot {
     /// Per-robot keys this struct does not name, preserved across a round trip.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+// Go's `%v` prints the GUIDs, which are bearer tokens. These print each GUID as
+// `<redacted>` and each unknown key without its value.
+
+impl fmt::Debug for BotInfo {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            global_guid: _,
+            robots,
+            extra,
+        } = self;
+        formatter
+            .debug_struct("BotInfo")
+            .field("global_guid", &Redacted)
+            .field("robots", robots)
+            .field("extra", &ExtraKeys(extra))
+            .finish()
+    }
+}
+
+impl fmt::Debug for BotInfoRobot {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            esn,
+            ip_address,
+            guid: _,
+            activated,
+            extra,
+        } = self;
+        formatter
+            .debug_struct("BotInfoRobot")
+            .field("esn", esn)
+            .field("ip_address", ip_address)
+            .field("guid", &Redacted)
+            .field("activated", activated)
+            .field("extra", &ExtraKeys(extra))
+            .finish()
+    }
 }
 
 impl GoObject for BotInfoRobot {
@@ -236,7 +277,7 @@ impl BotInfo {
 ///
 /// `serde_json::to_string` matches Go's `json.Marshal`: no spaces and no
 /// trailing newline.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct BotInfoWire<'a> {
     /// The GUID used for any robot whose own GUID is empty.
     pub global_guid: &'a str,
@@ -245,7 +286,7 @@ pub struct BotInfoWire<'a> {
 }
 
 /// One robot in the [`BotInfoWire`] body, in Go's declaration order.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 pub struct RobotWire<'a> {
     /// The robot's serial, in whatever case the file stores it.
     pub esn: &'a str,
@@ -255,6 +296,38 @@ pub struct RobotWire<'a> {
     pub guid: &'a str,
     /// Whether the robot completed authentication.
     pub activated: bool,
+}
+
+impl fmt::Debug for BotInfoWire<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            global_guid: _,
+            robots,
+        } = self;
+        formatter
+            .debug_struct("BotInfoWire")
+            .field("global_guid", &Redacted)
+            .field("robots", robots)
+            .finish()
+    }
+}
+
+impl fmt::Debug for RobotWire<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            esn,
+            ip_address,
+            guid: _,
+            activated,
+        } = self;
+        formatter
+            .debug_struct("RobotWire")
+            .field("esn", esn)
+            .field("ip_address", ip_address)
+            .field("guid", &Redacted)
+            .field("activated", activated)
+            .finish()
+    }
 }
 
 impl<'a> From<&'a BotInfo> for BotInfoWire<'a> {
