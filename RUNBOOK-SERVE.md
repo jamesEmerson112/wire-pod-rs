@@ -49,7 +49,7 @@ The build output is locked while the server runs. To build or test in the meanti
 ## Switch back to Go
 
 1. Stop the Rust server with Ctrl-C, or by its process id (`netstat -ano | findstr :8080` names it). Never by the image name: the installed Go server is also `chipper.exe`.
-2. Launch WirePod from the Start Menu, wait about thirty seconds, and check `curl http://localhost:8080/api/is_running` answers `true`.
+2. Only then launch WirePod from the Start Menu, wait about thirty seconds, and check `curl http://localhost:8080/api/is_running` answers `true`. If WirePod starts while the Rust server still holds the ports, the Go server binds only the IPv6 side of each one and Vector stays on the Rust server until it stops; stopping it then hands everything to Go, as on 2026-09-27.
 3. The firewall rule can stay for next time. To remove it: `netsh advfirewall firewall delete rule name="wirepod-rs-test"`.
 
 ## Web UI only, beside the Go server
