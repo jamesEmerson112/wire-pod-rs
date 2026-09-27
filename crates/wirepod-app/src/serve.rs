@@ -317,14 +317,18 @@ fn install_logging(logs: Arc<LogRing>) {
 
 /// Go's ring keeps every level and `DEBUG_LOGGING` gates only the stdout copy,
 /// so the filter goes on the console layer alone and the ring takes every level
-/// of wire-pod's own targets.
+/// of wire-pod's own targets that Go has. Go has no trace, and the port's trace
+/// lines, such as the dashboard's three-second protocol probe, are there to stay
+/// out of the web UI's log.
 fn subscriber(
     logs: Arc<LogRing>,
     console: EnvFilter,
 ) -> impl tracing::Subscriber + Send + Sync + 'static {
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().with_filter(console))
-        .with(LogLayer::new(logs).with_filter(filter_fn(|meta| is_wire_pod_target(meta.target()))))
+        .with(LogLayer::new(logs).with_filter(filter_fn(|meta| {
+            is_wire_pod_target(meta.target()) && *meta.level() <= tracing::Level::DEBUG
+        })))
 }
 
 /// Go's `wp.New(stt.Init, stt.STT, stt.Name)`, which builds the voice processor
@@ -401,6 +405,7 @@ mod tests {
             tracing::debug!(target: "sdkapp", "motion line");
             tracing::debug!(target: "stt", "transcription line");
             tracing::debug!(target: "h2::codec", "a library's frame");
+            tracing::trace!(target: "wirepod_vector::conn", "the dashboard's protocol probe");
         });
 
         let messages: Vec<String> = ring
