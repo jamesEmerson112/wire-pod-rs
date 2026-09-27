@@ -434,8 +434,20 @@ Vector on the production ports against a copy of the data directory:
   248 lines in 12 minutes. Fixed the same day: the ring now takes debug and
   above, as Go has no trace level.
 - **The camera.** `/cam-stream` sent no headers while he sat on his charger, the
-  same as on the Go server. The frame-rate measurement is still owed with him
-  awake and off the charger.
+  same as on the Go server.
+  - **Frame rate, with him awake and off the charger.** With one viewer, the
+    first frame took 4.14 s and he then sent 85 frames in 20.2 s. That is
+    4.22 frames per second at 8.4 kB a frame. Go measured 0.98 s to the first
+    frame and 3.55 frames per second, so steady streaming is slightly faster
+    here and the first frame is about three seconds slower.
+  - **A second viewer.** When a second viewer opened the stream while the
+    dashboard held it, the new request got no frame in 10 s. When it gave up,
+    it logged "camera guard dropped without a finish; the camera was turned
+    off", and the dashboard's view needed a refresh. Go's fork also hands the
+    feed to the newest viewer (`startCamStream`), but its new viewer gets
+    frames. The likely cause is the handover: the old viewer's clean-up turning
+    the camera off after the new one turned it on. Compare `CamOwner` with
+    `startCamStream` and `finishCamStream`.
 - **The first charger sighting sets `localized_to_object_id`.** It changed to 0,
   the charger's id, the moment he first saw the charger in a frame, and his pose
   did not move. Section 6.6 of `docs/robot-api.md` says this happens only on a
