@@ -407,6 +407,55 @@ The engine facts all of this rests on are in section 6 of `docs/robot-api.md`.
 
 Translation reached 100% of its scope on 2026-09-20. Stage 2 of the M6 plan triages this list.
 
+From the M6 robot session of 2026-09-27, with the Rust `stt-vosk` build serving
+Vector on the production ports against a copy of the data directory:
+
+- Passed:
+  - **Voice.** He found the server over mDNS by himself about 90 seconds after
+    it started. "What time is it" was transcribed and matched
+    `intent_clock_time`, and was served in about 1.4 s. "Go home" matched
+    `intent_system_charger`.
+  - **Motion and state.** Two `goToPose` calls and a `lookAroundInPlace` ran at
+    priority 20 and answered `SUCCESS` and `COMPLETE`. The state lines appeared
+    inside each motion window.
+  - **The map.** The map feed and its second stream worked.
+  - **A pick-up.** It used two origins and wiped the map twice, as section 6
+    predicts.
+  - **Idle.** The log stayed quiet with him idle on the charger.
+- **Maps are dropped.** The map feed dropped 81 maps in about six minutes as
+  "quads do not cover the root". Every dropped map held a multiple of 255 quads:
+  510, 765, 1530 and 2040. The good maps held counts such as 1663 and 2077. So
+  the engine sends the quads in batches of 255, and the gateway sometimes hands
+  the stream a map before its last batch has arrived. `reconstruct` is right to
+  refuse these. The cause is in the gateway's `NavMapFeed` assembly in
+  `wire-os-victor`, and it needs tracing there.
+- **Trace lines filled the log ring.** Stage 0's log fix let the ring take trace
+  lines as well. The dashboard's three-second protocol probe then filled it, with
+  248 lines in 12 minutes. Fixed the same day: the ring now takes debug and
+  above, as Go has no trace level.
+- **The camera.** `/cam-stream` sent no headers while he sat on his charger, the
+  same as on the Go server. The frame-rate measurement is still owed with him
+  awake and off the charger.
+- **The first charger sighting sets `localized_to_object_id`.** It changed to 0,
+  the charger's id, the moment he first saw the charger in a frame, and his pose
+  did not move. Section 6.6 of `docs/robot-api.md` says this happens only on a
+  later sighting, so the doc needs correcting. The animation agent also found in
+  the engine source that he replans mid-path when the path's collision cost
+  rises (section 6.8 does not say so). It found that the charger's map region is
+  a U of back and side walls, open at the front (section 6.4).
+- **The battery watchdog, reviewed against Go that day.**
+  - It matches Go in timing, threshold, curve, priority and log text.
+  - It gets its connection from the shared registry, where Go dials its own, and
+    a dial there has no connect timeout and no liveness deadline under `serve`.
+    So a robot whose gateway has stopped answering can stall the watchdog for
+    every robot, and the dashboard's calls for him, with no bound.
+  - It awaits the `BehaviorControl` stream before queueing its request, unlike
+    the other three control callers. That costs about a second, because the
+    gateway's one-second keep-alive flushes the headers.
+  - Three of its warn lines print tonic's `Status` rather than Go's
+    `rpc error: code = ... desc = ...`.
+  - The doc comment on `BatteryReading` still calls `get_battery` deferred.
+
 From the motion and map logging work of 2026-09-25, to check against the robot:
 
 - The state stream writes every flip of an urgent flag. If his cliff sensor
