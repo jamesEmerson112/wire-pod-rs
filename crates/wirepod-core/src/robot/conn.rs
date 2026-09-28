@@ -257,8 +257,8 @@ impl BatteryLevel {
 ///
 /// Only the fields a caller reads are carried. The full response also has a
 /// suggested charge time and the cube's own battery, which
-/// `/api-sdk/get_battery` marshals wholesale; that route is deferred, and the
-/// type grows when it lands.
+/// `/api-sdk/get_battery` marshals wholesale from the raw response rather than
+/// from this type.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct BatteryReading {
     /// The coarse level.

@@ -13,7 +13,7 @@ use wirepod_core::logger::COMP_SDK;
 use wirepod_core::{AppState, BotStatusKind, Esn, GetRobotError, RobotEntry, Timings};
 use wirepod_proto::anki::vector::external_interface as pb;
 use wirepod_vector::motionlog::{control_granted, control_released};
-use wirepod_vector::{logged, sdk_client};
+use wirepod_vector::{logged, sdk_client, status_error};
 
 const HYSTERESIS_N: i32 = 3;
 const MAX_ATTEMPTS: i32 = 3;
@@ -255,6 +255,20 @@ async fn drive_home(entry: &RobotEntry, esn: &Esn, timings: &Timings) -> bool {
         return false;
     };
     let (sender, receiver) = mpsc::unbounded_channel();
+    let control = pb::BehaviorControlRequest {
+        request_type: Some(pb::behavior_control_request::RequestType::ControlRequest(
+            pb::ControlRequest {
+                priority: pb::control_request::Priority::OverrideBehaviors as i32,
+            },
+        )),
+    };
+    // Queued before the call rather than after it, because tonic returns on the
+    // response headers and a peer that waits for the first request message
+    // would otherwise send them only with its next keep-alive.
+    if sender.send(control).is_err() {
+        tracing::warn!(target: COMP_SDK, bot = %esn, "battery watchdog: control request: the stream is closed");
+        return false;
+    }
     let opened = tokio::time::timeout_at(
         until,
         client.behavior_control(UnboundedReceiverStream::new(receiver)),
@@ -263,7 +277,7 @@ async fn drive_home(entry: &RobotEntry, esn: &Esn, timings: &Timings) -> bool {
     let mut stream = match opened {
         Ok(Ok(response)) => response.into_inner(),
         Ok(Err(status)) => {
-            tracing::warn!(target: COMP_SDK, bot = %esn, "battery watchdog: behavior control: {status}");
+            tracing::warn!(target: COMP_SDK, bot = %esn, "battery watchdog: behavior control: {}", status_error(&status));
             return false;
         }
         Err(_) => {
@@ -271,17 +285,6 @@ async fn drive_home(entry: &RobotEntry, esn: &Esn, timings: &Timings) -> bool {
             return false;
         }
     };
-    let control = pb::BehaviorControlRequest {
-        request_type: Some(pb::behavior_control_request::RequestType::ControlRequest(
-            pb::ControlRequest {
-                priority: pb::control_request::Priority::OverrideBehaviors as i32,
-            },
-        )),
-    };
-    if sender.send(control).is_err() {
-        tracing::warn!(target: COMP_SDK, bot = %esn, "battery watchdog: control request: the stream is closed");
-        return false;
-    }
     loop {
         match tokio::time::timeout_at(until, stream.message()).await {
             Ok(Ok(Some(response))) => {
@@ -299,7 +302,7 @@ async fn drive_home(entry: &RobotEntry, esn: &Esn, timings: &Timings) -> bool {
                 return false;
             }
             Ok(Err(status)) => {
-                tracing::warn!(target: COMP_SDK, bot = %esn, "battery watchdog: control grant: {status}");
+                tracing::warn!(target: COMP_SDK, bot = %esn, "battery watchdog: control grant: {}", status_error(&status));
                 return false;
             }
             Err(_) => {
@@ -336,7 +339,7 @@ async fn drive_home(entry: &RobotEntry, esn: &Esn, timings: &Timings) -> bool {
     match docked {
         Ok(Ok(_)) => {}
         Ok(Err(status)) => {
-            tracing::warn!(target: COMP_SDK, bot = %esn, "battery watchdog: drive on charger: {status}");
+            tracing::warn!(target: COMP_SDK, bot = %esn, "battery watchdog: drive on charger: {}", status_error(&status));
             return false;
         }
         Err(_) => {
