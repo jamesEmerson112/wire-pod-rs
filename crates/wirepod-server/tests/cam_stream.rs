@@ -1,25 +1,34 @@
-//! `/cam-stream` against a real gRPC robot on loopback.
+//! `/cam-stream` against a real gRPC robot on loopback, and a handover between
+//! two viewers against the in-process fake.
 //!
-//! The fake binds `127.0.0.1:0`, so nothing here binds a fixed port or reaches
-//! the robot on the network. The payload bytes are outside the parity contract,
-//! because no Rust JPEG encoder produces Go's bytes for the same picture, so
-//! what is asserted is the framing around them and that each payload decodes.
+//! The loopback fake binds `127.0.0.1:0`, so nothing here binds a fixed port or
+//! reaches the robot on the network. The payload bytes are outside the parity
+//! contract, because no Rust JPEG encoder produces Go's bytes for the same
+//! picture, so what is asserted is the framing around them and that each
+//! payload decodes. The loopback fake hands out one camera feed, so the
+//! handover runs against `FakeRobotConn`, which queues two.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use http::{Method, StatusCode, header};
 use http_body_util::BodyExt;
 use image::ExtendedColorType;
 use image::codecs::jpeg::JpegEncoder;
 use tower::ServiceExt;
-use wirepod_core::{AppState, BotInfo, RobotConnFactory};
+use wirepod_core::test_support::{FakeConnFactory, FakeFrameStream, FakeRobotConn, RobotCall};
+use wirepod_core::{AppState, BotInfo, RobotConn, RobotConnFactory, Timings};
 use wirepod_server::build_router;
-use wirepod_server::test_support::{CEILING, request};
+use wirepod_server::test_support::{CEILING, one_robot, request};
 use wirepod_vector::test_support::spawn_fake_robot;
 use wirepod_vector::{TonicConnFactory, plaintext_builder};
 
 /// The serial the fixtures use.
 const SERIAL: &str = "00303f28";
+
+/// The handover's settle. Long enough that a camera turned on after it cannot
+/// be mistaken for one turned on before the first feed closed.
+const SETTLE: Duration = Duration::from_millis(300);
 
 /// The bytes Go writes before every frame (`server.go:783`).
 const PART_HEADER: &[u8] = b"--boundary\r\nContent-Type: image/jpeg\r\n\r\n";
@@ -108,6 +117,77 @@ async fn two_pushed_frames_come_out_between_boundary_markers() {
     })
     .await
     .expect("within the ceiling");
+}
+
+/// Go's claim cancels the displaced viewer's context, and grpc-go closes that
+/// viewer's `CameraFeed` the moment it is cancelled (`robot.go:112-114`). The
+/// robot's gateway turns the camera off when a feed closes, so the close has to
+/// land inside the new viewer's settle, before its enable, or the new viewer is
+/// left with the camera off and never gets a frame.
+#[tokio::test]
+async fn a_second_viewer_closes_the_first_feed_before_turning_the_camera_on() {
+    tokio::time::timeout(CEILING, async {
+        let (first, mut first_handle) = FakeFrameStream::new();
+        let (second, _second_handle) = FakeFrameStream::new();
+        let robot = Arc::new(
+            FakeRobotConn::new()
+                .with_camera_feed(Ok(Box::new(first)))
+                .with_camera_feed(Ok(Box::new(second))),
+        );
+        let conn: Arc<dyn RobotConn> = Arc::clone(&robot) as Arc<dyn RobotConn>;
+        let factory: Arc<dyn RobotConnFactory> = Arc::new(FakeConnFactory::connecting_to(conn));
+        let state = AppState::builder(factory)
+            .bot_info(one_robot())
+            .timings(Timings {
+                settle: SETTLE,
+                enable: Duration::from_secs(5),
+                ..Timings::instant()
+            })
+            .build();
+        let router = build_router(state);
+        let uri = format!("/cam-stream?serial={SERIAL}");
+
+        // Held until the end, because dropping the body is the first viewer
+        // leaving, which would end its feed for a different reason.
+        let first_viewer = router
+            .clone()
+            .oneshot(request(Method::GET, &uri, None))
+            .await
+            .expect("the router is infallible");
+        assert_eq!(first_viewer.status(), StatusCode::OK);
+        assert_eq!(camera_calls(&robot), vec![true]);
+
+        let second_viewer = tokio::spawn(router.oneshot(request(Method::GET, &uri, None)));
+        first_handle.wait_dropped().await;
+        assert_eq!(
+            camera_calls(&robot),
+            vec![true],
+            "the first viewer's feed was still open when the second viewer turned the camera on"
+        );
+
+        let second_viewer = second_viewer
+            .await
+            .expect("the second request panicked")
+            .expect("the router is infallible");
+        assert_eq!(second_viewer.status(), StatusCode::OK);
+        // The first viewer's release finds the claim gone and sends no disable.
+        assert_eq!(camera_calls(&robot), vec![true, true]);
+        drop(first_viewer);
+    })
+    .await
+    .expect("within the ceiling");
+}
+
+/// Every `enable_image_streaming` the robot recorded, in order.
+fn camera_calls(robot: &FakeRobotConn) -> Vec<bool> {
+    robot
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            RobotCall::EnableImageStreaming(on) => Some(on),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The first offset of `needle` in `haystack`.

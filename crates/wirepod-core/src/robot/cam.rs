@@ -8,6 +8,12 @@
 //! handler's disable can land after a replacement has already enabled the
 //! camera, and the new owner's feed dies.
 //!
+//! The replacement's settle is there for the robot to drop the displaced
+//! handler's `CameraFeed`, whose close turns the camera off on the robot's side.
+//! In Go that close comes free, because grpc-go closes a stream the moment its
+//! context is cancelled. A tonic stream closes only when it is dropped, so the
+//! route drops its stream as soon as the pump stops, before it finishes.
+//!
 //! The Rust shape is a `#[must_use]` [`CamGuard`] with an explicit
 //! [`CamGuard::finish`] and a `Drop` that cleans up whatever `finish` did not.
 //! Go can lean on `defer finishCamStream` because a goroutine always runs to

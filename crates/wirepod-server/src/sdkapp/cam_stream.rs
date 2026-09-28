@@ -9,7 +9,9 @@
 //! handler cannot do because it returns the response before the body is read.
 //! The pump therefore runs in a task that writes into a channel feeding the
 //! body, and that task owns the guard, so every exit path still releases the
-//! feed.
+//! feed. The task closes the robot's feed before it finishes, as Go's cancelled
+//! stream does, because a displaced handler's finish waits out its
+//! replacement's settle and enable.
 
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -90,6 +92,8 @@ pub async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Respons
             () = frames_tx.closed() => cancel.cancel(),
             _exit = cam_stream_pump(frames.as_mut(), &meter, &mut sink, pump_cancel) => {}
         }
+        // A replacement's settle waits for the robot to see this feed close.
+        drop(frames);
         guard.finish().await;
     });
 

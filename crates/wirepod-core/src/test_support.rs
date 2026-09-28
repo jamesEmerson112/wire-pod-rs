@@ -637,20 +637,35 @@ impl FakeReceiverHandle {
 }
 
 /// A [`FrameStream`] fed from a channel, shaped like [`FakeReceiver`].
+///
+/// Dropping it is what closes a real `CameraFeed` on the wire, so it signals
+/// its drop the way [`FakeReceiver`] does.
 pub struct FakeFrameStream {
     frames: mpsc::UnboundedReceiver<Result<Option<CameraFrame>, ConnError>>,
+    _dropped: oneshot::Sender<()>,
 }
 
-/// The write end of a [`FakeFrameStream`].
+/// The write end of a [`FakeFrameStream`], plus its drop signal.
 pub struct FakeFrameStreamHandle {
     frames: mpsc::UnboundedSender<Result<Option<CameraFrame>, ConnError>>,
+    dropped: oneshot::Receiver<()>,
 }
 
 impl FakeFrameStream {
     /// A frame stream and its handle.
     pub fn new() -> (Self, FakeFrameStreamHandle) {
         let (tx, rx) = mpsc::unbounded_channel();
-        (Self { frames: rx }, FakeFrameStreamHandle { frames: tx })
+        let (dropped_tx, dropped_rx) = oneshot::channel();
+        (
+            Self {
+                frames: rx,
+                _dropped: dropped_tx,
+            },
+            FakeFrameStreamHandle {
+                frames: tx,
+                dropped: dropped_rx,
+            },
+        )
     }
 }
 
@@ -675,6 +690,15 @@ impl FakeFrameStreamHandle {
     /// Queues a receive failure.
     pub fn fail(&self, err: ConnError) {
         let _ = self.frames.send(Err(err));
+    }
+
+    /// Resolves once the stream has been dropped, which for a real feed is the
+    /// moment the robot sees its `CameraFeed` close.
+    ///
+    /// It borrows rather than consumes, for the reason
+    /// [`FakeReceiverHandle::wait_dropped`] gives.
+    pub async fn wait_dropped(&mut self) {
+        let _ = (&mut self.dropped).await;
     }
 }
 
