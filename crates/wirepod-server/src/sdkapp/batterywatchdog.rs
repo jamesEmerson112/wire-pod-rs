@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_util::sync::CancellationToken;
 use wirepod_core::logger::COMP_SDK;
+use wirepod_core::robot::energy::battery_percent;
 use wirepod_core::{AppState, BotStatusKind, Esn, GetRobotError, RobotEntry, Timings};
 use wirepod_proto::anki::vector::external_interface as pb;
 use wirepod_vector::motionlog::{control_granted, control_released};
@@ -47,33 +48,6 @@ enum PollError {
 struct Watchdog {
     states: Mutex<HashMap<Esn, BotState>>,
     conns: Mutex<HashMap<Esn, CachedConn>>,
-}
-
-/// must match getBatteryPercentage in webroot/js/battery.js so the trigger
-/// percent agrees with what the web UI shows
-fn battery_percent(volts: f32) -> i32 {
-    const MAX_VOLTAGE: f64 = 4.1;
-    const MID_VOLTAGE: f64 = 3.85;
-    const MIN_VOLTAGE: f64 = 3.5;
-    let v = f64::from(volts);
-    let mut percentage = if v >= MAX_VOLTAGE {
-        100.0
-    } else if v >= MID_VOLTAGE {
-        let scaled = (v - MID_VOLTAGE) / (MAX_VOLTAGE - MID_VOLTAGE);
-        80.0 + 20.0 * (1.0 + scaled * 9.0).log10()
-    } else if v >= MIN_VOLTAGE {
-        let scaled = (v - MIN_VOLTAGE) / (MID_VOLTAGE - MIN_VOLTAGE);
-        80.0 * (1.0 + scaled * 9.0).log10()
-    } else if v == 0.0 {
-        // no voltage reported (bot booted off charger); the volts > 0 gate
-        // in poll_bot keeps this from ever triggering a go-home
-        70.0
-    } else {
-        0.0
-    };
-    // Go's two separate bounds checks, which clippy will not let stand apart.
-    percentage = percentage.round().clamp(0.0, 100.0);
-    percentage as i32
 }
 
 fn threshold(state: &AppState) -> i32 {
@@ -399,20 +373,6 @@ mod tests {
 
     const SERIAL: &str = "00303f28";
     const CEILING: Duration = Duration::from_secs(5);
-
-    /// The curve's own comments and `webroot/js/battery.js`.
-    #[test]
-    fn the_curve_agrees_with_the_web_ui() {
-        assert_eq!(battery_percent(4.2), 100);
-        assert_eq!(battery_percent(4.1), 100);
-        assert_eq!(battery_percent(3.85), 80);
-        assert_eq!(battery_percent(3.5), 0);
-        assert_eq!(battery_percent(3.4), 0);
-        assert_eq!(battery_percent(0.0), 70);
-        // The two logarithmic arms, rounded as Go rounds them.
-        assert_eq!(battery_percent(4.0), 96);
-        assert_eq!(battery_percent(3.7), 63);
-    }
 
     async fn fixture(addr: SocketAddr) -> Arc<AppState> {
         let target = addr.to_string();

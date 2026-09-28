@@ -170,6 +170,14 @@ impl DataDir {
         format!("{}/{}", text(&self.jdocs_dir()), BOT_INFO_NAME)
     }
 
+    /// `energy.json` at the pod root, where [`crate::robot::energy`] keeps its
+    /// estimate. No Go counterpart: Go reads no file of that name, so the Go
+    /// server leaves it alone. A `String` like [`DataDir::jdocs_path`], for the
+    /// write gate.
+    pub fn energy_path(&self) -> String {
+        text(&self.resolve(&["energy.json"], "./energy.json"))
+    }
+
     /// `vars.CustomIntentsPath`: `join(podDir, "./customIntents.json")`
     /// (`vars.go:171`), or `"./customIntents.json"` (`vars.go:38`).
     pub fn custom_intents_path(&self) -> PathBuf {

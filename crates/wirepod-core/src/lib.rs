@@ -63,12 +63,14 @@ pub use crate::gofmt::{
 };
 pub use crate::gojson::{DecodeFault, Extra, GoFormatter, go_marshal};
 pub use crate::robot::{
-    BatteryLevel, BatteryReading, CamGuard, CamMeter, CamMeters, CamOwner, CameraControl,
-    CameraFrame, ConnError, ConnTarget, EVENT_CONNECTION_ID, EVENT_WHITELIST, EventItem,
+    BatteryLevel, BatteryObservation, BatteryReading, CamGuard, CamMeter, CamMeters, CamOwner,
+    CameraControl, CameraFrame, ConnError, ConnTarget, DEFAULT_CHARGE_SECS, DEFAULT_RUNTIME_SECS,
+    EVENT_CONNECTION_ID, EVENT_WHITELIST, EnergyEvent, EnergySnapshot, EnergyStore, EventItem,
     EventLoopExit, EventOwner, EventReceiver, FrameOutcome, FrameSink, FrameStream, GetRobotError,
-    JdocKind, NamedJdoc, ProtocolResult, ProtocolVerdict, PumpExit, RobotConn, RobotConnFactory,
-    RobotEntry, RobotRegistry, RobotStateSample, SdkSession, StateChange, StateTracker, StatusCode,
-    StimEvent, StimSample, cam_stream_pump, run_event_stream, start_cam_stream,
+    JdocKind, LOW_LINE_VOLTS, NamedJdoc, ProtocolResult, ProtocolVerdict, PumpExit, RobotConn,
+    RobotConnFactory, RobotEntry, RobotRegistry, RobotStateSample, SdkSession, StateChange,
+    StateTracker, StatusCode, StimEvent, StimSample, battery_percent, cam_stream_pump,
+    energy_from_volts, run_event_stream, start_cam_stream,
 };
 pub use crate::state::{AppState, AppStateBuilder, Paths, WallLogClock};
 pub use crate::store::{

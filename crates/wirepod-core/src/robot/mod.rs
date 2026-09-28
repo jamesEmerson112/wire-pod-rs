@@ -1,8 +1,9 @@
 //! The robot seam, the per-robot stream ownership, the camera throughput
-//! meters and the connection registry.
+//! meters, the connection registry and the battery energy estimate.
 
 pub mod cam;
 pub mod conn;
+pub mod energy;
 pub mod events;
 pub mod meter;
 pub mod navmap;
@@ -18,6 +19,10 @@ pub use crate::robot::conn::{
     BatteryLevel, BatteryReading, CameraControl, CameraFrame, ConnError, ConnTarget, EventItem,
     EventReceiver, FrameOutcome, FrameSink, FrameStream, JdocKind, NamedJdoc, ProtocolResult,
     ProtocolVerdict, RobotConn, RobotConnFactory, StatusCode, StimEvent,
+};
+pub use crate::robot::energy::{
+    BatteryObservation, DEFAULT_CHARGE_SECS, DEFAULT_RUNTIME_SECS, EnergyEvent, EnergySnapshot,
+    EnergyStore, LOW_LINE_VOLTS, battery_percent, energy_from_volts,
 };
 pub use crate::robot::events::{
     EVENT_CONNECTION_ID, EVENT_WHITELIST, EventLoopExit, run_event_stream,
