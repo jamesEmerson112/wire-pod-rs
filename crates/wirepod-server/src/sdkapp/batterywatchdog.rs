@@ -34,6 +34,14 @@ struct CachedConn {
     ip: String,
 }
 
+/// Why one poll got no reading.
+enum PollError {
+    /// The robot is not in the bot info, or the registry could not dial it.
+    Robot(GetRobotError),
+    /// The battery call failed, or the poll ran out of time.
+    Battery(String),
+}
+
 /// Go's two package globals, owned by the one task that runs the loop.
 #[derive(Default)]
 struct Watchdog {
@@ -130,16 +138,31 @@ impl Watchdog {
             now < bot.cooling_until
         };
 
-        let entry = match self.robot(state, &esn, serial).await {
-            Ok(entry) => entry,
-            Err(err) => {
+        // Go's one context covers its lazy dial and the call together, so one
+        // bound covers the lookup and the reading. A dial through the registry
+        // that never answers would otherwise hold this loop and the robot's
+        // connect lock with it.
+        let polled = tokio::time::timeout(timings.battery_rpc, async {
+            let entry = self
+                .robot(state, &esn, serial)
+                .await
+                .map_err(PollError::Robot)?;
+            let reading = entry
+                .conn
+                .battery_state()
+                .await
+                .map_err(|err| PollError::Battery(err.to_string()))?;
+            Ok((entry, reading))
+        })
+        .await
+        .unwrap_or_else(|_| Err(PollError::Battery("context deadline exceeded".to_owned())));
+        let (entry, reading) = match polled {
+            Ok(polled) => polled,
+            Err(PollError::Robot(err)) => {
                 tracing::debug!(target: COMP_SDK, bot = %esn, "battery watchdog: {err}");
                 return;
             }
-        };
-        let reading = match deadline(timings.battery_rpc, entry.conn.battery_state()).await {
-            Ok(reading) => reading,
-            Err(err) => {
+            Err(PollError::Battery(err)) => {
                 // transient errors don't touch the counters
                 self.drop_conn(&esn);
                 tracing::debug!(target: COMP_SDK, bot = %esn, "battery watchdog: battery state: {err}");
@@ -364,8 +387,11 @@ mod tests {
     use super::*;
     use std::net::SocketAddr;
 
-    use wirepod_core::{BotInfo, RobotConnFactory};
+    use wirepod_core::test_support::{FakeConnFactory, FakeRobotConn};
+    use wirepod_core::{BotInfo, RobotConn, RobotConnFactory};
     use wirepod_vector::test_support::{FakeRobotHandle, spawn_fake_robot};
+
+    use crate::test_support::one_robot;
     use wirepod_vector::{TonicConnFactory, plaintext_builder};
 
     const SERIAL: &str = "00303f28";
@@ -425,6 +451,37 @@ mod tests {
         })
         .await
         .unwrap_or_else(|_| panic!("timed out waiting for the robot to answer {method}"));
+    }
+
+    /// Go's watchdog dials lazily inside its five-second call, so a robot that
+    /// never answers costs one poll at most that long.
+    #[tokio::test]
+    async fn a_dial_that_never_answers_costs_one_poll_its_bound_and_frees_the_robot() {
+        let robot: Arc<dyn RobotConn> = Arc::new(FakeRobotConn::new());
+        let factory = Arc::new(FakeConnFactory::connecting_to(robot));
+        // Holds the first dial for good, and only the first.
+        let _gate = factory.arm_connect_gate();
+        let dialler: Arc<dyn RobotConnFactory> = Arc::clone(&factory) as Arc<dyn RobotConnFactory>;
+        let state = AppState::builder(dialler)
+            .bot_info(one_robot())
+            .timings(Timings {
+                battery_rpc: Duration::from_millis(100),
+                ..Timings::instant()
+            })
+            .build();
+        let watchdog = Watchdog::default();
+
+        tokio::time::timeout(CEILING, watchdog.poll_bot(&state, SERIAL))
+            .await
+            .expect("a dial that never answered held the poll past its bound");
+
+        // The abandoned dial gave the robot's connect lock back, so the next
+        // caller dials again rather than queueing behind it.
+        tokio::time::timeout(CEILING, state.get_robot(&Esn::new(SERIAL)))
+            .await
+            .expect("the abandoned dial still held the robot's connect lock")
+            .expect("the second dial connects");
+        assert_eq!(factory.connect_count(), 2);
     }
 
     #[tokio::test]

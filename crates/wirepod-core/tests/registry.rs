@@ -289,9 +289,11 @@ async fn a_failed_liveness_check_propagates_and_caches_nothing() {
     assert_eq!(factory.connect_count(), 1);
 }
 
-/// Go's liveness check runs on a bare `context.Background()` and hangs forever
-/// against a robot that is powered off but still routes (`robot.go:365`). The
-/// deadline is an `Option` so a test can bound it; the default stays `None`.
+/// Go's liveness check runs on a bare `context.Background()` (`robot.go:365`),
+/// so a robot that has stopped answering holds it until grpc-go's twenty-second
+/// connection deadline, or for ever once the robot has sent its first frame.
+/// The deadline is an `Option` so the server can bound it; the default stays
+/// `None`.
 #[tokio::test]
 async fn a_liveness_deadline_maps_a_hung_robot_to_the_go_deadline_error() {
     let (_robot, factory) = fakes(FakeRobotConn::new().with_battery_delay(Duration::from_secs(30)));

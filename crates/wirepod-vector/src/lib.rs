@@ -26,7 +26,7 @@ pub mod urlreqs;
 
 pub use crate::conn::{SdkClient, TonicRobotConn, sdk_client};
 pub use crate::error::{dial_error, endpoint_error, status_code, status_error};
-pub use crate::factory::{EndpointBuilder, TonicConnFactory, plaintext_builder};
+pub use crate::factory::{CONNECT_TIMEOUT, EndpointBuilder, TonicConnFactory, plaintext_builder};
 pub use crate::motionlog::{MotionOutcome, logged};
 pub use crate::stream::{TonicEventReceiver, TonicFrameStream};
 pub use crate::tls::{InsecureTlsConnector, insecure_client_config};

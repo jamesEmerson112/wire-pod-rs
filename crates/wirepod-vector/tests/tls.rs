@@ -204,3 +204,50 @@ async fn a_tls_dial_to_a_closed_port_is_unavailable() {
     .await
     .expect("within the ceiling");
 }
+
+/// grpc-go gives every connection attempt twenty seconds and then fails it as
+/// `Unavailable` (`clientconn.go:63`). tonic gives none unless asked.
+#[tokio::test]
+async fn a_tls_dial_to_a_robot_that_never_answers_gives_up_at_the_connect_timeout() {
+    tokio::time::timeout(CEILING, async {
+        // Accepts every connection and says nothing on it, which is a robot
+        // whose gateway has hung: the kernel completes the TCP handshake and
+        // nothing ever answers the TLS one. It has to be TLS, because a
+        // plaintext HTTP/2 dial writes its preface and returns without waiting
+        // for the server's.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let silent = listener.local_addr().expect("loopback address");
+        let holding = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((tcp, _peer)) = listener.accept().await {
+                held.push(tcp);
+            }
+        });
+
+        let started = std::time::Instant::now();
+        let Err(err) = TonicConnFactory::insecure_tls()
+            .with_connect_timeout(Duration::from_millis(200))
+            .connect(&target(&silent.to_string()))
+            .await
+        else {
+            panic!("nothing ever answers on that port, so the dial must fail");
+        };
+
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the dial took {:?} against a 200 ms timeout",
+            started.elapsed()
+        );
+        assert_eq!(err.code, StatusCode::Unavailable);
+        assert!(
+            err.to_string()
+                .starts_with("rpc error: code = Unavailable desc = "),
+            "{err}"
+        );
+        holding.abort();
+    })
+    .await
+    .expect("within the ceiling");
+}

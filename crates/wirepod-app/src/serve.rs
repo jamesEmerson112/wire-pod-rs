@@ -23,7 +23,7 @@ use wirepod_core::{
 };
 use wirepod_server::chipper::{Options, Server};
 use wirepod_server::{CONN_CHECK_PORT, DEFAULT_WEB_PORT, startserver};
-use wirepod_vector::TonicConnFactory;
+use wirepod_vector::{CONNECT_TIMEOUT, TonicConnFactory};
 
 use crate::args::ServeArgs;
 use crate::sdk_trial::{DEFAULT_FILTER, FILTER_ENV};
@@ -139,6 +139,11 @@ async fn load_state(
         // Go's connect-time event stream, which this server reads for the
         // robot's own state.
         .state_stream(true)
+        // grpc-go's connection attempt waits up to this long for the server's
+        // first frame, which tonic's dial does not wait for at all, so the
+        // liveness call is where a robot that goes silent after the handshake
+        // is caught.
+        .liveness_deadline(Some(CONNECT_TIMEOUT))
         .packaged(packaged)
         .build();
     *state
@@ -424,6 +429,32 @@ mod tests {
         assert_eq!(web_port(None, None), "8080");
         assert_eq!(web_port(Some(18080), Some("8081")), "18080");
         assert_eq!(web_port(Some(18080), Some("80a")), "18080");
+    }
+
+    #[tokio::test]
+    async fn the_server_bounds_the_connect_time_liveness_call() {
+        let root = std::env::temp_dir().join(format!("wirepod-serve-{}", std::process::id()));
+        let args = ServeArgs {
+            data_dir: Some(root.join("data")),
+            sdk_ini_dir: Some(root.join("sdk")),
+            ..ServeArgs::default()
+        };
+        let logs = Arc::new(LogRing::new(Arc::new(ManualLogClock::new(
+            1_000,
+            "2026.01.02 03:04:05",
+        ))));
+        let state = load_state(
+            &args,
+            &Env::default(),
+            false,
+            logs,
+            Arc::new(SystemWallClock::new()),
+        )
+        .await;
+        let _ = std::fs::remove_dir_all(&root);
+
+        let state = state.expect("the state loads from an empty data directory");
+        assert_eq!(state.registry().liveness_deadline(), Some(CONNECT_TIMEOUT));
     }
 
     #[tokio::test]

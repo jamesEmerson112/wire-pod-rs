@@ -125,9 +125,9 @@ impl FakeRobotConn {
 
     /// Makes `battery_state` take `delay` before it answers.
     ///
-    /// A delay no test can afford to wait out is how a robot that is powered
-    /// off but whose IP still routes is driven: Go's connect-time liveness
-    /// check has no deadline, so it hangs there forever (`robot.go:365`).
+    /// A delay no test can afford to wait out is how a robot that has stopped
+    /// answering is driven: Go's connect-time liveness check has no deadline of
+    /// its own (`robot.go:365`).
     #[must_use]
     pub fn with_battery_delay(self, delay: Duration) -> Self {
         self.lock().battery_delay = delay;

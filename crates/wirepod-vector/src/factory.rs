@@ -6,6 +6,7 @@
 //! knowing anything about tests.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use tonic::transport::Endpoint;
@@ -14,6 +15,14 @@ use wirepod_core::{ConnError, ConnTarget, RobotConn, RobotConnFactory};
 use crate::conn::TonicRobotConn;
 use crate::error::{dial_error, endpoint_error};
 use crate::tls::InsecureTlsConnector;
+
+/// How long one dial may take, from the TCP connect through the TLS handshake.
+///
+/// This is grpc-go's `minConnectTimeout` (`clientconn.go:63`), the deadline Go
+/// gives every connection attempt. tonic sets none, so without it a robot that
+/// accepts the TCP connection and then says nothing holds the dial, and the
+/// registry's per-serial lock with it, for ever.
+pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Turns a [`ConnTarget`] into the endpoint to dial.
 pub type EndpointBuilder = Box<dyn Fn(&ConnTarget) -> Result<Endpoint, ConnError> + Send + Sync>;
@@ -74,6 +83,7 @@ enum Dialer {
 /// Dials robots over gRPC.
 pub struct TonicConnFactory {
     dialer: Dialer,
+    connect_timeout: Duration,
 }
 
 impl Default for TonicConnFactory {
@@ -98,6 +108,7 @@ impl TonicConnFactory {
     pub fn insecure_tls() -> Self {
         Self {
             dialer: Dialer::Tls(InsecureTlsConnector::new()),
+            connect_timeout: CONNECT_TIMEOUT,
         }
     }
 
@@ -108,7 +119,16 @@ impl TonicConnFactory {
     pub fn with_endpoint_builder(build: EndpointBuilder) -> Self {
         Self {
             dialer: Dialer::Plaintext(build),
+            connect_timeout: CONNECT_TIMEOUT,
         }
+    }
+
+    /// The same, giving up on a dial after `timeout` rather than
+    /// [`CONNECT_TIMEOUT`], so a test need not wait twenty seconds.
+    #[must_use]
+    pub fn with_connect_timeout(mut self, timeout: Duration) -> Self {
+        self.connect_timeout = timeout;
+        self
     }
 
     /// The TLS connector this factory dials with, when it has one.
@@ -138,11 +158,11 @@ impl RobotConnFactory for TonicConnFactory {
     async fn connect(&self, target: &ConnTarget) -> Result<Arc<dyn RobotConn>, ConnError> {
         let channel = match &self.dialer {
             Dialer::Plaintext(build) => {
-                let endpoint = build(target)?;
+                let endpoint = build(target)?.connect_timeout(self.connect_timeout);
                 endpoint.connect().await.map_err(|err| dial_error(&err))?
             }
             Dialer::Tls(connector) => {
-                let endpoint = tls_endpoint(target)?;
+                let endpoint = tls_endpoint(target)?.connect_timeout(self.connect_timeout);
                 endpoint
                     .connect_with_connector(connector.clone())
                     .await

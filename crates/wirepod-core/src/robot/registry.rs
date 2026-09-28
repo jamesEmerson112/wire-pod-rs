@@ -173,12 +173,13 @@ impl RobotRegistry {
 
     /// The same, bounding the connect-time liveness call.
     ///
-    /// `None` is the default and reproduces Go, whose `BatteryState` liveness
-    /// check runs on a fresh `context.Background()` with no deadline at all
-    /// (`robot.go:365`), so a robot that is powered off but whose IP still
-    /// routes hangs the dial indefinitely. It is a field rather than a
-    /// hardcoded absence so that a test can bound it and P1 can set it in one
-    /// line.
+    /// `None` is the default and matches Go's call, which runs on a fresh
+    /// `context.Background()` with no deadline (`robot.go:365`). Go's dial is
+    /// still bounded, because grpc-go fails a connection attempt that has not
+    /// had the server's first frame within twenty seconds. tonic's dial does
+    /// not wait for that frame, so here a robot that goes silent after the
+    /// handshake is caught only by this deadline, and `serve` sets it to the
+    /// same twenty seconds.
     pub fn with_liveness_deadline(mut self, deadline: Option<Duration>) -> Self {
         self.liveness_deadline = deadline;
         self
