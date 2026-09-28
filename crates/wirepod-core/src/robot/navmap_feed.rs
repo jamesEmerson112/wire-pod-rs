@@ -5,8 +5,8 @@
 //! Nothing here logs per map. The log ring is 500 entries shared with the voice
 //! pipeline and a robot on the move sends two maps a second, so the feed writes
 //! a line when it starts, when it stops, at once when the map's origin changes,
-//! and otherwise at most one summary, and one line about malformed maps, per
-//! `map_summary_gap`.
+//! and otherwise at most one summary, one line about maps the robot's gateway
+//! cut short and one about malformed maps, per `map_summary_gap`.
 
 use std::fmt;
 use std::future::{Future, pending};
@@ -28,6 +28,11 @@ use crate::wallclock::WallClock;
 
 /// The longest the feed goes between two looks at its lease.
 const LEASE_TICK: Duration = Duration::from_secs(1);
+
+/// How many quads the robot's engine puts in each message of a map: its
+/// 2048-byte message, less three bytes of header, over an eight-byte quad
+/// (`engine/navMap/mapComponent.cpp:724-727`).
+const QUADS_PER_BATCH: usize = 255;
 
 /// What the slot records when the robot ends the feed without an error.
 pub const STREAM_ENDED: &str = "the robot ended the nav map feed";
@@ -197,9 +202,16 @@ impl MapFeed {
 
     /// Stores `frame` if its leaves tile its root.
     ///
-    /// The robot's gateway reassembles each map from several engine messages
-    /// and under load can pass on a truncated one. Dropping it keeps the last
-    /// good map in the slot, so one bad map never blanks the page.
+    /// The engine sends a map as a begin message, its quads in batches of
+    /// [`QUADS_PER_BATCH`] and an end message. The robot's gateway reads the
+    /// three from separate channels in one Go `select`, which picks at random
+    /// among the ready ones, so under a backlog it can read the end first. It
+    /// then sends the map without its last batches and throws them away
+    /// (`cloud/cloud/message_handler.go:3458-3502`). A whole quadtree has one
+    /// more leaf than a multiple of three, so a map of a multiple of 255 quads
+    /// that runs out is one of those. Nothing can recover the missing tail, and
+    /// the other stream usually carries the same map whole, so it is dropped,
+    /// and the last good map stays in the slot.
     fn receive(&self, frame: NavMapFrame, log: &mut MapLog) {
         if !log.started {
             self.log_start(log);
@@ -207,9 +219,18 @@ impl MapFeed {
         let now = self.clock.now();
         let gap = self.timings.map_summary_gap;
         let bot = self.serial.as_str();
-        if let Err(err) = reconstruct(&frame) {
-            log.dropped(&err, now, gap, bot);
-            return;
+        match reconstruct(&frame) {
+            Ok(_) => {}
+            Err(ReconstructError::RanOut { quads })
+                if quads > 0 && quads % QUADS_PER_BATCH == 0 =>
+            {
+                log.cut_short(quads, now, gap, bot);
+                return;
+            }
+            Err(err) => {
+                log.dropped(&err, now, gap, bot);
+                return;
+            }
         }
         log.note(&frame, now, gap, bot);
         let received_ms = unix_millis(self.wall.as_ref());
@@ -225,14 +246,18 @@ impl MapFeed {
         }
         self.slot.release(self.generation);
 
-        let silent = log.maps == 0 && log.dropped == 0;
+        let silent = log.maps == 0 && log.cut_short == 0 && log.dropped == 0;
         if silent && failure.is_some() && failure == self.previous_error {
             return exit;
         }
         let bot = self.serial.as_str();
-        let dropped = match log.dropped {
-            0 => String::new(),
-            dropped => format!(" and {dropped} malformed"),
+        let dropped = match (log.cut_short, log.dropped) {
+            (0, 0) => String::new(),
+            (0, dropped) => format!(" and {dropped} malformed"),
+            (cut_short, 0) => format!(" and {cut_short} cut short by the robot's gateway"),
+            (cut_short, dropped) => {
+                format!(", {cut_short} cut short by the robot's gateway and {dropped} malformed")
+            }
         };
         match &log.last {
             Some(last) => tracing::debug!(
@@ -356,6 +381,10 @@ struct MapLog {
     summarised_at: Option<Duration>,
     maps: u64,
     last: Option<Summary>,
+    /// Maps the robot's gateway cut short, and when the last line about one
+    /// went out.
+    cut_short: u64,
+    cut_short_at: Option<Duration>,
     /// Malformed maps dropped, and when the last line about one went out.
     dropped: u64,
     dropped_at: Option<Duration>,
@@ -369,9 +398,32 @@ impl MapLog {
             summarised_at: None,
             maps: 0,
             last: None,
+            cut_short: 0,
+            cut_short_at: None,
             dropped: 0,
             dropped_at: None,
         }
+    }
+
+    /// Counts a map the robot's gateway cut short, and says so at most once per
+    /// `gap`.
+    fn cut_short(&mut self, quads: usize, now: Duration, gap: Duration, bot: &str) {
+        self.cut_short += 1;
+        if self
+            .cut_short_at
+            .is_some_and(|at| now.saturating_sub(at) < gap)
+        {
+            return;
+        }
+        self.cut_short_at = Some(now);
+        tracing::debug!(
+            target: "sdkapp",
+            comp = COMP_SDK,
+            bot = bot,
+            "the robot's gateway cut a nav map short at {quads} quads ({} so far); kept the last \
+             whole map",
+            self.cut_short,
+        );
     }
 
     /// Counts a malformed map, and says so at most once per `gap`.

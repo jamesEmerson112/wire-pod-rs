@@ -255,6 +255,69 @@ async fn a_malformed_map_is_dropped_and_the_last_good_one_kept() {
     );
 }
 
+/// The robot's gateway can send a map before its last batches of 255 quads
+/// have arrived, and throws them away (`message_handler.go:3458-3502`), so what
+/// arrives is a whole map's leading batches.
+#[tokio::test]
+async fn a_map_the_gateway_cut_short_is_counted_apart_from_a_malformed_one() {
+    let ring = ring();
+    let _guard = watching(&ring);
+    let clock = Arc::new(ManualClock::new());
+    let (slot, feed) = claimed(&clock);
+    let (receiver, script) = scripted();
+    // 1,024 finest leaves under a root five levels tall, cut after two batches.
+    let mut cut = NavMapFrame {
+        origin_id: 3,
+        info: NavMapInfo {
+            root_depth: 5,
+            root_size_mm: 256.0,
+            root_center_x: 0.0,
+            root_center_y: 0.0,
+        },
+        quads: vec![
+            NavMapQuad {
+                content: 1,
+                depth: 0,
+                rgba: 0xff,
+            };
+            1024
+        ],
+    };
+    cut.quads.truncate(510);
+    let mut malformed = map(3, 4);
+    malformed.info.root_depth = 5;
+    script.send(Ok(map(3, 1))).expect("listening");
+    script.send(Ok(cut.clone())).expect("listening");
+    script.send(Ok(cut)).expect("listening");
+    script.send(Ok(malformed)).expect("listening");
+    drop(script);
+
+    let exit = timeout(CEILING, feed.run(receiver))
+        .await
+        .expect("within the ceiling");
+    assert_eq!(exit, MapFeedExit::StreamEnded);
+    assert_eq!(
+        slot.latest().map(|kept| kept.frame.clone()),
+        Some(map(3, 1)),
+        "the last whole map stays"
+    );
+
+    assert_eq!(
+        messages(&ring),
+        vec![
+            "nav map feed started, at most one map per 500ms",
+            "nav map origin=3 root=128mm depth=4 quads=1 clear_of_obstacle=1",
+            "the robot's gateway cut a nav map short at 510 quads (1 so far); kept the last \
+             whole map",
+            "dropped a nav map (1 so far): malformed nav map: 1 quads do not cover the root",
+            "nav map feed stopped (stream ended) after 1 maps, 2 cut short by the robot's \
+             gateway and 1 malformed; last origin=3 root=128mm depth=4 quads=1 \
+             clear_of_obstacle=1",
+        ],
+        "the second cut map is inside the gap and earns no line"
+    );
+}
+
 #[tokio::test]
 async fn the_feed_runs_while_watched_and_ends_when_the_lease_lapses() {
     let clock = Arc::new(ManualClock::new());
