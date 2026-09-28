@@ -18,8 +18,8 @@ use wirepod_core::logger::{LogLayer, LogRing, is_wire_pod_target};
 use wirepod_core::paths::{AssetDir, DataDir, sdk_ini_dir};
 use wirepod_core::wallclock::{SystemWallClock, WallClock};
 use wirepod_core::{
-    AppState, Env, JdocsStore, Paths, SdkIniStore, SessionCertStore, WallLogClock, read_bot_info,
-    read_config,
+    AppState, EnergyStore, Env, JdocsStore, Paths, SdkIniStore, SessionCertStore, WallLogClock,
+    read_bot_info, read_config,
 };
 use wirepod_server::chipper::{Options, Server};
 use wirepod_server::{CONN_CHECK_PORT, DEFAULT_WEB_PORT, startserver};
@@ -124,6 +124,7 @@ async fn load_state(
     let bot_info = read_bot_info(&data).await.unwrap_or_default();
     let jdocs = JdocsStore::load(&data).await.store;
     let session_certs = SessionCertStore::load(&data, &bot_info).await.store;
+    let energy = EnergyStore::load(&data).await;
     let custom_intents = wirepod_core::intents::load_custom_intents(&data);
 
     let state = AppState::builder(Arc::new(TonicConnFactory::insecure_tls()))
@@ -133,6 +134,7 @@ async fn load_state(
         .bot_info(bot_info)
         .jdocs(jdocs)
         .session_certs(session_certs)
+        .energy(energy)
         .sdk_ini(sdk_ini)
         .logs(logs)
         .wall(wall)

@@ -52,6 +52,7 @@ use crate::logger::{LogClock, LogInstant, LogRing};
 use crate::paths::{AssetDir, DEFAULT_SDK_INI_DIR, DataDir};
 use crate::persist::WriteGate;
 use crate::robot::conn::RobotConnFactory;
+use crate::robot::energy::EnergyStore;
 use crate::robot::registry::{GetRobotError, RobotEntry, RobotRegistry};
 use crate::store::bot_info::BotInfo;
 use crate::store::bot_status::PingerState;
@@ -195,6 +196,8 @@ pub struct AppState {
     jdocs: JdocsStore,
     /// Go's `vars.RecurringInfo` (`vars.go:80`).
     session_certs: SessionCertStore,
+    /// No Go counterpart: the battery watchdog's energy estimate.
+    energy: EnergyStore,
     /// Go's `vars.SDKIniPath` (`vars.go:60`). Go keeps the directory and
     /// nothing else, because each of its three writers reloads the file; the
     /// store keeps the directory, the gate and the turn that stops two of those
@@ -380,6 +383,11 @@ impl AppState {
         &self.session_certs
     }
 
+    /// Each robot's energy estimate.
+    pub fn energy(&self) -> &EnergyStore {
+        &self.energy
+    }
+
     /// The SDK's own `sdk_config.ini`.
     pub fn sdk_ini(&self) -> &SdkIniStore {
         &self.sdk_ini
@@ -417,7 +425,7 @@ impl AppState {
 /// working directory the way an un-packaged Go build leaves it
 /// ([`Paths::default`]).
 ///
-/// The three stores whose identity is a path are resolved in
+/// The stores whose identity is a path are resolved in
 /// [`AppStateBuilder::build`] rather than in [`AppStateBuilder::new`], so that
 /// [`AppStateBuilder::paths`] can be called in any order and the defaults still
 /// follow it.
@@ -434,6 +442,7 @@ pub struct AppStateBuilder {
     config_gate: Option<WriteGate>,
     jdocs: Option<JdocsStore>,
     session_certs: SessionCertStore,
+    energy: Option<EnergyStore>,
     sdk_ini: Option<SdkIniStore>,
     tokens: TokenStores,
     logs: Option<Arc<LogRing>>,
@@ -456,6 +465,7 @@ impl AppStateBuilder {
             config_gate: None,
             jdocs: None,
             session_certs: SessionCertStore::new(),
+            energy: None,
             sdk_ini: None,
             tokens: TokenStores::new(),
             logs: None,
@@ -546,6 +556,13 @@ impl AppStateBuilder {
         self
     }
 
+    /// Starts from a loaded energy store rather than an empty one at the data
+    /// directory's energy path.
+    pub fn energy(mut self, store: EnergyStore) -> Self {
+        self.energy = Some(store);
+        self
+    }
+
     /// Writes the SDK ini through `sdk_ini` rather than through an empty store
     /// at [`DEFAULT_SDK_INI_DIR`], which [`AppStateBuilder::build`] warns
     /// about. The boot path passes the home directory here, which is what keeps
@@ -617,6 +634,9 @@ impl AppStateBuilder {
         let jdocs = self
             .jdocs
             .unwrap_or_else(|| JdocsStore::new(self.paths.data().jdocs_path()));
+        let energy = self
+            .energy
+            .unwrap_or_else(|| EnergyStore::new(self.paths.data().energy_path()));
         let sdk_ini = self.sdk_ini.unwrap_or_else(|| {
             // Deviation 38: the port resolves every path explicitly and says
             // what it resolved, rather than guessing one from the working
@@ -651,6 +671,7 @@ impl AppStateBuilder {
             custom_intents: Mutex::new(None),
             jdocs,
             session_certs: self.session_certs,
+            energy,
             sdk_ini,
             tokens: self.tokens,
             logs,

@@ -7,12 +7,15 @@
 //! remove it afterwards.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use wirepod_core::paths::DataDir;
+use wirepod_core::paths::{AssetDir, DataDir};
 use wirepod_core::robot::energy::{
     BatteryObservation, DEFAULT_CHARGE_SECS, DEFAULT_RUNTIME_SECS, EnergyEvent, EnergyStore,
     LOW_LINE_VOLTS, battery_percent, energy_from_volts,
 };
+use wirepod_core::test_support::FakeConnFactory;
+use wirepod_core::{AppState, ConnError, Paths, RobotConnFactory};
 
 const SERIAL: &str = "00303f28";
 /// 2026-09-20T00:00:00Z.
@@ -423,6 +426,19 @@ async fn an_unreadable_energy_json_starts_empty() {
     std::fs::write(dir.0.join("energy.json"), b"{not json").unwrap();
     let store = EnergyStore::load(&DataDir::rooted(&dir.0)).await;
     assert!(store.snapshot(SERIAL, T0).is_none());
+}
+
+#[tokio::test]
+async fn the_state_saves_energy_json_at_the_pod_root_by_default() {
+    let dir = TempDir::new("state");
+    let factory: Arc<dyn RobotConnFactory> =
+        Arc::new(FakeConnFactory::failing(ConnError::deadline_exceeded()));
+    let state = AppState::builder(factory)
+        .paths(Paths::new(DataDir::rooted(&dir.0), AssetDir::new(".")))
+        .build();
+    state.energy().observe(SERIAL, on(T0, NOMINAL, 4.1));
+    state.energy().save().await.expect("save");
+    assert!(dir.0.join("energy.json").is_file());
 }
 
 #[test]
