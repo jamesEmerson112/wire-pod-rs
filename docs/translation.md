@@ -483,7 +483,8 @@ Vector on the production ports against a copy of the data directory:
     - **The fix.** The route now drops its stream as soon as the pump stops.
 
     The old viewer still loses the feed, as in Go. The dashboard's 12-second
-    stall check re-dials and takes it back, so two viewers alternate.
+    stall check re-dials and takes it back, so two viewers should alternate.
+    That is read from the code; the next robot session checks it.
   - **Camera ownership lives in the session, not the serial.** Found while
     tracing the handover, and inferred from the code rather than seen live.
     - Go keys its camera owner and its lock by serial, so they outlive a

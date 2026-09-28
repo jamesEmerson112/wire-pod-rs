@@ -62,7 +62,7 @@ To look at the Rust web UI without taking Vector off the Go server, serve HTTP o
 
 ## The camera
 
-The dashboard's camera view and `/cam-stream?serial=00303f28` share his one camera feed. As on the Go server, the newest viewer takes it and the earlier one freezes. The dashboard's view re-dials after 12 seconds without a frame and takes the feed back, so two viewers alternate every 12 to 20 seconds. While he sleeps on his charger the camera sends nothing, on either server.
+The dashboard's camera view and `/cam-stream?serial=00303f28` share his one camera feed. As on the Go server, the newest viewer takes it and the earlier one freezes. The dashboard's view re-dials after 12 seconds without a frame, which takes the feed back, so two viewers should alternate every 12 to 20 seconds. That alternation is read from the code and has not yet been watched on a robot. While he sleeps on his charger the camera sends nothing, on either server.
 
 ## Watching what he does: the motion log and the nav map
 
