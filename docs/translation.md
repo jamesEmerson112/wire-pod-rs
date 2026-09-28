@@ -254,6 +254,14 @@ What the sessions find joins the list at the bottom. Each item goes into one of 
 
 The camera frame rate and the wake-before-camera fix are improvements, not parity, so they wait until after the cutover.
 
+Fixed before the soak, on 2026-09-28, from the first robot session:
+
+- the camera handover to a second viewer
+- the unbounded robot dial and the unbounded watchdog poll
+- the watchdog review's three smaller items
+
+The dropped maps turned out to be the robot's gateway cutting them short. Nothing can recover them, so the feed now counts them as such. The debug list has each one.
+
 ### Stage 3: the tray, translated
 
 Stage 3 needs no robot, so it can run beside stages 1 and 2. The WirePod files in the table below become modules under `crates/wirepod-app/src/tray/`, following rule 1. Two of those Go files are copies of code already translated:
@@ -351,8 +359,8 @@ The user talks to him as usual through the day.
 
 Translation stopped at 100% of what was in scope, and these were added after it.
 Each one is a difference the Go server does not have, listed so that a reader who
-diffs the two does not take it for a porting mistake. The feature they belong to
-is the motion and map logging planned on 2026-09-20.
+diffs the two does not take it for a porting mistake. All but the last belong to
+the motion and map logging planned on 2026-09-20.
 
 **Motion responses are logged rather than discarded.** Go throws away the answer
 to every motion RPC, at all seven call sites. Those calls now pass through
@@ -387,7 +395,17 @@ and `crates/wirepod-server/src/navmap/`.
 Unlike the translated globals they return the robot's decoded answer, and a
 timed-out `goToPose` cancels its queued action.
 
-The engine facts all of this rests on are in section 6 of `docs/robot-api.md`.
+**The robot dial is bounded.** grpc-go fails a connection attempt after twenty
+seconds, covering the TCP connect, the TLS handshake and the wait for the
+server's first HTTP/2 frame. tonic sets no connect timeout, and its dial never
+waits for that frame. The dial now gives up after the same twenty seconds, which
+matches Go. `serve` also bounds the connect-time `BatteryState` liveness call by
+twenty seconds, which is stricter than Go in one case: a robot that sends its
+first frame and then never answers holds Go's call for ever. Both date from the
+M6 robot session of 2026-09-27.
+
+The engine facts the map and motion work rests on are in section 6 of
+`docs/robot-api.md`.
 
 ## The robot's own API
 
@@ -422,13 +440,22 @@ Vector on the production ports against a copy of the data directory:
   - **A pick-up.** It used two origins and wiped the map twice, as section 6
     predicts.
   - **Idle.** The log stayed quiet with him idle on the charger.
-- **Maps are dropped.** The map feed dropped 81 maps in about six minutes as
-  "quads do not cover the root". Every dropped map held a multiple of 255 quads:
-  510, 765, 1530 and 2040. The good maps held counts such as 1663 and 2077. So
-  the engine sends the quads in batches of 255, and the gateway sometimes hands
-  the stream a map before its last batch has arrived. `reconstruct` is right to
-  refuse these. The cause is in the gateway's `NavMapFeed` assembly in
-  `wire-os-victor`, and it needs tracing there.
+- **Maps are dropped.** The map feed dropped 227 of 1,491 maps as "quads do not
+  cover the root". Every dropped map held a multiple of 255 quads, from 510 to
+  2040, while the good maps held counts such as 1663 and 2077. Traced on
+  2026-09-28 to the robot's gateway:
+  - The engine sends each map as a begin message, then quads in batches of 255,
+    then an end message.
+  - The gateway reads the three from separate channels in one Go `select`, which
+    picks at random among ready cases.
+  - So under a backlog it can read the end first, send the map without its last
+    batches, and throw those away.
+
+  Nothing on the wire counts the quads, so the tail cannot be recovered. Each of
+  the feed's two streams receives every map, so one cut short on one stream
+  usually arrives whole on the other. The feed already kept the last whole map.
+  It now counts these maps as cut short by the robot's gateway rather than as
+  malformed. Section 6.9 of `docs/robot-api.md` has the details.
 - **Trace lines filled the log ring.** Stage 0's log fix let the ring take trace
   lines as well. The dashboard's three-second protocol probe then filled it, with
   248 lines in 12 minutes. Fixed the same day: the ring now takes debug and
@@ -443,30 +470,56 @@ Vector on the production ports against a copy of the data directory:
   - **A second viewer.** When a second viewer opened the stream while the
     dashboard held it, the new request got no frame in 10 s. When it gave up,
     it logged "camera guard dropped without a finish; the camera was turned
-    off", and the dashboard's view needed a refresh. Go's fork also hands the
-    feed to the newest viewer (`startCamStream`), but its new viewer gets
-    frames. The likely cause is the handover: the old viewer's clean-up turning
-    the camera off after the new one turned it on. Compare `CamOwner` with
-    `startCamStream` and `finishCamStream`.
+    off", and the dashboard's view needed a refresh. Fixed on 2026-09-28:
+    - **Go.** In Go's fork, the new viewer's claim cancels the old viewer's
+      context. grpc-go then closes the old `CameraFeed` at once, so the robot
+      drops it during the new viewer's settle.
+    - **Rust, before the fix.** The claim stopped only the old viewer's frame
+      loop. Its stream stayed open until its finish, which waits out the new
+      viewer's settle and enable.
+    - **The race.** The old feed closed just as the new one opened. The robot
+      turns the camera off when a feed closes, and it turned the camera off
+      under the new viewer.
+    - **The fix.** The route now drops its stream as soon as the pump stops.
+
+    The old viewer still loses the feed, as in Go. The dashboard's 12-second
+    stall check re-dials and takes it back, so two viewers alternate.
+  - **Camera ownership lives in the session, not the serial.** Found while
+    tracing the handover, and inferred from the code rather than seen live.
+    - Go keys its camera owner and its lock by serial, so they outlive a
+      reconnect.
+    - Rust keeps them in the per-connection `SdkSession`. After an idle
+      eviction and a reconnect, a viewer still finishing on the old session can
+      turn the camera off under a viewer on the new one.
+
+    The dashboard's two-second poll keeps its robot from being evicted, so this
+    needs a viewer that outlives the dashboard.
 - **The first charger sighting sets `localized_to_object_id`.** It changed to 0,
   the charger's id, the moment he first saw the charger in a frame, and his pose
-  did not move. Section 6.6 of `docs/robot-api.md` says this happens only on a
-  later sighting, so the doc needs correcting. The animation agent also found in
-  the engine source that he replans mid-path when the path's collision cost
-  rises (section 6.8 does not say so). It found that the charger's map region is
-  a U of back and side walls, open at the front (section 6.4).
+  did not move. Section 6.6 of `docs/robot-api.md` said this happened only on a
+  later sighting. The animation agent also found two things in the engine
+  source: he replans mid-path when the path's collision cost rises, and the
+  charger's map region is a U of back and side walls, open at the front. All
+  three were checked against the engine source and written into sections 6.6,
+  6.8 and 6.4 on 2026-09-28. The mid-path replan holds for the long planner only.
 - **The battery watchdog, reviewed against Go that day.**
   - It matches Go in timing, threshold, curve, priority and log text.
   - It gets its connection from the shared registry, where Go dials its own, and
-    a dial there has no connect timeout and no liveness deadline under `serve`.
-    So a robot whose gateway has stopped answering can stall the watchdog for
-    every robot, and the dashboard's calls for him, with no bound.
-  - It awaits the `BehaviorControl` stream before queueing its request, unlike
-    the other three control callers. That costs about a second, because the
-    gateway's one-second keep-alive flushes the headers.
-  - Three of its warn lines print tonic's `Status` rather than Go's
-    `rpc error: code = ... desc = ...`.
-  - The doc comment on `BatteryReading` still calls `get_battery` deferred.
+    a dial there had no connect timeout and no liveness deadline under `serve`.
+    So a robot whose gateway has stopped answering could stall the watchdog for
+    every robot, and the dashboard's calls for him, with no bound. Fixed on
+    2026-09-28:
+    - Every dial now gives up after grpc-go's twenty seconds.
+    - `serve` bounds the connect-time liveness call by the same twenty seconds.
+    - The watchdog puts one five-second bound around its lookup and reading,
+      the shape of Go's one call context.
+  - It awaited the `BehaviorControl` stream before queueing its request, unlike
+    the other three control callers. That cost about a second, because the
+    gateway's one-second keep-alive flushes the headers. Fixed the same day.
+  - Three of its warn lines printed tonic's `Status` rather than Go's
+    `rpc error: code = ... desc = ...`. Fixed the same day.
+  - The doc comment on `BatteryReading` called `get_battery` deferred. Fixed
+    the same day.
 
 From the motion and map logging work of 2026-09-25, to check against the robot:
 

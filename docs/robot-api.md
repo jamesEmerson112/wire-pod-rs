@@ -1185,8 +1185,13 @@ true (`:50`).
 
 **Vision.** When BlockWorld reports a recognised object's pose, `AddObservableObject` inserts it
 (`mapComponent.cpp:996-1072`). A cube or custom object goes in as its bounding polygon on the floor.
-The charger goes in as a shaped charger region, joined with the habitat when the robot believes he is
-in one (`:1032-1048`). An object resting too high above the floor, such as a cube stacked on another,
+The charger goes in as a U open at the front: three bands 12 mm wide, along its back wall and its two
+side walls (`GetChargerRegion`, `mapComponent.cpp:114-163`, with the dimensions in
+`wire-os-victor/engine/charger.h:110-116`). The ramp between the walls and the first 5 mm of the lip
+are not marked. The bands are ordinary `ObstacleObservable`, the type a cube gets, and reach the SDK
+as `ObstacleCube` (`memoryMapData_ObservableObject.cpp:23`, `:50-53`). When the robot believes he is
+in a habitat, a ring around the charger is joined to the U (`mapComponent.cpp:1033-1042`,
+`:166-212`). An object resting too high above the floor, such as a cube stacked on another,
 is remembered but not inserted (`:1016-1027`). `ClearRobotToMarkers` would clear the space between the
 robot and a marker he has seen (`:1205-1240`), but nothing in the tree calls it.
 
@@ -1264,15 +1269,22 @@ BlockWorld. The only object the robot localizes to is the charger, and BlockWorl
 existing charger only in the robot's current frame (`blockWorld.cpp:871-891`), under a comment that
 reads "VIC-14462: we no longer relocalize to objects in other origins due to rejiggering bugs, and the
 map timing out anyway" (`blockWorld.cpp:896`). Delocalizing has also cleared every located object,
-so nothing from an older frame survives to be merged across a pick-up. Localization, meaning the
-correction of the robot's pose from a landmark, happens only when he sees the charger again in the
-same frame and close to where he last saw it; his pose is then corrected to agree with it
-(`blockWorld.cpp:897-923`). The architecture notes explain why the charger is the only landmark: the
-cube is rarely connected, while the charger has a bigger marker and usually stays put
-(`blockWorld.md:74-76`).
+so nothing from an older frame survives to be merged across a pick-up.
 
-`RobotState.localized_to_object_id` reports that landmark. It holds the charger's object id after such
-a correction and -1 when the robot is localized to nothing (`robot.cpp:2347`; the unset `ObjectID` is
+Localization ties the robot's pose to a landmark, and the charger is the only one. The first time he
+sees the charger in a frame, BlockWorld localizes him to that sighting itself. The code's comment
+says this only sets the localized-to fields and leaves the pose alone, because the transform from
+the charger to itself is the identity (`blockWorld.cpp:929-933`). When he sees it again in the same
+frame and close to where he last saw it, his pose is corrected to agree with it
+(`blockWorld.cpp:897-923`). Both need him on his treads, the camera still, and him either not
+localized yet or moved since he was (`blockWorld.cpp:864-866`, `:889-891`). The architecture notes
+explain why the charger is the only landmark: the cube is rarely connected, while the charger has a
+bigger marker and usually stays put (`blockWorld.md:74-76`).
+
+`RobotState.localized_to_object_id` reports that landmark. It holds the charger's object id from the
+first sighting on, and -1 when the robot is localized to nothing. On a live robot on 2026-09-27 it
+went from -1 to 0, the charger's id, at the first sighting of the charger in each new frame, and the
+first time it did so his reported pose did not move (`robot.cpp:2347`; the unset `ObjectID` is
 -1 in `wire-os-victor/coretech/common/engine/objectIDs.h:86`, and the CLAD field carries the comment
 "Will be -1 if not localized to any object" in
 `wire-os-victor/clad/src/clad/externalInterface/messageEngineToGame.clad:126`). At -1 the pose comes
@@ -1316,6 +1328,17 @@ for `ChecksForCollisions()` is false (`wire-os-victor/engine/pathPlanner.h:99-10
 checked afterwards, though. The path component runs it through the long planner's `CheckIsPathSafe`
 and replans with the long planner if it collides (`pathComponent.cpp:640-665`). From 40 mm up, the
 long planner is used directly.
+
+The long planner also replans while the robot is on the path. Every tick while he follows one, the
+path component asks it whether a new path is needed (`pathComponent.cpp:401-405`, `:468-471`,
+`:978-983`). It sums the area of every collision-type quad that the stored path's swept shape
+touches, and it replans from his current pose when that sum is higher than when the path was planned
+(`xyPlanner.cpp:125-135`, `:369-386`). Nothing tells the planner that the map changed, and no timer is
+involved, so a new obstacle in the way shows up only as that rise. The short planners never replan
+mid-path (`wire-os-victor/engine/faceAndApproachPlanner.cpp:63-68`,
+`wire-os-victor/engine/minimalAnglePlanner.cpp:59-64`). Read as written, he stops while the new path
+is computed, because `XYPlanner::CheckIsPathSafe` never hands back a safe part of the old path
+(`xyPlanner.cpp:359-365`, `pathComponent.cpp:1001-1031`). That has not been watched on a robot.
 
 The long planner is `XYPlanner` (`wire-os-victor/engine/xyPlanner.h:41-61`), configured in
 `wire-os-victor/engine/xyPlannerConfig.h`. It is a bidirectional A*, a best-first graph search that
@@ -1382,16 +1405,36 @@ root carries `root_depth`, and a finest 8 mm leaf carries 0, because a node of h
 subdivide (`quadTreeNode.cpp:71`). A leaf's side is `root_size_mm / 2^(root_depth - depth)`.
 
 The engine splits the list across CLAD `MemoryMapMessage`s, sent between a `MemoryMapMessageBegin`
-that carries the origin id and header and a `MemoryMapMessageEnd` (`mapComponent.cpp:806-827`), with
-the chunk size worked out from the message packet size (`mapComponent.cpp:721-732`). The gateway's
-`NavMapFeed` collects the chunks between begin and end, appends their quads in the order they arrive,
-and sends one `NavMapFeedResponse` per complete map
-(`wire-os-victor/cloud/cloud/message_handler.go:3432-3509`). It fills `root_center_z` with a
-hardcoded 0 (`message_handler.go:322-330`); the engine's internal header has z at 1, but the begin
-message has no field for it (`memoryMap.cpp:258-264`,
+that carries the origin id and header and an empty `MemoryMapMessageEnd`, all in one burst
+(`mapComponent.cpp:806-827`). Each message holds 255 quads, which is the 2048-byte packet less three
+bytes of header over an eight-byte quad, and only the last can hold fewer (`mapComponent.cpp:721-732`,
+`wire-os-victor/coretech/messaging/engine/IComms.h:48`). None of the three messages counts the quads
+or numbers the batches (`wire-os-victor/clad/src/clad/gateway/messageRobotToExternal.clad:300-318`).
+The gateway's `NavMapFeed` appends each batch's quads to the map the begin message opened, and sends
+the map when it reads the end (`wire-os-victor/cloud/cloud/message_handler.go:3432-3509`). It fills
+`root_center_z` with a hardcoded 0 (`message_handler.go:322-330`); the engine's internal header has z
+at 1, but the begin message has no field for it (`memoryMap.cpp:258-264`,
 `wire-os-victor/clad/src/clad/gateway/messageRobotToExternal.clad:300-307`). The content value is cast
 straight across, because the CLAD and proto enums share their numbering (`message_handler.go:332-338`,
 `wire-os-victor/clad/src/clad/types/memoryMap.clad:19-31`).
+
+The gateway can send a map without its tail. It receives the begin, the batches and the end on three
+separate channels, buffered 1, 50 and 1 deep, and reads them in one `select`
+(`message_handler.go:3443-3451`, `:3458-3502`). When more than one channel is ready, Go picks one at
+random. So if the handler is still k batches behind when the end arrives, it drains them all first
+only with probability 1/2^k. Otherwise it sends the map with only its leading batches, a multiple of
+255 quads. The batches still queued then arrive with no map open, and the handler logs them and
+throws them away (`:3477-3478`).
+
+Nothing on the wire says a map is short, but the tree does. Each split turns one leaf into four, so a
+whole quadtree has 3s + 1 leaves after s splits. A multiple of 255 is a multiple of three, so it can
+never be a whole map, and its leaves run out before the root is covered. The quads that did arrive
+are right as far as they go, because only the tail is missing. The Python SDK accepts such a map
+without comment and leaves the missing cells empty (`nav_map.py:178-192`, `:249-257`). Every stream
+receives every broadcast (below), so a map cut short on one stream usually arrives whole on another.
+In a session on 2026-09-27, 227 of the 1,491 maps across wire-pod-rs's two streams arrived short,
+at 510, 765, 1,020, 1,275, 1,530, 1,785 and 2,040 quads. wire-pod-rs drops them, keeps the last
+whole map, and counts them in the log as cut short by the robot's gateway.
 
 `color_rgba` is the engine's own visualisation colour, from `GetNodeVizColor`
 (`memoryMap.cpp:92-141`), packed with red in the high byte and alpha in the low byte

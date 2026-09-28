@@ -60,6 +60,10 @@ To look at the Rust web UI without taking Vector off the Go server, serve HTTP o
 
 `--web-only` starts no TLS listener, does not bind 8084 and registers nothing on mDNS.
 
+## The camera
+
+The dashboard's camera view and `/cam-stream?serial=00303f28` share his one camera feed. As on the Go server, the newest viewer takes it and the earlier one freezes. The dashboard's view re-dials after 12 seconds without a frame and takes the feed back, so two viewers alternate every 12 to 20 seconds. While he sleeps on his charger the camera sends nothing, on either server.
+
 ## Watching what he does: the motion log and the nav map
 
 **Safety first.** Behaviour control at priority 10 (`OVERRIDE_BEHAVIORS`) turns off his cliff reaction until it is released. wire-pod takes that priority for voice-triggered speech, for the battery watchdog's drive home, and for the dashboard's control request when it asks for `high`; a Lua script takes whatever it passes to `assumeBehaviorControl`. Under it he neither stops at a drop nor records it in his map. Drive him only on the floor. A script that needs control to drive him should ask for priority 20 instead, `assumeBehaviorControl(20)`, which gives full control while keeping the cliff reaction on (`SDKDefault.json` sets `disableCliffDetection` false; `SDKOverrideAll.json`, priority 10, sets it true).
@@ -74,6 +78,7 @@ To look at the Rust web UI without taking Vector off the Go server, serve HTTP o
 - Urgent changes appear whenever they happen: `state delocalized: origin 3 -> 4`, `state localized to object 7`, `state on odometry alone: no longer localized to object 7`, and a `state` line when he is picked up, held, falling or at a cliff.
 - `behavior control granted at OVERRIDE_BEHAVIORS; cliff detection is off until release` marks the hazard above.
 - A nav map summary appears when the feed starts and stops, on every origin change, and at most once a minute otherwise.
+- `the robot's gateway cut a nav map short at 510 quads (3 so far); kept the last whole map` appears at most once a minute. His gateway sometimes sends a map without its last batches of quads, and about one map in seven arrived that way in the first session. The page keeps showing the last whole map, and the stop line counts these separately from malformed maps.
 
 **When state lines appear.** The state stream opens when the server connects to him: when the SDK dashboard or the map page is opened, when a Lua script runs, and whenever the battery watchdog or the jdocs pinger reaches him. The server never dials him just to watch, so during a voice session with nothing else open there may be no state lines at all; open the map page to get them. If he ends the stream while the connection lives, after a reboot of his gateway or a network blip, the map page reopens it on its next poll, and until then the page shows no pose rather than a stale one.
 
