@@ -70,6 +70,20 @@ function Stop-InstalledServer {
     }
 }
 
+# A stopped process can hold its image for a moment after Wait-Process returns,
+# so the copy over it is retried for up to ten seconds.
+function Copy-OverServer([string]$from, [string]$to) {
+    for ($attempt = 1; ; $attempt++) {
+        try {
+            Copy-Item -Path $from -Destination $to -Force
+            return
+        } catch {
+            if ($attempt -ge 20) { throw }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+}
+
 function Get-WebPort {
     $port = '8080'
     $props = Get-ItemProperty -Path $softwareKey -ErrorAction SilentlyContinue
@@ -102,7 +116,7 @@ if (-not (Test-Path $exe)) { throw "No installed chipper.exe at $exe" }
 if ($Rollback) {
     if (-not (Test-Path $goExe)) { throw "No Go backup at $goExe; nothing to roll back to." }
     Stop-InstalledServer
-    Copy-Item -Path $goExe -Destination $exe -Force
+    Copy-OverServer $goExe $exe
     if (Test-Path $goVersionFile) { Copy-Item -Path $goVersionFile -Destination $versionFile -Force }
     Write-Host 'The Go server is back in place.'
 } else {
@@ -116,7 +130,7 @@ if ($Rollback) {
     if ((Test-Path $versionFile) -and -not (Test-Path $goVersionFile)) {
         Copy-Item -Path $versionFile -Destination $goVersionFile
     }
-    Copy-Item -Path $Build -Destination $exe -Force
+    Copy-OverServer $Build $exe
     if (Test-Path $goVersionFile) {
         $goVersion = ([IO.File]::ReadAllText($goVersionFile)).Trim()
         [IO.File]::WriteAllText($versionFile, "$goVersion-rs")

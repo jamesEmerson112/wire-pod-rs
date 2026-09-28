@@ -425,6 +425,34 @@ The engine facts the map and motion work rests on are in section 6 of
 
 Translation reached 100% of its scope on 2026-09-20. Stage 2 of the M6 plan triages this list.
 
+From the first deploy on 2026-09-28, with the tray build installed over Go by
+`scripts/deploy-windows.ps1`:
+
+- Passed:
+  - **The tray.** The icon appeared with Go's tooltip, "wire-pod is running."
+    and the web address. Web Interface opened the web UI, and About showed Go's
+    text with the `PodVersion` from the registry.
+  - **Voice.** "What time is it" matched `intent_clock_time` and was served
+    within the second. Three earlier tries were misheard by the recognizer and
+    went unmatched, which says nothing about the server.
+  - **Connection.** Vector reached the new server within seconds, over the same
+    address and ports.
+- **His reported battery voltage froze off the charger.** He answered exactly
+  4.045508 V for about twenty minutes off the charger. The engine reports a
+  filtered voltage that it updates only while it believes the battery is
+  connected, and it treats a raw reading under 3 V as disconnected
+  (`batteryComponent.cpp:136-171`, `:496-505`). When he went back on the
+  charger the value reset to 3.62 V, so it had been stale. While it is frozen,
+  no watchdog can see him drain, on either server. His battery is weak, so this
+  is most likely the battery or its sensing, not software.
+- **The deploy script's copy could fail.** Restarting the server with the
+  script failed with "being used by another process": Windows had not yet
+  released the stopped process's image. The copies over the server binary now
+  retry for up to ten seconds.
+- **The soak started at 12:58 that day.** The server logs to
+  `E:\wire-pod-soak\2026-09-28\chipper.log`, and an hourly check appends to
+  `hourly.log` beside it.
+
 From the M6 robot session of 2026-09-27, with the Rust `stt-vosk` build serving
 Vector on the production ports against a copy of the data directory:
 
