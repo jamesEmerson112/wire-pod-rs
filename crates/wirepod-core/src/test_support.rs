@@ -19,7 +19,7 @@
 //! assert against from a parallel test harness.
 
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, MutexGuard, Once};
+use std::sync::{Arc, Mutex, MutexGuard, Once, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -31,6 +31,7 @@ use crate::robot::conn::{
     RobotConn, RobotConnFactory, StatusCode, StimEvent,
 };
 use crate::robot::meter::CamMeter;
+use crate::wallclock::{WallClock, WallTime};
 
 /// One call a [`FakeRobotConn`] recorded.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1096,6 +1097,51 @@ pub fn install_tracing_backstop() {
     });
 }
 
+/// A [`WallClock`] a test sets and moves forward, reading UTC.
+///
+/// [`crate::wallclock::FixedWallClock`] cannot move, and a test that drives the
+/// battery watchdog through hours of polls needs the calendar to.
+#[derive(Debug)]
+pub struct ManualWallClock {
+    now: Mutex<WallTime>,
+}
+
+impl ManualWallClock {
+    /// A clock reading `start`.
+    pub fn new(start: WallTime) -> Self {
+        Self {
+            now: Mutex::new(start),
+        }
+    }
+
+    /// Moves the clock to `now`, forwards or backwards.
+    pub fn set(&self, now: WallTime) {
+        *self.now.lock().unwrap_or_else(PoisonError::into_inner) = now;
+    }
+
+    /// Moves the clock forward by `by`.
+    pub fn advance(&self, by: Duration) {
+        let mut now = self.now.lock().unwrap_or_else(PoisonError::into_inner);
+        let nanos = u64::from(now.nanos) + u64::from(by.subsec_nanos());
+        let secs =
+            i64::try_from(by.as_secs().saturating_add(nanos / 1_000_000_000)).unwrap_or(i64::MAX);
+        *now = WallTime::new(
+            now.unix_secs.saturating_add(secs),
+            (nanos % 1_000_000_000) as u32,
+        );
+    }
+}
+
+impl WallClock for ManualWallClock {
+    fn now(&self) -> WallTime {
+        *self.now.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn utc_offset_secs_at(&self, _unix_secs: i64) -> i32 {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1223,5 +1269,15 @@ mod tests {
             })
         );
         assert_eq!(frames.next().await.expect("end of stream failed"), None);
+    }
+
+    #[test]
+    fn the_manual_wall_clock_carries_nanoseconds_into_seconds() {
+        let clock = ManualWallClock::new(WallTime::new(100, 900_000_000));
+        clock.advance(Duration::from_millis(250));
+        assert_eq!(clock.now(), WallTime::new(101, 150_000_000));
+        clock.set(WallTime::new(5, 0));
+        assert_eq!(clock.now(), WallTime::new(5, 0));
+        assert_eq!(clock.utc_offset_secs_at(5), 0);
     }
 }
