@@ -64,6 +64,25 @@ To look at the Rust web UI without taking Vector off the Go server, serve HTTP o
 
 The dashboard's camera view and `/cam-stream?serial=00303f28` share his one camera feed. As on the Go server, the newest viewer takes it and the earlier one freezes. The dashboard's view re-dials after 12 seconds without a frame, which takes the feed back, so two viewers should alternate every 12 to 20 seconds. That alternation is read from the code and has not yet been watched on a robot. While he sleeps on his charger the camera sends nothing, on either server.
 
+## The energy estimate
+
+The battery voltage he reports does not change while he is off the charger, so the server keeps its own estimate of his remaining energy. `docs/translation.md` describes the model under "Added on purpose, beyond the Go server", and section 3.8 of `docs/robot-api.md` explains the voltage.
+
+**Reading it.** Open `http://localhost:8080/api-energy?serial=00303f28`, or the same path on port 18080 in the web-only mode above. It answers JSON. `energy_percent` is 100 at a full charge and 0 when his low-battery flag rises, which still leaves him about four minutes before he shuts down. `minutes_left` is the time until that flag. `runtime_minutes` and `charge_minutes` are the model's current figures, and `runtime_learned` and `charge_learned` say whether each one has been learned from him yet. `on_charger` is his charger state, `guess` is true while the estimate is still the first guess, and `since` is in Unix seconds. A serial the server has not seen answers `known: false`. The route only reads the estimate: it never dials him and never resets the idle timer.
+
+**The log lines.** These are at info level or above, so the web UI's log page shows them without choosing `debug`. Each trip writes a line when he leaves the charger and another when he comes back, and the second one shows what the trip taught the model:
+
+```
+energy: left the charger at ~92%, about 18 min before his low-battery flag (runtime 20 min)
+energy: back on the charger after 19 min off; estimate ~5%, his docking reading 3.62V gives ~0%; runtime 20 -> 20 min
+```
+
+`runtime 20 -> 20 min` is the old runtime and the new one. A trip that ends with his low-battery flag writes `energy: low-battery flag after 21 min off the charger; runtime 20 -> 21 min`, and a full charge writes `energy: charged full after 48 min on the charger; charge time 60 -> 54 min`. When the estimate reaches `gohome_percent`, the watchdog writes `battery watchdog: energy low (~24% <= 25%, about 5 min left), sending robot to charger` and drives him home as it does for a low voltage.
+
+**The first estimate is a guess.** The first time the server sees a robot, it starts from his reported voltage and says so: `energy: first sight of him on the charger; starting from a guess of ~48% from his reported 3.87V`. That voltage is stale if he is off the charger at the time. The estimate stays a guess until he first docks or leaves the charger. After a restart the server resumes from the file and writes `energy: resumed from energy.json at ~60%, on the charger`. If his charger state changed while the server was down, it assumes the change happened at the restart: `energy: he left the charger while the server was down; assuming it happened now, at ~80%`.
+
+**After a battery change.** The model is kept per robot in `energy.json` at the root of the data directory. That is `%APPDATA%\wire-pod` for the installed server and under `--packaged`, and the `--data-dir` folder otherwise. Go never reads the file. To make a robot start again from the seeds, stop the server from its tray icon or by its process id, never by its image name. Then delete his entry from `energy.json` and start the server again.
+
 ## Watching what he does: the motion log and the nav map
 
 **Safety first.** Behaviour control at priority 10 (`OVERRIDE_BEHAVIORS`) turns off his cliff reaction until it is released. wire-pod takes that priority for voice-triggered speech, for the battery watchdog's drive home, and for the dashboard's control request when it asks for `high`; a Lua script takes whatever it passes to `assumeBehaviorControl`. Under it he neither stops at a drop nor records it in his map. Drive him only on the floor. A script that needs control to drive him should ask for priority 20 instead, `assumeBehaviorControl(20)`, which gives full control while keeping the cliff reaction on (`SDKDefault.json` sets `disableCliffDetection` false; `SDKOverrideAll.json`, priority 10, sets it true).

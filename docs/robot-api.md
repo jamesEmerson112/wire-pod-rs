@@ -628,7 +628,7 @@ animation process.
 | `PullJdocs` | `PullJdocsRequest` | Returns the robot's own copies of the named jdoc types. This is how wire-pod reads `vic.RobotSettings` back from the robot. |
 | `UpdateSettings` | `UpdateSettingsRequest` | Changes robot settings. Read [3.6](#36-the-vendored-sdk-proto-does-not-match-the-robots) before calling this over gRPC. |
 | `UpdateAccountSettings` | `UpdateAccountSettingsRequest` | Changes account-level settings. |
-| `BatteryState` | `BatteryStateRequest` | Battery level, voltage, charging and charger state, plus cube battery. |
+| `BatteryState` | `BatteryStateRequest` | Battery level, voltage, charging and charger state, plus cube battery. The voltage is stale off the charger; see [3.8](#38-the-battery). |
 | `VersionState` | `VersionStateRequest` | OS version and engine build id. |
 | `GetLatestAttentionTransfer` | `LatestAttentionTransferRequest` | Why the robot last broke off what it was doing. |
 | `GetFeatureFlag`, `GetFeatureFlagList` | matching `*Request` | Feature gates. |
@@ -794,6 +794,127 @@ than their name implies, and they are collected here so the list is in one place
   no client can reach it.
 - `UpdateUserEntitlements` and `UploadDebugLogs` exist on the robot but are absent from the proto the
   port vendors, so the port cannot call them without adding them.
+
+### 3.8 The battery
+
+`BatteryState` answers a level, a voltage, whether he is charging, whether he is on the charger
+platform, and `suggested_charger_sec`. `RobotState.status`, which every `robot_state` event carries,
+holds the raw status word with the battery flags in it. On this firmware the voltage is stale
+whenever he is off the charger, and only the flags and the level follow the battery live. This was
+read from the source on 2026-09-28.
+
+**The voltage is blind off the charger.** The syscon, the small microcontroller in his body that runs
+the motors, the charger and the battery measurement, sends the head the variable `vmain_adc` as the
+battery voltage (`wire-os-victor/robot/syscon/src/analog.cpp:179`). `Analog::tick` writes that
+variable at `:490` and `:499`, both inside the `if (on_charger)` branch that opens at `:479`. The
+off-charger branch at `:523` never touches it. The value passes unchanged through
+`HAL::BatteryGetVoltage` (`wire-os-victor/robot/hal/src/hal.cpp:1102-1106`) and
+`robotState_.batteryVoltage` (`wire-os-victor/robot/supervisor/src/messages.cpp:127`) into the
+engine's `_batteryVoltsRaw` (`wire-os-victor/engine/components/battery/batteryComponent.cpp:116`).
+The engine smooths it with a low-pass filter whose time constant is 20 seconds (`:55`, `:161-171`),
+and off the charger that filter is smoothing a constant. So the voltage a client reads off the
+charger is the last one the syscon measured on the charger, and it does not move until he docks
+again. wire-pod's battery watchdog sends him home by this voltage, so it cannot see him drain.
+
+**On the charger the reading is live.** On the first tick back on the charger the charging circuit
+is not yet running, so the syscon reads the live voltage (`analog.cpp:488-490`). While the charger
+runs, the syscon switches it off for a moment every 30 seconds to take a reading (`:491-501`). While
+the charger is idle, the syscon reads on every tick. The engine marks its filter for a reset on every
+change of charger contact, in either direction, and resets it to the next reading taken while the
+battery is connected (`batteryComponent.cpp:347-352`, `:161-171`). So the first voltage after
+docking is live, and the voltage held for a whole trip is one on-charger sample rather than a
+smoothed average. While the battery is disconnected on the charger, the engine stops feeding its
+filter altogether, because a reading taken then does not reflect the battery (`:161`, `:347-351`).
+
+**What was seen, and why it is not proven.** The syscon is built and flashed separately from the OS
+image, from its own Keil project (`wire-os-victor/robot/syscon/syscon.uvprojx`) through
+`wire-os-victor/robot/dfu.sh`, and this checkout is a community snapshot. So the source cannot confirm that his robot runs this exact
+syscon. What his robot did on 2026-09-28 matches it exactly. He reported 4.045508 V for about twenty
+minutes off the charger, then 3.62 V when he docked, and later 3.60 V. The frozen figure is exactly
+2959 steps of the syscon's analog-to-digital converter at 2.8/2048 V a step (`hal.cpp:103`), which
+is what one held sample gives.
+
+**A robot switched on off the charger reports no voltage at all.** `vmain_adc` starts at zero
+(`analog.cpp:79`), so until he first docks he reports 0 V. wire-pod's web UI already allows for this.
+Its `getBatteryPercentage` shows 70% when the voltage is missing, with a comment saying that a robot
+turned on off the charger reports none (`wire-pod/chipper/webroot/js/battery.js`). The engine also
+counts a raw reading under 3 V as a disconnected battery (`batteryComponent.cpp:138-139`). By the
+code, his level then reads FULL until he docks, even once the battery is low, because FULL is
+checked before LOW (`:236-241`). That consequence has not been seen on a robot.
+
+**The charger flags are live.** In the status word, `IS_ON_CHARGER` is set whenever there is voltage
+on the charge contacts. `IS_CHARGING` is set whenever the syscon has the charging circuit enabled,
+which can stay true after the battery is full (`hal.cpp:1108-1122`). `BatteryState.is_charging` is
+that second flag. `is_on_charger_platform` is true on the contacts, and it stays true after he leaves
+them for as long as the engine judges him still on the charger platform
+(`batteryComponent.cpp:426-473`).
+
+**The level comes from flags, not from the voltage** (`batteryComponent.cpp:212-241`). In practice
+it reads LOW, NOMINAL or FULL.
+
+LOW is the syscon's `power_low` flag (`analog.cpp:184`, `hal.cpp:1137-1140`, `messages.cpp:152`).
+The syscon computes that flag from the live reading `EXACT_ADC(ADC_VMAIN)`, not from `vmain_adc`
+(`analog.cpp:354`). Off the charger it rises once the battery has stayed under
+`LOW_VOLTAGE_POWER_DOWN_POINT`, 3.62 V, for `LOW_VOLTAGE_POWER_DOWN_TIME`, 45 seconds (`:342-343`,
+`:394-401`). A countdown of 250 seconds then starts (`POWER_DOWN_WARNING_TIME`, `:347`). With 10
+seconds left the syscon raises `IS_SHUTDOWN_IMMINENT`, and vic-robot, the process on the head that
+talks to the syscon, shuts him down when those 10 seconds are up
+(`wire-os-victor/robot/supervisor/src/cozmoBot.cpp:278-300`). Put back on the charger in time, he
+reboots instead (`:301-307`). So LOW off the charger leaves about 4 minutes 10 seconds. On the
+charger, LOW clears only after the countdown and the 45-second timer have refilled at the rate they
+ran down, so it can stay up for several minutes after he docks (`analog.cpp:367-379`). Separately, a
+reading under `EMERGENCY_POWER_DOWN_POINT`, 3.4 V, for one second cuts his power with no warning at
+all (`:341`, `:356-364`).
+
+FULL means the battery is disconnected and not charging (`batteryComponent.cpp:214`). The syscon
+disconnects the battery only on the charger (`analog.cpp:189`), and for one of two reasons. The first
+is a finished charge: five minutes of charging above `BATTERY_FULL_VOLTAGE`, 4.075 V, or at once if
+he is already above it when he docks (`:25-26`, `:512-517`). The second is a body too hot to charge,
+which is checked only in his first second on the charger (`:463-472`). In that case the syscon keeps
+`IS_CHARGING` set (`:589`), so the level does not read FULL. FULL therefore means a finished charge.
+The status word's `IS_BATTERY_DISCONNECTED` bit is set in both cases. The only other way to
+disconnect the battery is an explicit request from the head, and in this tree only the factory test
+fixture sends one.
+
+**Emergency mode takes him home by itself.** At LOW off the charger the engine activates
+`EmergencyMode`, which a high temperature also triggers
+(`wire-os-victor/resources/config/engine/behaviorComponent/behaviors/victorBehaviorTree/emergencyMode/emergencyMode.json:5-31`).
+It plays the low-battery animation and then runs `EmergencyModeOffCharger`, whose last choice is
+`FindAndGoToHome` (`emergencyModeOffCharger.json:7-12`,
+`highLevelDelegates/getHomeBehaviors/emergencyModeFindAndGoToHome.json:18`). In the mode selector it
+ranks above `SDKOverrideAll` (`modeSelector.json:7-16`), so it takes control from any SDK client,
+even one at `OVERRIDE_BEHAVIORS`. Once LOW has risen, a server has no need to send him home.
+
+**Seven status bits have no name in the SDK proto.** `RobotState.status` is a plain `uint32`
+(`wire-os-victor/tools/protobuf/gateway/public/messages.proto:252`). The engine fills it with the
+status word from vic-robot (`wire-os-victor/engine/robot.cpp:1025`), and adds only `IS_ANIMATING`
+and `IS_CARRYING_BLOCK` (`:2329-2343`). So it carries bits that the proto's `RobotStatus` enum
+(`messages.proto:257-276`) leaves out. The complete list is `RobotStatusFlag` in
+`wire-os-victor/robot/clad/src/clad/types/robotStatusAndActions.clad:13-41`, and these are the bits
+it has and the proto does not:
+
+| Bit | Name |
+|---|---|
+| `0x800` | `IS_BATTERY_DISCONNECTED` |
+| `0x40000` | `IS_BATTERY_OVERHEATED` |
+| `0x100000` | `ENCODERS_DISABLED` |
+| `0x200000` | `ENCODER_HEAD_INVALID` |
+| `0x400000` | `ENCODER_LIFT_INVALID` |
+| `0x01000000` | `IS_BATTERY_LOW` |
+| `0x02000000` | `IS_SHUTDOWN_IMMINENT` |
+
+A client that names the bits from the enum will not see these. `IS_BATTERY_LOW` here is the syscon's
+flag itself, so it is not hidden when the level reads FULL.
+
+**`suggested_charger_sec` is not an estimate.** It is a fixed 300-second stopwatch meant for
+onboarding (`batteryComponent.cpp:73-78`). It stays at zero until the level reads LOW. From then it
+counts down 300 seconds, but only while he charges. It holds still while he is off the charger, and
+it is topped up, to at most 300 seconds, when he returns (`:510-577`). The lifetime statistics jdoc,
+`vic.RobotLifetimeStats`, has no battery keys either. Its categories are stimulation, features,
+behaviours, faces, odometry, time alive and petting
+(`wire-os-victor/engine/components/robotStatsTracker.cpp:31-38`). Nothing on the robot models how
+long he can run, so the port keeps its own energy estimate on the server. It is described under
+"Added on purpose, beyond the Go server" in `docs/translation.md`.
 
 ---
 
@@ -1656,6 +1777,12 @@ changing sends nothing at all, however long you wait. See [6.9](#69-the-navmapfe
 reporting cliffs to the engine, so an edge a script drove him over is missing from the map afterwards.
 See [6.10](#610-behaviour-control-keeps-cliffs-out-of-the-map).
 
+**The battery voltage is frozen whenever he is off the charger.** The syscon measures the battery
+only while he is on the charger, so `BatteryState.battery_volts` holds the last on-charger reading
+for the whole trip. A watchdog on the voltage, such as wire-pod's, never sees him drain. The LOW flag
+and the charger flags are live, and so is the first voltage after he docks. See
+[3.8](#38-the-battery).
+
 ---
 
 ## 8. What this document does not confirm
@@ -1689,6 +1816,12 @@ window are inferred from how the Python SDK validates it rather than read from t
 Whether the custom `wirepod-cert.crt` that `vic-cloud` appends at startup reaches the token
 connection depends on whether `gwatts/rootcerts` returns a shared pool or a fresh one. That module is
 not vendored and is not in the local Go module cache.
+
+Whether his robot runs the syscon in this checkout cannot be confirmed from the source (3.8). The
+syscon is flashed separately from the OS image, and the checkout is a community snapshot. His
+robot's frozen voltage on 2026-09-28 matches this syscon exactly, but that is one robot. Also from
+3.8, that a robot switched on off the charger reads FULL until he first docks, even when his battery
+is low, is a reading of the engine code that has not been seen on a robot.
 
 Several points in section 6 are readings of the code that were not tested on a robot.
 

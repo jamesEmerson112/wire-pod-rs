@@ -359,7 +359,7 @@ The user talks to him as usual through the day.
 
 Translation stopped at 100% of what was in scope, and these were added after it.
 Each one is a difference the Go server does not have, listed so that a reader who
-diffs the two does not take it for a porting mistake. All but the last belong to
+diffs the two does not take it for a porting mistake. The first four belong to
 the motion and map logging planned on 2026-09-20.
 
 **Motion responses are logged rather than discarded.** Go throws away the answer
@@ -404,8 +404,41 @@ twenty seconds, which is stricter than Go in one case: a robot that sends its
 first frame and then never answers holds Go's call for ever. Both date from the
 M6 robot session of 2026-09-27.
 
+**An energy estimate, and a second trigger for the battery watchdog.** Go's
+watchdog sends Vector home at `gohome_percent` of the web UI's voltage curve,
+but on this firmware that voltage does not change while he is off the charger,
+so neither server's watchdog can see him drain. Since 2026-09-28 the server
+keeps an estimate of his remaining energy. It is 100% at a full charge and 0%
+when his low-battery flag rises, which still leaves about four minutes before
+he shuts down. It falls at a learned rate while he is off the charger and
+refills at a learned rate on it. Minutes left is the energy times the runtime,
+divided by 100.
+
+The runtime starts at 20 minutes, from one measured trip on 2026-09-28, and the
+charge time starts at 60 minutes. Both seeds are deliberately cautious. The
+runtime is learned when his low-battery flag rises off the charger, provided he
+left with at least 30%. It is also learned from his docking voltage, which is a
+live reading, after a trip of at least five minutes that used at least 20
+percentage points. That reading is converted with the web UI's curve, rescaled
+so that 3.62 V is 0 and 4.1 V is 100. The charge time is learned when his level
+reads FULL on the charger, provided he docked with at most 70%. Each lesson is
+averaged with the old value and clamped between 5 minutes and 6 hours. A robot
+seen for the first time starts from a guess taken from his reported voltage.
+
+The watchdog now also sends him home when the energy is at or below
+`gohome_percent`, on the first such poll. That trigger shares Go's attempts,
+cooldowns and drive home, and the voltage trigger stays exactly as Go has it.
+His low-battery flag triggers nothing in the watchdog, because his own
+emergency behaviour already drives him home at that point and outranks SDK
+control. The model is kept per robot in `energy.json` at the root of the data
+directory. Go never reads that file, so a rollback to Go is unaffected.
+`GET /api-energy?serial=<esn>` on the web port answers the estimate as JSON; it
+never dials the robot and never resets the idle timer. `RUNBOOK-SERVE.md`
+explains how to read it and how to reset a robot after a battery change.
+
 The engine facts the map and motion work rests on are in section 6 of
-`docs/robot-api.md`.
+`docs/robot-api.md`, and the battery facts behind the energy estimate are in
+section 3.8.
 
 ## The robot's own API
 
@@ -438,13 +471,12 @@ From the first deploy on 2026-09-28, with the tray build installed over Go by
   - **Connection.** Vector reached the new server within seconds, over the same
     address and ports.
 - **His reported battery voltage froze off the charger.** He answered exactly
-  4.045508 V for about twenty minutes off the charger. The engine reports a
-  filtered voltage that it updates only while it believes the battery is
-  connected, and it treats a raw reading under 3 V as disconnected
-  (`batteryComponent.cpp:136-171`, `:496-505`). When he went back on the
-  charger the value reset to 3.62 V, so it had been stale. While it is frozen,
-  no watchdog can see him drain, on either server. His battery is weak, so this
-  is most likely the battery or its sensing, not software.
+  4.045508 V for about twenty minutes off the charger, and 3.62 V once he was
+  back on it. The cause is the firmware, not his battery. His power controller
+  measures the battery only while he is on the charger, so every robot on this
+  firmware reports a stale voltage off the charger, and Go's voltage watchdog
+  is just as blind. The energy estimate under "Added on purpose, beyond the Go
+  server" is the answer. Section 3.8 of `docs/robot-api.md` has the source.
 - **The deploy script's copy could fail.** Restarting the server with the
   script failed with "being used by another process": Windows had not yet
   released the stopped process's image. The copies over the server binary now
