@@ -28,7 +28,7 @@ use http::Uri;
 use wirepod_core::AppState;
 
 use crate::sdkapp::cam::CAM_STREAM_PATH;
-use crate::{api, conncheck, initweb, mux, navmap, reply, sdkapp, ssh_api, webroot};
+use crate::{api, conncheck, energy, initweb, mux, navmap, reply, sdkapp, ssh_api, webroot};
 
 /// The port `BeginServer` serves the mux from, for the robot's conn check
 /// (`server.go:824`).
@@ -133,6 +133,9 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         // are exact GET routes outside `/api-sdk/`, whose dispatcher is Go's.
         .route(navmap::PAGE_PATH, get(navmap::page))
         .route(navmap::SNAPSHOT_PATH, get(navmap::snapshot))
+        // The energy estimate has no Go counterpart either, so it is an exact
+        // GET route beside them.
+        .route(energy::PATH, get(energy::handle))
         .fallback(fallback)
         .with_state(state);
 

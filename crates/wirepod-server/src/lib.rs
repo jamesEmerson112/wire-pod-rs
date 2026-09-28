@@ -28,6 +28,7 @@
 pub mod api;
 pub mod chipper;
 pub mod conncheck;
+pub mod energy;
 pub mod form;
 pub mod initweb;
 pub mod jdocs;
