@@ -1,6 +1,11 @@
 //! Go's `pkg/wirepod/sdkapp/batterywatchdog.go`: poll each online bot's
 //! battery and drive it onto the charger when the percentage stays at or below
 //! the configured go-home percent.
+//!
+//! Each poll also feeds the energy estimate, which has no Go counterpart, and
+//! the estimate reaching the go-home percent is a second trigger. His voltage
+//! does not change off the charger on this firmware, so off the charger the
+//! estimate is the trigger that can fire.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -10,11 +15,13 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_util::sync::CancellationToken;
 use wirepod_core::logger::COMP_SDK;
-use wirepod_core::robot::energy::battery_percent;
+use wirepod_core::robot::energy::{BatteryObservation, battery_percent};
 use wirepod_core::{AppState, BotStatusKind, Esn, GetRobotError, RobotEntry, Timings};
 use wirepod_proto::anki::vector::external_interface as pb;
 use wirepod_vector::motionlog::{control_granted, control_released};
 use wirepod_vector::{logged, sdk_client, status_error};
+
+use crate::energy;
 
 const HYSTERESIS_N: i32 = 3;
 const MAX_ATTEMPTS: i32 = 3;
@@ -149,7 +156,27 @@ impl Watchdog {
         let threshold = threshold(state);
         let home = reading.is_charging || reading.is_on_charger_platform;
 
+        let now_ms = energy::now_ms(state);
+        let events = state.energy().observe(
+            esn.as_str(),
+            BatteryObservation {
+                now_ms,
+                home,
+                level: reading.level.as_wire(),
+                volts,
+            },
+        );
+        for event in &events {
+            tracing::info!(target: COMP_SDK, bot = %esn, "{event}");
+        }
+        if !events.is_empty()
+            && let Err(err) = state.energy().save().await
         {
+            tracing::warn!(target: COMP_SDK, bot = %esn, "battery watchdog: saving the energy estimate: {err}");
+        }
+        let estimate = state.energy().snapshot(esn.as_str(), now_ms);
+
+        let energy_low = {
             let mut states = self.states();
             let bot = states.entry(esn.clone()).or_default();
             if bot.have_reading && home != bot.last_home {
@@ -165,24 +192,34 @@ impl Watchdog {
             }
             bot.have_reading = true;
             bot.last_home = home;
-            if home || volts <= 0.0 {
+            if home {
                 bot.consecutive_low = 0;
                 bot.attempts = 0;
                 bot.cooling_until = Duration::ZERO;
                 bot.sent_home = false;
                 return;
             }
+            // Go also resets and returns on a voltage of 0 or less, which a
+            // robot switched on off the charger reports until he first docks.
+            // Here it only keeps the voltage trigger from firing, so the energy
+            // trigger still can.
             if cooling || threshold <= 0 {
                 bot.consecutive_low = 0;
                 return;
             }
-            if percent <= threshold {
-                bot.consecutive_low += 1;
-            } else {
-                bot.consecutive_low = 0;
-            }
-            if bot.consecutive_low < HYSTERESIS_N {
-                return;
+            // The estimate is not noisy, so it sends him home on the first
+            // poll at or below the threshold.
+            let energy_low =
+                estimate.filter(|estimate| estimate.energy_percent <= f64::from(threshold));
+            if energy_low.is_none() {
+                if volts > 0.0 && percent <= threshold {
+                    bot.consecutive_low += 1;
+                } else {
+                    bot.consecutive_low = 0;
+                }
+                if bot.consecutive_low < HYSTERESIS_N {
+                    return;
+                }
             }
             bot.consecutive_low = 0;
             if bot.attempts >= MAX_ATTEMPTS {
@@ -193,9 +230,21 @@ impl Watchdog {
             }
             bot.attempts += 1;
             bot.docking = true;
-        }
+            energy_low
+        };
 
-        tracing::warn!(target: COMP_SDK, bot = %esn, "battery low ({percent}% <= {threshold}%, {volts:.2}V), sending robot to charger");
+        match energy_low {
+            Some(estimate) => {
+                let (left, minutes) = (
+                    estimate.energy_percent.round() as i64,
+                    estimate.minutes_left.round() as i64,
+                );
+                tracing::warn!(target: COMP_SDK, bot = %esn, "battery watchdog: energy low (~{left}% <= {threshold}%, about {minutes} min left), sending robot to charger");
+            }
+            None => {
+                tracing::warn!(target: COMP_SDK, bot = %esn, "battery low ({percent}% <= {threshold}%, {volts:.2}V), sending robot to charger");
+            }
+        }
         let reached = drive_home(&entry, &esn, &timings).await;
 
         let mut states = self.states();
@@ -363,8 +412,11 @@ async fn run(state: Arc<AppState>, cancel: CancellationToken) {
 mod tests {
     use super::*;
     use std::net::SocketAddr;
+    use std::path::PathBuf;
 
-    use wirepod_core::test_support::{FakeConnFactory, FakeRobotConn};
+    use wirepod_core::robot::energy::{DEFAULT_RUNTIME_SECS, EnergyStore, energy_from_volts};
+    use wirepod_core::test_support::{FakeConnFactory, FakeRobotConn, ManualWallClock};
+    use wirepod_core::wallclock::{WallClock, WallTime};
     use wirepod_core::{BotInfo, RobotConn, RobotConnFactory};
     use wirepod_vector::test_support::{FakeRobotHandle, spawn_fake_robot};
 
@@ -373,8 +425,46 @@ mod tests {
 
     const SERIAL: &str = "00303f28";
     const CEILING: Duration = Duration::from_secs(5);
+    /// 2026-09-20T00:00:00Z.
+    const T0: WallTime = WallTime::new(1_789_862_400, 0);
+    /// What his controller reports off the charger: the last on-charger reading.
+    const FROZEN: f32 = 4.05;
+    const NOMINAL: i32 = 2;
+    const FULL: i32 = 3;
 
-    async fn fixture(addr: SocketAddr) -> Arc<AppState> {
+    /// A directory under the system temporary directory, removed when dropped.
+    /// Every test that polls saves `energy.json` into one of these.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("wirepod-watchdog-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&path);
+            std::fs::create_dir_all(&path).expect("create the temporary directory");
+            Self(path)
+        }
+
+        fn energy_json(&self) -> PathBuf {
+            self.0.join("energy.json")
+        }
+
+        fn energy(&self) -> EnergyStore {
+            EnergyStore::new(self.energy_json().to_string_lossy().into_owned())
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    async fn fixture(
+        addr: SocketAddr,
+        dir: &TempDir,
+        gohome_percent: i32,
+    ) -> (Arc<AppState>, Arc<ManualWallClock>) {
         let target = addr.to_string();
         let bot_info: BotInfo = serde_json::from_str(&format!(
             concat!(
@@ -387,6 +477,7 @@ mod tests {
         .expect("parse the loopback fixture");
         let factory: Arc<dyn RobotConnFactory> =
             Arc::new(TonicConnFactory::with_endpoint_builder(plaintext_builder()));
+        let wall = Arc::new(ManualWallClock::new(T0));
         let state = AppState::builder(factory)
             .bot_info(bot_info)
             .timings(Timings {
@@ -395,15 +486,17 @@ mod tests {
                 battery_dock: Duration::from_secs(2),
                 ..Timings::instant()
             })
+            .wall(Arc::clone(&wall) as Arc<dyn WallClock>)
+            .energy(dir.energy())
             .build();
-        state.update_config(|config| config.battery.gohome_percent = Some(50));
+        state.update_config(|config| config.battery.gohome_percent = Some(gohome_percent));
         // The watchdog only polls robots the jdocs pinger calls online.
         state.with_bot_info(|info| {
             state
                 .pinger()
                 .note_check(info, &target, state.clock().as_ref())
         });
-        state
+        (state, wall)
     }
 
     async fn wait_for_rpc(handle: &FakeRobotHandle, method: &str) {
@@ -416,10 +509,43 @@ mod tests {
         .unwrap_or_else(|_| panic!("timed out waiting for the robot to answer {method}"));
     }
 
+    fn sent_home(handle: &FakeRobotHandle) -> bool {
+        handle.methods().contains(&"drive_on_charger")
+    }
+
+    /// Runs the off-charger estimate down to 25%: one poll half a minute above
+    /// it, which leaves him alone, and one half a minute below it, which sends
+    /// him home.
+    async fn drain_to_25_percent(
+        watchdog: &Watchdog,
+        state: &AppState,
+        wall: &ManualWallClock,
+        handle: &FakeRobotHandle,
+    ) {
+        let start = state
+            .energy()
+            .snapshot(SERIAL, energy::now_ms(state))
+            .expect("the watchdog observed him")
+            .energy_percent;
+        assert!(start > 30.0, "{start}");
+        let per_second = 100.0 / DEFAULT_RUNTIME_SECS as f64;
+        let to_threshold = ((start - 25.0) / per_second).round() as u64;
+
+        wall.advance(Duration::from_secs(to_threshold - 30));
+        watchdog.poll_bot(state, SERIAL).await;
+        assert!(!sent_home(handle), "sent home above the threshold");
+
+        wall.advance(Duration::from_secs(60));
+        watchdog.poll_bot(state, SERIAL).await;
+        assert!(sent_home(handle), "not sent home below the threshold");
+        assert!(handle.methods().contains(&"BehaviorControl"));
+    }
+
     /// Go's watchdog dials lazily inside its five-second call, so a robot that
     /// never answers costs one poll at most that long.
     #[tokio::test]
     async fn a_dial_that_never_answers_costs_one_poll_its_bound_and_frees_the_robot() {
+        let dir = TempDir::new("dial");
         let robot: Arc<dyn RobotConn> = Arc::new(FakeRobotConn::new());
         let factory = Arc::new(FakeConnFactory::connecting_to(robot));
         // Holds the first dial for good, and only the first.
@@ -431,6 +557,7 @@ mod tests {
                 battery_rpc: Duration::from_millis(100),
                 ..Timings::instant()
             })
+            .energy(dir.energy())
             .build();
         let watchdog = Watchdog::default();
 
@@ -449,10 +576,11 @@ mod tests {
 
     #[tokio::test]
     async fn three_low_readings_send_the_robot_to_the_charger() {
+        let dir = TempDir::new("three-low");
         let (addr, handle) = spawn_fake_robot().await;
         // 3.6V is about 44%, under the 50% threshold, and off the charger.
         handle.set_battery(1, 3.6);
-        let state = fixture(addr).await;
+        let (state, _wall) = fixture(addr, &dir, 50).await;
         let cancel = CancellationToken::new();
 
         start(Arc::clone(&state), cancel.clone());
@@ -460,6 +588,86 @@ mod tests {
         assert!(handle.methods().contains(&"BehaviorControl"));
 
         cancel.cancel();
+        handle.shutdown().await;
+    }
+
+    /// With the estimate held at 100%, only the voltage can fire, and it still
+    /// waits for Go's three low readings in a row.
+    #[tokio::test]
+    async fn the_voltage_trigger_still_waits_for_three_low_readings() {
+        let dir = TempDir::new("voltage");
+        let (addr, handle) = spawn_fake_robot().await;
+        handle.set_battery(NOMINAL, 3.6);
+        let (state, _wall) = fixture(addr, &dir, 50).await;
+        let now_ms = energy::now_ms(&state);
+        for (home, level) in [(true, FULL), (false, NOMINAL)] {
+            state.energy().observe(
+                SERIAL,
+                BatteryObservation {
+                    now_ms,
+                    home,
+                    level,
+                    volts: 4.1,
+                },
+            );
+        }
+        let watchdog = Watchdog::default();
+
+        for _ in 0..2 {
+            watchdog.poll_bot(&state, SERIAL).await;
+            assert!(!sent_home(&handle));
+        }
+        watchdog.poll_bot(&state, SERIAL).await;
+        assert!(sent_home(&handle));
+
+        handle.shutdown().await;
+    }
+
+    /// Off the charger his voltage stays at the last on-charger reading, so the
+    /// voltage trigger never fires and the estimate is what sends him home.
+    #[tokio::test]
+    async fn the_estimate_sends_him_home_when_his_frozen_voltage_cannot() {
+        let dir = TempDir::new("frozen");
+        let (addr, handle) = spawn_fake_robot().await;
+        // In this order, because `set_battery` clears the charger flags.
+        handle.set_battery(NOMINAL, FROZEN);
+        handle.set_charger(true, true);
+        let (state, wall) = fixture(addr, &dir, 25).await;
+        let watchdog = Watchdog::default();
+
+        // First sight on the charger guesses from his voltage.
+        watchdog.poll_bot(&state, SERIAL).await;
+        let guess = state
+            .energy()
+            .snapshot(SERIAL, energy::now_ms(&state))
+            .expect("the watchdog observed him")
+            .energy_percent;
+        assert_eq!(guess, energy_from_volts(FROZEN));
+        assert!(dir.energy_json().exists(), "the first sight was not saved");
+
+        handle.set_charger(false, false);
+        watchdog.poll_bot(&state, SERIAL).await;
+        assert!(!sent_home(&handle));
+
+        drain_to_25_percent(&watchdog, &state, &wall, &handle).await;
+        handle.shutdown().await;
+    }
+
+    /// A robot switched on off the charger reports 0 V until he first docks.
+    /// Go resets and stops there; the estimate still sends him home.
+    #[tokio::test]
+    async fn a_robot_reporting_no_voltage_off_the_charger_goes_home_on_the_estimate() {
+        let dir = TempDir::new("no-voltage");
+        let (addr, handle) = spawn_fake_robot().await;
+        // With no voltage his level reads FULL until he docks.
+        handle.set_battery(FULL, 0.0);
+        let (state, wall) = fixture(addr, &dir, 25).await;
+        let watchdog = Watchdog::default();
+
+        watchdog.poll_bot(&state, SERIAL).await;
+        assert!(!sent_home(&handle));
+
+        drain_to_25_percent(&watchdog, &state, &wall, &handle).await;
         handle.shutdown().await;
     }
 }

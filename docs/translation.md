@@ -428,13 +428,17 @@ seen for the first time starts from a guess taken from his reported voltage.
 The watchdog now also sends him home when the energy is at or below
 `gohome_percent`, on the first such poll. That trigger shares Go's attempts,
 cooldowns and drive home, and the voltage trigger stays exactly as Go has it.
-His low-battery flag triggers nothing in the watchdog, because his own
-emergency behaviour already drives him home at that point and outranks SDK
-control. The model is kept per robot in `energy.json` at the root of the data
-directory. Go never reads that file, so a rollback to Go is unaffected.
-`GET /api-energy?serial=<esn>` on the web port answers the estimate as JSON; it
-never dials the robot and never resets the idle timer. `RUNBOOK-SERVE.md`
-explains how to read it and how to reset a robot after a battery change.
+One thing around it differs from Go. A voltage of 0, which a robot switched on
+off the charger reports until he first docks, makes Go reset its counters and
+skip the poll. Here it only keeps the voltage trigger from firing, so the energy
+trigger still can. His low-battery flag triggers nothing in the watchdog,
+because his own emergency behaviour already drives him home at that point and
+outranks SDK control. The model is kept per robot in `energy.json` at the root
+of the data directory. Go never reads that file, so a rollback to Go is
+unaffected. `GET /api-energy?serial=<esn>` on the web port answers the estimate
+as JSON; it never dials the robot and never resets the idle timer.
+`RUNBOOK-SERVE.md` explains how to read it and how to reset a robot after a
+battery change.
 
 The engine facts the map and motion work rests on are in section 6 of
 `docs/robot-api.md`, and the battery facts behind the energy estimate are in
