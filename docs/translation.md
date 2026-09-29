@@ -320,6 +320,8 @@ The build is `cargo build --release -p wirepod-app --features stt-vosk,tray`.
 
 `-Rollback` does the same in reverse and restores `chipper-go.exe`, the version file and, unless `-SkipWebroot` is given, `webroot-go`.
 
+`-WebrootOnly` does step 5 alone and leaves the running server as it is, because the server reads the web interface from disk on every request. It cannot be combined with `-Rollback` or `-SkipWebroot`.
+
 Nothing else in the install is touched. The firewall rule, the `Run` key, the uninstaller, the shortcuts, the DLLs and the other assets all stay. Re-running the WirePod installer wipes the folder and brings back upstream Go, so it is not run during M6.
 
 ### Stage 5: soak and cutover

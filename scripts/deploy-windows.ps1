@@ -6,8 +6,9 @@ because the tray keeps its state under that user's HKCU:
 
   powershell -ExecutionPolicy Bypass -File scripts\deploy-windows.ps1
   powershell -ExecutionPolicy Bypass -File scripts\deploy-windows.ps1 -Rollback
+  powershell -ExecutionPolicy Bypass -File scripts\deploy-windows.ps1 -WebrootOnly
 
-Build first with `bash scripts/gate-packaged.sh`.
+Build first with `bash scripts/gate-packaged.sh`. -WebrootOnly needs no build.
 
 The first deploy copies the Go binary to chipper-go.exe beside it and never
 overwrites that copy afterwards. A deploy also replaces the install's webroot
@@ -16,6 +17,12 @@ frontend folder. The first time it does, it keeps the Go webroot as webroot-go
 beside it and never overwrites that copy afterwards either. -SkipWebroot leaves
 webroot as it is. -Rollback restores chipper-go.exe and, unless -SkipWebroot is
 given, webroot-go.
+
+-WebrootOnly copies the frontend folder over webroot as a deploy does, keeping
+webroot-go the same way, and leaves the server alone: it stops nothing, copies
+no binary and starts nothing. The server reads the web interface from disk on
+every request, so the new pages are served at once without a restart. It
+cannot be combined with -Rollback or -SkipWebroot.
 
 Only chipper.exe, the version file and webroot change; the firewall rule, the
 Run key, the uninstaller, the shortcuts, the DLLs and the other assets all name
@@ -30,12 +37,17 @@ The server it starts inherits this shell's elevation, as the fork's script does.
 param(
     [switch]$Rollback,
     [switch]$SkipWebroot,
+    [switch]$WebrootOnly,
     [string]$InstallDir = 'C:\Program Files\wire-pod\chipper',
     [string]$Build = '',
     [string]$Webroot = ''
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ($WebrootOnly -and ($Rollback -or $SkipWebroot)) {
+    throw '-WebrootOnly cannot be combined with -Rollback or -SkipWebroot.'
+}
 
 if (-not $Build) {
     $targetDir = $env:CARGO_TARGET_DIR
@@ -112,6 +124,26 @@ function Set-InstalledWebroot([string]$from) {
     Rename-Item -Path $staging -NewName (Split-Path $webrootDir -Leaf)
 }
 
+# Checked before anything is stopped or copied, so a missing folder changes nothing.
+function Assert-WebrootSources {
+    if (-not (Test-Path (Join-Path $Webroot 'index.html'))) {
+        $hint = if ($WebrootOnly) { 'pass -Webroot' } else { 'pass -Webroot or -SkipWebroot' }
+        throw "No web interface at $Webroot; $hint."
+    }
+    if (-not (Test-Path $webrootDir) -and -not (Test-Path $goWebrootDir)) { throw "No webroot at $webrootDir to keep as $goWebrootDir." }
+}
+
+# The first time, keeps the Go webroot as webroot-go, which is never overwritten
+# afterwards, then puts this repo's frontend in its place.
+function Install-Webroot {
+    if (-not (Test-Path $goWebrootDir)) {
+        Copy-Item -Path $webrootDir -Destination $goWebrootDir -Recurse
+        Write-Host "Kept the Go webroot as $goWebrootDir"
+    }
+    Set-InstalledWebroot $Webroot
+    Write-Host "Copied $Webroot over $webrootDir"
+}
+
 function Get-WebPort {
     $port = '8080'
     $props = Get-ItemProperty -Path $softwareKey -ErrorAction SilentlyContinue
@@ -141,6 +173,15 @@ function Start-InstalledServer {
 Assert-Elevated
 if (-not (Test-Path $exe)) { throw "No installed chipper.exe at $exe" }
 
+if ($WebrootOnly) {
+    # The server keeps running: it reads the web interface from disk on every
+    # request, so the new pages are served without a restart.
+    Assert-WebrootSources
+    Install-Webroot
+    Write-Host 'The web interface is in place; the server was left running.'
+    return
+}
+
 if ($Rollback) {
     if (-not (Test-Path $goExe)) { throw "No Go backup at $goExe; nothing to roll back to." }
     Stop-InstalledServer
@@ -160,10 +201,7 @@ if ($Rollback) {
 } else {
     if (-not (Test-Path $Build)) { throw "No build at $Build; run scripts/gate-packaged.sh first." }
     if (-not (Test-GuiSubsystem $Build)) { throw "$Build is not a tray build; build with --features stt-vosk,tray." }
-    if (-not $SkipWebroot) {
-        if (-not (Test-Path (Join-Path $Webroot 'index.html'))) { throw "No web interface at $Webroot; pass -Webroot or -SkipWebroot." }
-        if (-not (Test-Path $webrootDir) -and -not (Test-Path $goWebrootDir)) { throw "No webroot at $webrootDir to keep as $goWebrootDir." }
-    }
+    if (-not $SkipWebroot) { Assert-WebrootSources }
     Stop-InstalledServer
     if (-not (Test-Path $goExe)) {
         Copy-Item -Path $exe -Destination $goExe
@@ -180,12 +218,7 @@ if ($Rollback) {
     if ($SkipWebroot) {
         Write-Host 'Left webroot as it is (-SkipWebroot).'
     } else {
-        if (-not (Test-Path $goWebrootDir)) {
-            Copy-Item -Path $webrootDir -Destination $goWebrootDir -Recurse
-            Write-Host "Kept the Go webroot as $goWebrootDir"
-        }
-        Set-InstalledWebroot $Webroot
-        Write-Host "Copied $Webroot over $webrootDir"
+        Install-Webroot
     }
     Write-Host 'The Rust server is in place.'
 }

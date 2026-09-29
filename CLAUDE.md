@@ -58,7 +58,7 @@ cargo run -p wirepod-app -- serve --web-only --bind 127.0.0.1 --web-port 18080 -
 
 While that server runs its binary is locked, so build and test with `CARGO_TARGET_DIR=E:/GitHub/wire-pod-rs-target-gate`.
 
-The build that ships has the Vosk engine and the Windows tray. CI cannot build it, because the libvosk import library is not in the repository, so run it locally before any push that touches the voice path: `bash scripts/gate-packaged.sh`. `scripts/deploy-windows.ps1` swaps it in over the installed Go binary and copies `frontend/` over the install's `webroot` (keeping Go's as `webroot-go`; `-SkipWebroot` leaves it), and `-Rollback` swaps Go back; both need an elevated PowerShell and the user present.
+The build that ships has the Vosk engine and the Windows tray. CI cannot build it, because the libvosk import library is not in the repository, so run it locally before any push that touches the voice path: `bash scripts/gate-packaged.sh`. `scripts/deploy-windows.ps1` swaps it in over the installed Go binary and copies `frontend/` over the install's `webroot` (keeping Go's as `webroot-go`; `-SkipWebroot` leaves it), `-WebrootOnly` copies only `frontend/` and leaves the running server alone, and `-Rollback` swaps Go back; all three need an elevated PowerShell and the user present.
 
 The SDK-app trial serves the router on `127.0.0.1:18080` beside the production Go server; `RUNBOOK-SDK-TRIAL.md` is the procedure:
 

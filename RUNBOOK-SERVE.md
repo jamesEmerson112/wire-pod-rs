@@ -60,6 +60,14 @@ To look at the Rust web UI without taking Vector off the Go server, serve HTTP o
 
 `--web-only` starts no TLS listener, does not bind 8084 and registers nothing on mDNS.
 
+## Updating only the installed web interface
+
+Once `scripts/deploy-windows.ps1` has installed the Rust server, a change under `frontend/` reaches it without a build and without a restart. From an elevated PowerShell in the repo root:
+
+`powershell -ExecutionPolicy Bypass -File scripts\deploy-windows.ps1 -WebrootOnly`
+
+It copies `frontend/` over the install's `webroot` exactly as a full deploy does. The copy is staged beside `webroot` and swapped in, and the first time the script keeps the Go web interface as `webroot-go`, which it never overwrites afterwards. It does not stop, replace or start the server. The server reads the web interface from disk on every request, so reloading the page in the browser shows the new version. It still needs elevation, because the install is under Program Files, and it refuses `-Rollback` and `-SkipWebroot`. The swap happens while the server runs, so a page requested at that instant can fail once, and a reload fixes it. If the script stops with an error partway through, run it again.
+
 ## The camera
 
 The dashboard's camera view and `/cam-stream?serial=00303f28` share his one camera feed. As on the Go server, the newest viewer takes it and the earlier one freezes. The dashboard's view re-dials after 12 seconds without a frame, which takes the feed back, so two viewers should alternate every 12 to 20 seconds. That alternation is read from the code and has not yet been watched on a robot. While he sleeps on his charger the camera sends nothing, on either server.
