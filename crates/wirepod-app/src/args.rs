@@ -44,13 +44,15 @@ usage: chipper sdk-trial [--bot-info <path>] [--bind <addr>] [--port <u16>]
                                (default: none, which is what the Go server does)
 
 usage: chipper serve [--packaged | --data-dir <path>] [--asset-dir <path>] [--web-only]
-                     [--sdk-ini-dir <path>] [--bind <addr>] [--web-port <u16>]
+                     [--web-dir <path>] [--sdk-ini-dir <path>] [--bind <addr>] [--web-port <u16>]
                      [--http-port <u16>] [--tls-port <u16>]
 
   --packaged             keep state under %APPDATA%/wire-pod, as the installed
                          Go server does (default: the working directory)
   --data-dir <path>      keep state under this directory instead
   --asset-dir <path>     where webroot, intent-data and epod live (default: .)
+  --web-dir <path>       serve the web UI from here instead of the asset dir's
+                         webroot; from this repo that is frontend
   --sdk-ini-dir <path>   where sdk_config.ini goes (default: ~/.anki_vector)
   --bind <addr>          the address the two HTTP listeners bind (default: 0.0.0.0)
   --web-port <u16>       the web port (default: 8080)
@@ -93,6 +95,8 @@ pub struct ServeArgs {
     pub web_only: bool,
     pub data_dir: Option<PathBuf>,
     pub asset_dir: Option<PathBuf>,
+    /// The web UI's directory, when it is not `webroot` under the asset dir.
+    pub web_dir: Option<PathBuf>,
     pub sdk_ini_dir: Option<PathBuf>,
     pub bind: String,
     pub web_port: Option<u16>,
@@ -107,6 +111,7 @@ impl Default for ServeArgs {
             web_only: false,
             data_dir: None,
             asset_dir: None,
+            web_dir: None,
             sdk_ini_dir: None,
             // Go listens on every interface.
             bind: "0.0.0.0".to_owned(),
@@ -254,6 +259,7 @@ fn parse_serve(mut args: impl Iterator<Item = String>) -> Result<Command, ParseE
             "--web-only" => serve.web_only = true,
             "--data-dir" => serve.data_dir = path(&mut args, "--data-dir")?,
             "--asset-dir" => serve.asset_dir = path(&mut args, "--asset-dir")?,
+            "--web-dir" => serve.web_dir = path(&mut args, "--web-dir")?,
             "--sdk-ini-dir" => serve.sdk_ini_dir = path(&mut args, "--sdk-ini-dir")?,
             "--bind" => serve.bind = args.next().ok_or(ParseError::MissingValue("--bind"))?,
             "--web-port" => serve.web_port = port(&mut args, "--web-port")?,
@@ -367,10 +373,13 @@ mod tests {
             "1443",
             "--web-port",
             "18080",
+            "--web-dir",
+            "frontend",
         ])) else {
             panic!("the serve line parses");
         };
         assert_eq!(serve.data_dir, Some(PathBuf::from("C:/tmp/pod")));
+        assert_eq!(serve.web_dir, Some(PathBuf::from("frontend")));
         assert_eq!(serve.tls_port, Some(1443));
         assert_eq!(serve.web_port, Some(18080));
         assert!(!serve.packaged);

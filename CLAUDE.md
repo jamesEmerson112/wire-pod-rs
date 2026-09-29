@@ -52,13 +52,13 @@ cargo xtask sync-assets --from ../wire-pod           # copy drifted files, rewri
 Running the server against the real robot, and running only its web UI beside the Go server, are both in `RUNBOOK-SERVE.md`:
 
 ```bash
-cargo run -p wirepod-app -- serve --data-dir <copy> --asset-dir assets --sdk-ini-dir <scratch>
-cargo run -p wirepod-app -- serve --web-only --bind 127.0.0.1 --web-port 18080 --http-port 18082 --data-dir <copy> --asset-dir assets --sdk-ini-dir <scratch>
+cargo run -p wirepod-app -- serve --data-dir <copy> --asset-dir assets --web-dir frontend --sdk-ini-dir <scratch>
+cargo run -p wirepod-app -- serve --web-only --bind 127.0.0.1 --web-port 18080 --http-port 18082 --data-dir <copy> --asset-dir assets --web-dir frontend --sdk-ini-dir <scratch>
 ```
 
 While that server runs its binary is locked, so build and test with `CARGO_TARGET_DIR=E:/GitHub/wire-pod-rs-target-gate`.
 
-The build that ships has the Vosk engine and the Windows tray. CI cannot build it, because the libvosk import library is not in the repository, so run it locally before any push that touches the voice path: `bash scripts/gate-packaged.sh`. `scripts/deploy-windows.ps1` swaps it in over the installed Go binary and copies `assets/webroot` over the install's `webroot` (keeping Go's as `webroot-go`; `-SkipWebroot` leaves it), and `-Rollback` swaps Go back; both need an elevated PowerShell and the user present.
+The build that ships has the Vosk engine and the Windows tray. CI cannot build it, because the libvosk import library is not in the repository, so run it locally before any push that touches the voice path: `bash scripts/gate-packaged.sh`. `scripts/deploy-windows.ps1` swaps it in over the installed Go binary and copies `frontend/` over the install's `webroot` (keeping Go's as `webroot-go`; `-SkipWebroot` leaves it), and `-Rollback` swaps Go back; both need an elevated PowerShell and the user present.
 
 The SDK-app trial serves the router on `127.0.0.1:18080` beside the production Go server; `RUNBOOK-SDK-TRIAL.md` is the procedure:
 
@@ -96,9 +96,9 @@ Conventions that the existing code depends on:
 
 ## Assets are a contract
 
-`assets/webroot/` is owned by this repo from 2026-09-28, by the user's decision. It is edited here directly, it is no longer synced from the Go fork, and it differs from the fork on purpose. `cargo xtask sync-assets` neither copies it nor reports it as drift. Its elements carry `data-testid` attributes in the scheme set out in `docs/frontend-testids.md`, and new markup follows that scheme.
+The web interface is this repo's own source, in `frontend/` at the root, from 2026-09-28 by the user's decision. It is plain HTML, CSS and JavaScript with no build step, edited here directly, no longer synced from the Go fork, and different from the fork on purpose. The installed server serves it from the `webroot` folder beside `chipper.exe`, as Go does, and `scripts/deploy-windows.ps1` copies `frontend/` there. From the repo, pass `--web-dir frontend` to `serve`. Its elements carry `data-testid` attributes in the scheme set out in `docs/frontend-testids.md`, and new markup follows that scheme.
 
-The rest of `assets/` is still vendored byte-identically from the Go repo and synced with xtask: `intent-data/`, `epod/`, `weather-map.json`, `stttest.pcm` and `pod-bot-install.sh`. Never hand-edit those; change the Go repo and re-sync. `assets/MANIFEST.sha256` is maintained by xtask and lists every file under `assets/`, with webroot hashed from this repo's own copy. Text assets are stored with CRLF, as the Windows Go checkout has them, and `.gitattributes` sets `* -text` so Git converts no line endings anywhere in this repo. Keep CRLF when editing webroot.
+The rest of `assets/` is still vendored byte-identically from the Go repo and synced with xtask: `intent-data/`, `epod/`, `weather-map.json`, `stttest.pcm` and `pod-bot-install.sh`. Never hand-edit those; change the Go repo and re-sync. `assets/MANIFEST.sha256` is maintained by xtask and lists every file under `assets/`. Text assets are stored with CRLF, as the Windows Go checkout has them, and `.gitattributes` sets `* -text` so Git converts no line endings anywhere in this repo. The files in `frontend/` keep the CRLF they came with; keep it when editing them.
 
 ## Spikes
 
@@ -117,4 +117,4 @@ The rest of `assets/` is still vendored byte-identically from the Go repo and sy
 
 - Never add Claude attribution to commits: no `Co-Authored-By`, no `Claude-Session`, no "Generated with" footer.
 - Commit messages follow the existing style: `server: translate servers/chipper into the chipper module`.
-- Vendored protos, and every part of `assets/` except `webroot/`, stay byte-identical to upstream.
+- Vendored protos and everything under `assets/` stay byte-identical to upstream.

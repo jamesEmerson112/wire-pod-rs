@@ -188,7 +188,7 @@ Out of scope, by the same decisions and the earlier ones:
 **The install matches this port's assets.**
 
 - The installed build is the user's fork, version `v1.2.18-custom`.
-- Its `webroot` was byte-identical to `assets/webroot`, and its `intent-data` differs only in line endings, so the Rust binary can run from the install folder as it is. Since this repo took over `assets/webroot` on 2026-09-28 the two differ, and the deploy script copies the repo's over the install's.
+- Its `webroot` was byte-identical to `assets/webroot`, and its `intent-data` differs only in line endings, so the Rust binary can run from the install folder as it is. Since this repo took over the web interface on 2026-09-28 the two differ, and the deploy script copies the repo's `frontend/` over the install's `webroot`.
 - Several things name the exact path `C:\Program Files\wire-pod\chipper\chipper.exe`: the per-program firewall rule, the `Run` key's `chipper.exe -d`, the uninstaller's registry entry and the shortcuts. They all carry over to whatever binary sits there.
 - `libvosk.dll` and the MinGW runtime DLLs it needs are already beside it.
 
@@ -314,7 +314,7 @@ The build is `cargo build --release -p wirepod-app --features stt-vosk,tray`.
 2. The first time only, rename the Go binary to `chipper-go.exe` beside it, and never overwrite that copy.
 3. Copy the Rust binary in as `chipper.exe`.
 4. Suffix the install's `version` file with `-rs`.
-5. The first time only, copy the install's `webroot` folder to `webroot-go` beside it, and never overwrite that copy. Then replace `webroot` with this repo's `assets/webroot`, which the server serves from its working directory. `-SkipWebroot` skips this step.
+5. The first time only, copy the install's `webroot` folder to `webroot-go` beside it, and never overwrite that copy. Then replace `webroot` with this repo's `frontend/`, which the server serves from its working directory. `-SkipWebroot` skips this step.
 6. Launch it as the `Run` key does, with `-d` and the `chipper` folder as the working directory.
 7. Wait up to thirty seconds for `is_running` to answer `true`.
 
@@ -443,8 +443,9 @@ robot and never resets the idle timer.
 battery change.
 
 **The web interface belongs to this repo.** On 2026-09-28 the user moved
-`assets/webroot/` into this repo. It is edited here, `cargo xtask sync-assets`
-no longer copies it from the Go fork or reports it as drift, and it now differs
+the web interface into this repo, and later that day out of `assets/` into
+`frontend/` at the root. It is edited here, `cargo xtask sync-assets` no longer
+touches it, and it now differs
 from the fork on purpose. The first difference is a `data-testid` attribute on
 every authored element of the pages and on the elements their scripts build, and
 the nav map page carries them too. The scheme is in `docs/frontend-testids.md`.

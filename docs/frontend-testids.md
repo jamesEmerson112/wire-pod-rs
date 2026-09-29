@@ -39,4 +39,4 @@ Formatting and document tags carry no id: `<br>`, `<hr>`, `<html>`, `<head>` and
 
 Third-party code is not tagged: `sdkapp/js/iro.min.js` and the colour picker it builds, Chart.js, and the Font Awesome kit.
 
-The files under `assets/webroot/` are stored with CRLF line endings, and edits keep them. `navmap.html` uses LF.
+The files under `frontend/` are stored with CRLF line endings, and edits keep them. `navmap.html` uses LF.

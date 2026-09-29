@@ -104,7 +104,10 @@ async fn load_state(
         )),
         (None, false) => DataDir::source(),
     };
-    let assets = AssetDir::new(args.asset_dir.clone().unwrap_or_else(|| PathBuf::from(".")));
+    let mut assets = AssetDir::new(args.asset_dir.clone().unwrap_or_else(|| PathBuf::from(".")));
+    if let Some(dir) = &args.web_dir {
+        assets = assets.with_webroot(dir);
+    }
     let sdk_ini = match &args.sdk_ini_dir {
         Some(dir) => SdkIniStore::new(format!("{}/", dir.display())),
         None => {

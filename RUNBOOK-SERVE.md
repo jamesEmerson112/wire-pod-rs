@@ -13,7 +13,7 @@ The Go server and the Rust server cannot run at the same time in this mode, beca
    `cp -r "$APPDATA/wire-pod/." <scratch>/data/`
 4. Build and start the server from the repo root:
    `cargo build -p wirepod-app`
-   `./target/debug/chipper.exe serve --data-dir <scratch>/data --asset-dir assets --sdk-ini-dir <scratch>/ini`
+   `./target/debug/chipper.exe serve --data-dir <scratch>/data --asset-dir assets --web-dir frontend --sdk-ini-dir <scratch>/ini`
    With `--packaged` instead of `--data-dir` it uses the live `%APPDATA%\wire-pod`, which is what a real cutover will do.
 
    Set `STT_SERVICE` and `STT_LANGUAGE` to whatever the tray app uses before pointing the server at the live data directory. Go overwrites the config's STT provider from `STT_SERVICE` on every read, and so does this port, so a shell run without it blanks that setting in `apiConfig.json`.
@@ -56,7 +56,7 @@ The build output is locked while the server runs. To build or test in the meanti
 
 To look at the Rust web UI without taking Vector off the Go server, serve HTTP only on other ports:
 
-`./target/debug/chipper.exe serve --web-only --bind 127.0.0.1 --web-port 18080 --http-port 18082 --data-dir <scratch>/data --asset-dir assets --sdk-ini-dir <scratch>/ini`
+`./target/debug/chipper.exe serve --web-only --bind 127.0.0.1 --web-port 18080 --http-port 18082 --data-dir <scratch>/data --asset-dir assets --web-dir frontend --sdk-ini-dir <scratch>/ini`
 
 `--web-only` starts no TLS listener, does not bind 8084 and registers nothing on mDNS.
 

@@ -12,7 +12,7 @@ Build first with `bash scripts/gate-packaged.sh`.
 The first deploy copies the Go binary to chipper-go.exe beside it and never
 overwrites that copy afterwards. A deploy also replaces the install's webroot
 folder, which the server serves the web interface from, with this repo's
-assets\webroot. The first time it does, it keeps the Go webroot as webroot-go
+frontend folder. The first time it does, it keeps the Go webroot as webroot-go
 beside it and never overwrites that copy afterwards either. -SkipWebroot leaves
 webroot as it is. -Rollback restores chipper-go.exe and, unless -SkipWebroot is
 given, webroot-go.
@@ -43,7 +43,7 @@ if (-not $Build) {
     $Build = Join-Path $targetDir 'release\chipper.exe'
 }
 if (-not $Webroot) {
-    $Webroot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\assets\webroot'))
+    $Webroot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\frontend'))
 }
 
 $exe = Join-Path $InstallDir 'chipper.exe'

@@ -2,8 +2,8 @@
 //! Go server; both are recorded in `docs/translation.md` as additions.
 //!
 //! `GET /navmap?serial=<esn>` serves `navmap.html`, compiled into the binary
-//! with `include_str!` because `assets/` is vendored byte-identically from the
-//! Go repository and cannot take a new file. The page is reachable on the plain
+//! with `include_str!`. It predates the web interface moving into `frontend/`,
+//! when `assets/` could not take a new file. The page is reachable on the plain
 //! HTTP listeners only, like the rest of the web UI.
 //!
 //! `GET /api-navmap/snapshot?serial=<esn>` resolves the robot, touches his idle

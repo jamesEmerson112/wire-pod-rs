@@ -208,6 +208,17 @@ fn the_asset_files_sit_where_go_reads_them_relative_to_its_working_directory() {
         text(&assets.sdk_app_dir()),
         format!("base{separator}webroot{separator}sdkapp")
     );
+    // This repo keeps the web UI in `frontend/`, outside the asset dir.
+    let repo = assets.clone().with_webroot("frontend");
+    assert_eq!(text(&repo.webroot_dir()), "frontend");
+    assert_eq!(
+        text(&repo.sdk_app_dir()),
+        format!("frontend{separator}sdkapp")
+    );
+    assert_eq!(
+        text(&repo.epod_cert_path()),
+        format!("base{separator}epod{separator}ep.crt")
+    );
     assert_eq!(
         text(&assets.intent_data_path("en-US")),
         format!("base{separator}intent-data{separator}en-US.json")

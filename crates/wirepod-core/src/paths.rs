@@ -273,13 +273,27 @@ impl DataDir {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AssetDir {
     root: PathBuf,
+    /// The web UI's directory when it is not `webroot` under the root. The
+    /// install keeps it there, as Go does; this repo keeps it in `frontend/`.
+    webroot: Option<PathBuf>,
 }
 
 impl AssetDir {
     /// The asset directory rooted at `root`, which is what `--asset-dir`
     /// selects and what Go leaves as the working directory.
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            webroot: None,
+        }
+    }
+
+    /// The same, serving the web UI from `dir` instead of `webroot` under the
+    /// root, which is what `--web-dir` selects.
+    #[must_use]
+    pub fn with_webroot(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.webroot = Some(dir.into());
+        self
     }
 
     /// The directory itself.
@@ -306,9 +320,12 @@ impl AssetDir {
     }
 
     /// The web UI's document root, `"./webroot"`
-    /// (`config-ws/webserver.go:437`).
+    /// (`config-ws/webserver.go:437`), unless [`AssetDir::with_webroot`] named
+    /// another.
     pub fn webroot_dir(&self) -> PathBuf {
-        self.root.join("webroot")
+        self.webroot
+            .clone()
+            .unwrap_or_else(|| self.root.join("webroot"))
     }
 
     /// The SDK app's document root, `"./webroot/sdkapp"`
