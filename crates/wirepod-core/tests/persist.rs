@@ -307,45 +307,72 @@ async fn a_write_into_a_read_only_directory_leaves_the_original_and_no_temporary
 /// go. The write has to land anyway.
 ///
 /// The budget is the test's rather than production's, so that it can be sized
-/// for the attempt count asserted below.
+/// for the holds below.
 ///
-/// The attempt count is asserted, because without it the test passes vacuously
-/// whenever the writer reaches its first rename after the hold has already
-/// cleared: the write then lands at once and the retry loop never runs. The
-/// hold and the budget are both sized for that assertion rather than for the
-/// write alone. Creating, filling and syncing an eleven-byte temporary measures
-/// between two and twenty-five milliseconds here, and reaching it also costs a
-/// `spawn_blocking` hand-off on a machine running the rest of this suite in
-/// parallel; a forty-millisecond hold lost that race about half the time, which
-/// is what the vacuous pass looked like.
+/// A run whose writer reaches its first rename after the hold has already
+/// cleared lands at once and never exercises the retry, so passing on that
+/// alone would be vacuous. How long the writer takes to get there depends on
+/// the machine: creating, filling and syncing an eleven-byte temporary measures
+/// between two and twenty-five milliseconds here, but a busy CI runner took
+/// longer than half a second on 2026-09-28. A run that lands at once is
+/// therefore repeated with a longer hold, and the test fails only if no hold
+/// exercises the retry. Every run, retried or not, has to land the write.
 #[cfg(windows)]
 #[tokio::test]
 async fn a_hold_that_clears_does_not_lose_the_write() {
+    /// Each is tried only when the one before it had already cleared by the
+    /// writer's first rename.
+    const HOLDS: [Duration; 3] = [
+        Duration::from_millis(500),
+        Duration::from_millis(1500),
+        Duration::from_millis(3000),
+    ];
+
+    let directory = TempDir::new("transient");
+    let target = directory.path().join("botSdkInfo.json");
+    let mut attempts_per_run = Vec::new();
+    for hold in HOLDS {
+        let attempts = hold_then_write(&target, hold).await;
+        attempts_per_run.push(attempts);
+        if attempts > 1 {
+            break;
+        }
+    }
+
+    assert!(
+        attempts_per_run
+            .last()
+            .is_some_and(|attempts| *attempts > 1),
+        "every write landed on its first rename, so each hold was already gone and the retry was never exercised: {attempts_per_run:?} attempts for holds of {HOLDS:?}"
+    );
+    assert_eq!(
+        entry_names(directory.path()),
+        ["botSdkInfo.json"],
+        "a temporary survived a write that had to wait"
+    );
+}
+
+/// Holds `target` open with no sharing for `hold`, writes over it meanwhile,
+/// checks that the write landed, and answers how many renames it took.
+#[cfg(windows)]
+async fn hold_then_write(target: &Path, hold: Duration) -> u32 {
     use std::fs::OpenOptions;
     use std::os::windows::fs::OpenOptionsExt;
     use std::sync::mpsc;
 
     use wirepod_core::test_support::write_atomic_with_retry_budget;
 
-    /// Long enough to outlast creating, filling and syncing the temporary and
-    /// the `spawn_blocking` hand-off that precedes it, by more than an order of
-    /// magnitude, so the first rename is attempted while the hold is still on.
-    const HOLD: Duration = Duration::from_millis(500);
-    /// Thirteen attempts backing off from two milliseconds, eight seconds of
-    /// waiting in total, so the hold is gone with most of the budget unspent:
-    /// the rename lands on the attempt after the cumulative wait passes
-    /// [`HOLD`], which is 510 milliseconds in, and four attempts remain behind
-    /// it.
-    const ATTEMPTS: u32 = 13;
+    /// Fourteen attempts backing off from two milliseconds, sixteen seconds of
+    /// waiting in total. The rename lands on the attempt after the cumulative
+    /// wait passes the hold, which for the longest hold is about four seconds
+    /// in, with two attempts left behind it.
+    const ATTEMPTS: u32 = 14;
     const FIRST_BACKOFF: Duration = Duration::from_millis(2);
 
-    let directory = TempDir::new("transient");
-    let target = directory.path().join("botSdkInfo.json");
-    fs::write(&target, b"original").expect("could not seed the target");
-
+    fs::write(target, b"original").expect("could not seed the target");
     let (opened, is_open) = mpsc::channel();
     let holder = {
-        let target = target.clone();
+        let target = target.to_path_buf();
         std::thread::spawn(move || {
             let held = OpenOptions::new()
                 .read(true)
@@ -353,7 +380,7 @@ async fn a_hold_that_clears_does_not_lose_the_write() {
                 .open(&target)
                 .expect("could not hold the target open");
             opened.send(()).expect("nobody is waiting for the hold");
-            std::thread::sleep(HOLD);
+            std::thread::sleep(hold);
             drop(held);
         })
     };
@@ -362,7 +389,7 @@ async fn a_hold_that_clears_does_not_lose_the_write() {
     let write = tokio::time::timeout(
         CEILING,
         write_atomic_with_retry_budget(
-            &target,
+            target,
             b"replacement".to_vec(),
             MODE,
             ATTEMPTS,
@@ -372,27 +399,13 @@ async fn a_hold_that_clears_does_not_lose_the_write() {
     .await
     .expect("the write did not finish within the ceiling");
     let attempts = write.expect("a hold that clears must not cost the write");
-
-    // Without this the test passes vacuously whenever the writer reaches its
-    // first rename after the hold has cleared: the rename then succeeds at once
-    // and the retry this test exists for never runs.
-    assert!(
-        attempts > 1,
-        "the write landed on its first rename, so the hold was already gone and the retry was \
-         never exercised; reaching the first rename took longer than the {HOLD:?} hold"
-    );
-
     holder.join().expect("the holder panicked");
 
     assert_eq!(
-        fs::read(&target).expect("the target is missing"),
+        fs::read(target).expect("the target is missing"),
         b"replacement"
     );
-    assert_eq!(
-        entry_names(directory.path()),
-        ["botSdkInfo.json"],
-        "a temporary survived a write that had to wait"
-    );
+    attempts
 }
 
 /// A failure after the temporary exists, in the shape Windows really produces:

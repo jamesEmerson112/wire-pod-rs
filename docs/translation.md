@@ -649,7 +649,7 @@ Checked against the running Go server, web-only on 18080 beside it:
 - The in-memory token store grows without bound, as in Go.
 - Session-certificate writes build a fresh write gate per call.
 - `botSdkInfo.json` is written through a fresh write gate on every call too, in `store/bot_info.rs` and in `jdocspinger.rs`, so nothing orders two writers of that file in production. The M6 flake work measured that this was not the flake's cause.
-- `a_hold_that_clears_does_not_lose_the_write` in `tests/persist.rs` depends on timing: with 48 copies of the test binary running at once, the hold often clears before the first rename, and its `attempts > 1` assertion fails. Normal CI load does not come close.
+- Fixed on 2026-09-28: `a_hold_that_clears_does_not_lose_the_write` in `tests/persist.rs` depended on timing. It holds the target for 500 ms and requires the write to need a retry. On the Windows CI runner that day the writer took longer than that to reach its first rename, so the hold had already cleared and the assertion failed. A run that lands at once is now repeated with a hold of 1.5 s and then 3 s, and the test fails only if none of them makes the write retry. It passed 48 copies run at once.
 - `ApiConfig` and `BotInfo` derive a full `Debug` and could leak keys into a log line.
 - `mdns_sd` logs `failed to send response of shutdown` every 32 seconds, each time the registration loop re-registers. The name still resolves.
 - An unrouted gRPC path on the TLS listener answers the router's 404 rather than tonic's `Unimplemented`, because `/ok:80` is matched in the fallback.
