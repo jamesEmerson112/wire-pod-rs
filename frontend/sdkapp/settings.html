@@ -95,31 +95,25 @@
               <section data-testid="sdk-dashboard-map-root" class="vb-panel vb-panel-grow">
                 <div data-testid="sdk-dashboard-map-header" class="vb-phead">
                   <span data-testid="sdk-dashboard-map-heading" class="vb-ptitle"><svg data-testid="sdk-dashboard-map-icon" class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#29e0d6" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3z"></path><path d="M9 3v15M15 6v15"></path></svg>NAVIGATION &middot; SLAM MAP</span>
-                  <span data-testid="sdk-dashboard-map-pose-text" class="vb-pacc">X 1.2m &middot; Y 0.4m &middot; &theta; 34&deg; <span data-testid="sdk-dashboard-map-todo-badge" class="vb-badge vb-badge-todo">TODO</span></span>
+                  <span data-testid="sdk-dashboard-map-pose-text" class="vb-pacc" id="vbMapPose">no pose</span>
                 </div>
                 <div data-testid="sdk-dashboard-map-body" class="vb-pbody">
-                  <svg data-testid="sdk-dashboard-map-media" class="vb-map" viewBox="0 0 380 250" preserveAspectRatio="none" role="img" aria-label="SLAM map (demo data)">
-                    <defs>
-                      <pattern id="vbMapGrid" width="30" height="30" patternUnits="userSpaceOnUse">
-                        <path d="M30 0H0V30" fill="none" stroke="#29e0d6" stroke-opacity="0.09" stroke-width="1"></path>
-                      </pattern>
-                      <path id="vbMapPath" d="M46,206 C110,170 120,150 176,120 S250,70 320,44" fill="none"></path>
-                    </defs>
-                    <rect data-testid="sdk-dashboard-map-grid-inner" x="0" y="0" width="380" height="250" fill="url(#vbMapGrid)"></rect>
-                    <rect data-testid="sdk-dashboard-map-obstacle-left-item" x="150" y="150" width="70" height="26" rx="4" fill="#ffffff" fill-opacity="0.06" stroke="#ffffff" stroke-opacity="0.14"></rect>
-                    <rect data-testid="sdk-dashboard-map-obstacle-right-item" x="245" y="120" width="30" height="52" rx="4" fill="#ffffff" fill-opacity="0.06" stroke="#ffffff" stroke-opacity="0.14"></rect>
-                    <use data-testid="sdk-dashboard-map-route-item" class="vb-map-path" href="#vbMapPath" stroke="#00ff80" stroke-width="2" stroke-dasharray="6 6"></use>
-                    <g data-testid="sdk-dashboard-map-charger-group" transform="translate(46,206)"><rect x="-11" y="-9" width="22" height="18" rx="3" fill="none" stroke="#ced100" stroke-width="1.6"></rect><path d="M-4,-2 L2,-2 L-1,2 L4,2" fill="none" stroke="#ced100" stroke-width="1.6"></path></g>
-                    <text data-testid="sdk-dashboard-map-charger-text" x="46" y="230" text-anchor="middle" font-family="monospace" font-size="9" fill="#8a8a8a">charger</text>
-                    <g data-testid="sdk-dashboard-map-target-group" transform="translate(320,44)"><rect x="-8" y="-8" width="16" height="16" rx="2" fill="#29e0d6" fill-opacity="0.2" stroke="#29e0d6" stroke-width="1.6"></rect></g>
-                    <text data-testid="sdk-dashboard-map-target-text" x="320" y="30" text-anchor="middle" font-family="monospace" font-size="9" fill="#8a8a8a">voice source</text>
-                    <g data-testid="sdk-dashboard-map-robot-group" class="vb-map-bot"><circle r="14" fill="#00ff80" fill-opacity="0.14"></circle><polygon points="9,0 -6,-6 -6,6" fill="#00ff80" stroke="#0a0b0d" stroke-width="1"></polygon><animateMotion dur="7s" repeatCount="indefinite" rotate="auto"><mpath href="#vbMapPath"></mpath></animateMotion></g>
-                  </svg>
-                  <div data-testid="sdk-dashboard-map-legend-list" class="vb-map-legend">
-                    <span data-testid="sdk-dashboard-map-legend-robot-item" class="vb-lg"><span data-testid="sdk-dashboard-map-legend-robot-icon" class="vb-sw vb-sw-robot"></span>robot</span>
-                    <span data-testid="sdk-dashboard-map-legend-charger-item" class="vb-lg"><span data-testid="sdk-dashboard-map-legend-charger-icon" class="vb-sw vb-sw-charger"></span>charger</span>
-                    <span data-testid="sdk-dashboard-map-legend-target-item" class="vb-lg"><span data-testid="sdk-dashboard-map-legend-target-icon" class="vb-sw vb-sw-target"></span>target</span>
-                    <span data-testid="sdk-dashboard-map-legend-obstacle-item" class="vb-lg"><span data-testid="sdk-dashboard-map-legend-obstacle-icon" class="vb-sw vb-sw-obstacle"></span>obstacle</span>
+                  <div data-testid="sdk-dashboard-map-media" class="vb-map" id="vbMapStage">
+                    <canvas data-testid="sdk-dashboard-map-canvas-media" class="vb-map-canvas" id="vbMapCanvas" role="img" aria-label="Vector's nav map, drawn nose-up: screen-up is his +x, screen-left is his +y"></canvas>
+                    <div data-testid="sdk-dashboard-map-bars-list" class="vb-map-bars">
+                      <div data-testid="sdk-dashboard-map-error-note" class="vb-map-bar vb-map-bar-err" id="vbMapError" hidden></div>
+                      <div data-testid="sdk-dashboard-map-frame-note" class="vb-map-bar" id="vbMapFrame" hidden></div>
+                    </div>
+                    <div data-testid="sdk-dashboard-map-state-note" class="vb-map-note" id="vbMapNote" role="status">waiting for his first map</div>
+                  </div>
+                  <div data-testid="sdk-dashboard-map-footer" class="vb-map-foot">
+                    <div data-testid="sdk-dashboard-map-legend-list" class="vb-map-legend">
+                      <span data-testid="sdk-dashboard-map-legend-clear-item" class="vb-lg" title="clear_of_obstacle and clear_of_cliff"><span data-testid="sdk-dashboard-map-legend-clear-icon" class="vb-sw vb-sw-map vb-sw-none" id="vbMapSwClear"></span>clear</span>
+                      <span data-testid="sdk-dashboard-map-legend-obstacle-item" class="vb-lg" title="obstacle_cube, obstacle_proximity, obstacle_proximity_explored and obstacle_unrecognized"><span data-testid="sdk-dashboard-map-legend-obstacle-icon" class="vb-sw vb-sw-map vb-sw-none" id="vbMapSwObstacle"></span>obstacle</span>
+                      <span data-testid="sdk-dashboard-map-legend-cliff-item" class="vb-lg" title="cliff"><span data-testid="sdk-dashboard-map-legend-cliff-icon" class="vb-sw vb-sw-map vb-sw-none" id="vbMapSwCliff"></span>cliff</span>
+                      <span data-testid="sdk-dashboard-map-legend-unknown-item" class="vb-lg" title="unknown"><span data-testid="sdk-dashboard-map-legend-unknown-icon" class="vb-sw vb-sw-map vb-sw-none" id="vbMapSwUnknown"></span>unknown</span>
+                    </div>
+                    <a data-testid="sdk-dashboard-map-full-link" class="vb-map-link" id="vbMapLink" href="/navmap" target="_blank" rel="noopener">full map &#8599;</a>
                   </div>
                 </div>
               </section>
@@ -612,6 +606,7 @@
   <script src="../js/ui.js"></script>
   <script src="./js/heyvector.js"></script>
   <script src="./js/vectorbrain.js"></script>
+  <script src="./js/minimap.js"></script>
   <iframe name="hiddenFrame" width="0" height="0" border="0" style="display: none;"></iframe>
 
 </body>

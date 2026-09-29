@@ -97,6 +97,8 @@ energy: back on the charger after 19 min off; estimate ~5%, his docking reading 
 
 **The map page.** With the server running, open `http://localhost:8080/navmap` (or `http://127.0.0.1:18080/navmap` in the web-only mode above). It is served on the plain HTTP ports only, like the rest of the web UI. It draws his nav map live, nose-up, in the colours his engine uses, with his pose on top. The feed runs only while the page is open and stops by itself about 15 seconds after the page stops polling. He only sends his map when it changes, so drive him a little before expecting one. Picking him up wipes the map twice, once when he leaves the ground and once when he is put down, and the page says so. `?demo=1` shows a built-in example without a robot.
 
+**The dashboard's map panel.** The SDK dashboard's navigation panel, `sdkapp/settings.html?serial=00303f28`, draws a smaller copy of the same map with his pose in its header, and its "full map" link opens the page above in a new tab. It polls the same snapshot route every 2 seconds, and only while its tab is visible, so an open dashboard keeps the feed running and his idle timer fresh just as the map page does. Hiding the tab stops its polling, and the feed then stops about 15 seconds later.
+
 **The log lines.** All of these are at debug level, so choose `debug` in the web UI's log page to see them.
 
 - `motion DriveWheels(lw=50 rw=50) -> REQUEST_PROCESSING in 14ms` is a call we sent and the decoded body of his answer. The four direct-motor calls answer success whether or not he moved, so this line alone never proves he did.

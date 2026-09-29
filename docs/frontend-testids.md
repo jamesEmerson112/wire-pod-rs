@@ -26,7 +26,7 @@ An id has the form `<area>-<path>-<role>[-<key>]`, in lowercase kebab-case for e
 | `server-settings` | `setup.html` |
 | `setup` | `initial.html` and `js/initial.js` |
 | `bot-picker` | `sdkapp/index.html` and `sdkapp/js/auth.js` |
-| `sdk-dashboard` | The Vector Brain card of `sdkapp/settings.html`, the frame of its settings drawer, and `sdkapp/js/vectorbrain.js` |
+| `sdk-dashboard` | The Vector Brain card of `sdkapp/settings.html`, the frame of its settings drawer, `sdkapp/js/vectorbrain.js` and `sdkapp/js/minimap.js` |
 | `bot-settings` | The settings sections inside that drawer, `sdkapp/js/main.js`, `sdkapp/js/faces.js` and `sdkapp/js/heyvector.js` |
 | `bot-control` | `sdkapp/control.html` and `sdkapp/js/control.js` |
 | `navmap` | `crates/wirepod-server/src/navmap/navmap.html` |

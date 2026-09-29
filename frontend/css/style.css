@@ -1340,23 +1340,97 @@ body:has(.vb-wrap) {
 }
 
 /* ---- navigation / SLAM map panel ------------------------------------- */
+/* A small live copy of /navmap, drawn by sdkapp/js/minimap.js. */
 .vb-map {
+  position: relative;
   display: block;
   width: 100%;
   height: 268px;
+  overflow: hidden;
   border-radius: 8px;
   background: var(--vb-page);
 }
 
-.vb-map-path {
-  animation: vb-dash 1.6s linear infinite;
+/* The page-wide canvas rule near the top of this file fixes every canvas at
+   750x400 with !important, so this one has to answer with !important too. */
+.vb-map-canvas {
+  display: block;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.vb-map-note {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  text-align: center;
+  overflow-wrap: anywhere;
+  font-family: var(--vb-mono);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  color: var(--vb-muted);
+  pointer-events: none;
+}
+
+.vb-map-note-err {
+  color: var(--vb-alert);
+}
+
+.vb-map-bars {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.vb-map-bar {
+  max-width: 100%;
+  padding: 3px 8px;
+  border: 1px solid rgba(255, 176, 0, 0.45);
+  border-radius: 5px;
+  background: rgba(14, 15, 18, 0.85);
+  color: var(--vb-amber);
+  font-family: var(--vb-mono);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vb-map-bar-err {
+  border-color: rgba(255, 107, 107, 0.5);
+  color: var(--vb-alert);
+}
+
+.vb-map-note[hidden],
+.vb-map-bar[hidden] {
+  display: none;
+}
+
+.vb-map-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-top: 10px;
 }
 
 .vb-map-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 18px;
-  margin-top: 10px;
+  gap: 14px;
   font-family: var(--vb-mono);
   font-size: 10px;
   font-weight: 600;
@@ -1377,23 +1451,37 @@ body:has(.vb-wrap) {
   height: 9px;
 }
 
-.vb-sw-robot {
-  background: var(--vb-accent);
-  clip-path: polygon(100% 50%, 0 0, 0 100%);
+/* Filled by minimap.js with the colour he draws each kind of cell in, over the
+   map's own ground so a translucent colour looks as it does on the map. */
+.vb-sw-map {
+  box-sizing: border-box;
+  width: 10px;
+  height: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 2px;
+  background: var(--vb-page);
 }
 
-.vb-sw-charger {
-  border: 1.5px solid #ced100;
+.vb-sw-none {
+  border-style: dashed;
 }
 
-.vb-sw-target {
-  background: rgba(41, 224, 214, 0.3);
-  border: 1.5px solid #29e0d6;
+.vb-map-link {
+  font-family: var(--vb-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  line-height: 1.4;
+  color: #29e0d6;
+  text-decoration: none;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
-.vb-sw-obstacle {
-  background: rgba(255, 255, 255, 0.1);
-  border: 1.5px solid rgba(255, 255, 255, 0.3);
+.vb-map-link:hover,
+.vb-map-link:focus-visible {
+  color: #29e0d6;
+  text-decoration: underline;
 }
 
 /* ---- connectivity panel ---------------------------------------------- */
@@ -2050,15 +2138,9 @@ body.vb-locked {
   50%      { height: 14px; }
 }
 
-@keyframes vb-dash {
-  to { stroke-dashoffset: -40; }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .vb-recdot,
   .vb-dot,
-  .vb-map-path,
-  .vb-map-bot,
   .vb-pill.vb-pill-disconnected .vb-dot {
     animation: none;
   }

@@ -392,7 +392,9 @@ compiled into the binary, and `/api-navmap/snapshot` answers the robot's latest
 map with every quad's position reconstructed, plus his latest state. The feed is
 a `NavMapFeed` stream Go never opens, and it runs only while the page keeps
 polling. The code is `crates/wirepod-core/src/robot/navmap.rs`, `navmap_feed.rs`
-and `crates/wirepod-server/src/navmap/`.
+and `crates/wirepod-server/src/navmap/`. The SDK dashboard's navigation panel,
+`frontend/sdkapp/js/minimap.js`, polls the same route every 2 seconds while its
+tab is visible and draws a smaller copy of the map.
 
 **Two Lua globals.** `goToPose` and `lookAroundInPlace` have no Go counterpart.
 Unlike the translated globals they return the robot's decoded answer, and a
