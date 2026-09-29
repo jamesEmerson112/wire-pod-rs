@@ -188,7 +188,7 @@ Out of scope, by the same decisions and the earlier ones:
 **The install matches this port's assets.**
 
 - The installed build is the user's fork, version `v1.2.18-custom`.
-- Its `webroot` is byte-identical to `assets/webroot`, and its `intent-data` differs only in line endings, so the Rust binary can run from the install folder as it is.
+- Its `webroot` was byte-identical to `assets/webroot`, and its `intent-data` differs only in line endings, so the Rust binary can run from the install folder as it is. Since this repo took over `assets/webroot` on 2026-09-28 the two differ, and the deploy script copies the repo's over the install's.
 - Several things name the exact path `C:\Program Files\wire-pod\chipper\chipper.exe`: the per-program firewall rule, the `Run` key's `chipper.exe -d`, the uninstaller's registry entry and the shortcuts. They all carry over to whatever binary sits there.
 - `libvosk.dll` and the MinGW runtime DLLs it needs are already beside it.
 
@@ -314,12 +314,13 @@ The build is `cargo build --release -p wirepod-app --features stt-vosk,tray`.
 2. The first time only, rename the Go binary to `chipper-go.exe` beside it, and never overwrite that copy.
 3. Copy the Rust binary in as `chipper.exe`.
 4. Suffix the install's `version` file with `-rs`.
-5. Launch it as the `Run` key does, with `-d` and the `chipper` folder as the working directory.
-6. Wait up to thirty seconds for `is_running` to answer `true`.
+5. The first time only, copy the install's `webroot` folder to `webroot-go` beside it, and never overwrite that copy. Then replace `webroot` with this repo's `assets/webroot`, which the server serves from its working directory. `-SkipWebroot` skips this step.
+6. Launch it as the `Run` key does, with `-d` and the `chipper` folder as the working directory.
+7. Wait up to thirty seconds for `is_running` to answer `true`.
 
-`-Rollback` does the same in reverse and restores `chipper-go.exe` and the version file.
+`-Rollback` does the same in reverse and restores `chipper-go.exe`, the version file and, unless `-SkipWebroot` is given, `webroot-go`.
 
-Nothing else in the install is touched. The firewall rule, the `Run` key, the uninstaller, the shortcuts, the DLLs and the assets all stay. Re-running the WirePod installer wipes the folder and brings back upstream Go, so it is not run during M6.
+Nothing else in the install is touched. The firewall rule, the `Run` key, the uninstaller, the shortcuts, the DLLs and the other assets all stay. Re-running the WirePod installer wipes the folder and brings back upstream Go, so it is not run during M6.
 
 ### Stage 5: soak and cutover
 
