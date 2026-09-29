@@ -1,12 +1,11 @@
 //! Repo maintenance tasks. Currently: `sync-assets`.
 
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 /// (source path relative to --from, destination relative to assets/)
 const ASSET_MAP: &[(&str, &str)] = &[
-    ("chipper/webroot", "webroot"),
     ("chipper/intent-data", "intent-data"),
     ("chipper/weather-map.json", "weather-map.json"),
     ("chipper/epod/ep.crt", "epod/ep.crt"),
@@ -14,6 +13,11 @@ const ASSET_MAP: &[(&str, &str)] = &[
     ("chipper/stttest.pcm", "stttest.pcm"),
     ("vector-cloud/pod-bot-install.sh", "pod-bot-install.sh"),
 ];
+
+/// Roots under assets/ that this repo owns and edits directly. They are never
+/// copied from the Go checkout or reported as drift, but the manifest still
+/// records their hashes, taken from this repo's own files.
+const OWNED_ROOTS: &[&str] = &["webroot"];
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -125,7 +129,10 @@ fn sync_assets(from: &Path, assets: &Path, check: bool) -> SyncReport {
     {
         if e.file_type().is_file() {
             let rel = e.path().strip_prefix(assets).unwrap().to_path_buf();
-            if rel != Path::new("MANIFEST.sha256") && !expected.contains_key(&rel) {
+            if rel != Path::new("MANIFEST.sha256")
+                && !expected.contains_key(&rel)
+                && !is_owned(&rel)
+            {
                 drift += 1;
                 eprintln!("unexpected file under assets/: {}", rel.display());
             }
@@ -133,8 +140,19 @@ fn sync_assets(from: &Path, assets: &Path, check: bool) -> SyncReport {
     }
 
     if !check {
+        let mut listed: BTreeSet<PathBuf> = expected.keys().cloned().collect();
+        for root in OWNED_ROOTS {
+            for e in walkdir::WalkDir::new(assets.join(root))
+                .into_iter()
+                .filter_map(Result::ok)
+            {
+                if e.file_type().is_file() {
+                    listed.insert(e.path().strip_prefix(assets).unwrap().to_path_buf());
+                }
+            }
+        }
         let mut manifest = String::new();
-        for dst_rel in expected.keys() {
+        for dst_rel in &listed {
             let h = hash_file(&assets.join(dst_rel)).unwrap();
             let unix = dst_rel
                 .to_string_lossy()
@@ -146,9 +164,53 @@ fn sync_assets(from: &Path, assets: &Path, check: bool) -> SyncReport {
     SyncReport { drift, copied }
 }
 
+fn is_owned(rel: &Path) -> bool {
+    OWNED_ROOTS.iter().any(|root| rel.starts_with(root))
+}
+
 fn hash_file(p: &Path) -> Option<String> {
     let data = std::fs::read(p).ok()?;
     let mut h = Sha256::new();
     h.update(&data);
     Some(format!("{:x}", h.finalize()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn write(path: &Path, bytes: &[u8]) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn webroot_is_neither_synced_nor_drift_but_stays_in_the_manifest() {
+        let root = std::env::temp_dir().join(format!("xtask-sync-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let from = root.join("go");
+        let assets = root.join("assets");
+        write(&from.join("chipper/webroot/index.html"), b"go page");
+        write(&from.join("chipper/weather-map.json"), b"{}");
+        write(&assets.join("webroot/index.html"), b"our page");
+        write(&assets.join("webroot/js/extra.js"), b"ours only");
+        write(&assets.join("weather-map.json"), b"{}");
+
+        assert_eq!(sync_assets(&from, &assets, true).drift, 0);
+
+        let report = sync_assets(&from, &assets, false);
+        assert_eq!(report.copied, 0);
+        assert_eq!(
+            fs::read(assets.join("webroot/index.html")).unwrap(),
+            b"our page"
+        );
+        let manifest = fs::read_to_string(assets.join("MANIFEST.sha256")).unwrap();
+        let ours = hash_file(&assets.join("webroot/index.html")).unwrap();
+        assert!(manifest.contains(&format!("{ours}  ./webroot/index.html\n")));
+        assert!(manifest.contains("  ./webroot/js/extra.js\n"));
+        assert!(manifest.contains("  ./weather-map.json\n"));
+
+        fs::remove_dir_all(&root).unwrap();
+    }
 }
