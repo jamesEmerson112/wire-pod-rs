@@ -92,7 +92,8 @@ async fn the_route_answers_the_estimate_rounded_and_dials_nothing() {
     assert_eq!(
         reply.body,
         concat!(
-            r#"{"serial":"00303f28","known":true,"guess":false,"on_charger":false,"#,
+            r#"{"serial":"00303f28","known":true,"gohome_percent":0,"#,
+            r#""guess":false,"on_charger":false,"#,
             r#""energy_percent":49.4,"minutes_left":9.9,"#,
             r#""runtime_minutes":20.0,"runtime_learned":false,"#,
             r#""charge_minutes":60.0,"charge_learned":false,"since":1789862400}"#
@@ -110,13 +111,44 @@ async fn a_robot_never_observed_answers_known_false_and_nothing_else() {
     for (uri, body) in [
         (
             "/api-energy?serial=DEADBEEF",
-            r#"{"serial":"deadbeef","known":false}"#,
+            r#"{"serial":"deadbeef","known":false,"gohome_percent":0}"#,
         ),
-        ("/api-energy", r#"{"serial":"","known":false}"#),
+        (
+            "/api-energy",
+            r#"{"serial":"","known":false,"gohome_percent":0}"#,
+        ),
     ] {
         assert_eq!(get(&router, uri).await.body, body, "{uri}");
     }
     assert_eq!(factory.connect_count(), 0);
+}
+
+/// The watchdog's threshold rides along in both shapes, so the web UI can
+/// colour the estimate low where the watchdog acts on it, and a negative one
+/// reads as disabled, as the watchdog takes it.
+#[tokio::test]
+async fn both_shapes_carry_the_go_home_threshold() {
+    let store = EnergyStore::new("./energy-never-written.json");
+    left_full(&store);
+    let (router, state, _factory) = router(store, WallTime::new(T0_SECS + 607, 0));
+
+    for (gohome, answered) in [(Some(25), 25), (Some(-5), 0), (None, 0)] {
+        state.update_config(|config| config.battery.gohome_percent = gohome);
+        let known = get(&router, "/api-energy?serial=00303f28").await;
+        let prefix = format!(
+            r#"{{"serial":"00303f28","known":true,"gohome_percent":{answered},"guess":false,"#
+        );
+        assert!(
+            known.body.starts_with(&prefix),
+            "{gohome:?}: {}",
+            known.body
+        );
+        assert_eq!(
+            get(&router, "/api-energy?serial=deadbeef").await.body,
+            format!(r#"{{"serial":"deadbeef","known":false,"gohome_percent":{answered}}}"#),
+            "{gohome:?}"
+        );
+    }
 }
 
 /// An estimate read back from `energy.json` answers in full, with `known`
@@ -137,7 +169,7 @@ async fn an_estimate_no_poll_has_confirmed_since_a_restart_is_not_known() {
     assert!(
         reply
             .body
-            .starts_with(r#"{"serial":"00303f28","known":false,"guess":false,"on_charger":false,"energy_percent":50.0,"#),
+            .starts_with(r#"{"serial":"00303f28","known":false,"gohome_percent":0,"guess":false,"on_charger":false,"energy_percent":50.0,"#),
         "{}",
         reply.body
     );

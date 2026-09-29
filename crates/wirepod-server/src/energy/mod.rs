@@ -7,7 +7,8 @@
 //!
 //! ```json
 //! {
-//!   "serial": "00303f28", "known": true, "guess": false, "on_charger": false,
+//!   "serial": "00303f28", "known": true, "gohome_percent": 25,
+//!   "guess": false, "on_charger": false,
 //!   "energy_percent": 50.0, "minutes_left": 10.0,
 //!   "runtime_minutes": 20.0, "runtime_learned": false,
 //!   "charge_minutes": 60.0, "charge_learned": false,
@@ -16,10 +17,12 @@
 //! ```
 //!
 //! The four figures are rounded to one decimal and `since` is in Unix seconds.
-//! A robot never observed answers `{"serial":"...","known":false}` and nothing
-//! else. `known` is also false, with the rest of the body present, for an
-//! estimate read from `energy.json` that no poll has confirmed since the
-//! server started.
+//! `gohome_percent` is the watchdog's go-home threshold, 0 when it is disabled,
+//! so the web UI colours the estimate low where the watchdog acts on it.
+//! A robot never observed answers `{"serial":"...","known":false,
+//! "gohome_percent":25}` and nothing else. `known` is also false, with the
+//! rest of the body present, for an estimate read from `energy.json` that no
+//! poll has confirmed since the server started.
 
 use std::sync::Arc;
 
@@ -29,6 +32,7 @@ use serde::Serialize;
 use wirepod_core::robot::energy::EnergySnapshot;
 use wirepod_core::{AppState, Esn};
 
+use crate::sdkapp::batterywatchdog::threshold;
 use crate::{form, reply};
 
 /// The estimate.
@@ -42,6 +46,8 @@ pub async fn handle(State(state): State<Arc<AppState>>, req: Request) -> Respons
     let body = Body {
         serial: serial.as_str().to_owned(),
         known: snapshot.is_some_and(|snapshot| snapshot.known),
+        // The watchdog takes anything at or below 0 as disabled.
+        gohome_percent: threshold(&state).max(0),
         estimate: snapshot.map(Estimate::from),
     };
     reply::json(encode(&body))
@@ -57,12 +63,13 @@ pub(crate) fn now_ms(state: &AppState) -> u64 {
         .saturating_add(u64::from(now.nanos / 1_000_000))
 }
 
-/// The reply, `serial` and `known` first so a robot never observed answers
-/// those two alone.
+/// The reply, `serial`, `known` and `gohome_percent` first so a robot never
+/// observed answers those three alone.
 #[derive(Debug, Serialize)]
 struct Body {
     serial: String,
     known: bool,
+    gohome_percent: i32,
     #[serde(flatten)]
     estimate: Option<Estimate>,
 }
@@ -104,6 +111,11 @@ fn tenths(value: f64) -> f64 {
 /// still the contract's shape rather than a 500.
 fn encode(body: &Body) -> String {
     serde_json::to_string(body).unwrap_or_else(|_| {
-        serde_json::json!({ "serial": body.serial, "known": false }).to_string()
+        serde_json::json!({
+            "serial": body.serial,
+            "known": false,
+            "gohome_percent": body.gohome_percent,
+        })
+        .to_string()
     })
 }

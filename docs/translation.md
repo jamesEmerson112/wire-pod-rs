@@ -436,7 +436,8 @@ because his own emergency behaviour already drives him home at that point and
 outranks SDK control. The model is kept per robot in `energy.json` at the root
 of the data directory. Go never reads that file, so a rollback to Go is
 unaffected. `GET /api-energy?serial=<esn>` on the web port answers the estimate
-as JSON; it never dials the robot and never resets the idle timer.
+as JSON, with the watchdog's `gohome_percent` beside it; it never dials the
+robot and never resets the idle timer.
 `RUNBOOK-SERVE.md` explains how to read it and how to reset a robot after a
 battery change.
 

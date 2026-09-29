@@ -57,7 +57,7 @@ struct Watchdog {
     conns: Mutex<HashMap<Esn, CachedConn>>,
 }
 
-fn threshold(state: &AppState) -> i32 {
+pub(crate) fn threshold(state: &AppState) -> i32 {
     state.config().battery.gohome_percent.unwrap_or(0)
 }
 
