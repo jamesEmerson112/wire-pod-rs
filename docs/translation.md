@@ -440,6 +440,14 @@ as JSON; it never dials the robot and never resets the idle timer.
 `RUNBOOK-SERVE.md` explains how to read it and how to reset a robot after a
 battery change.
 
+**The web interface belongs to this repo.** On 2026-09-28 the user moved
+`assets/webroot/` into this repo. It is edited here, `cargo xtask sync-assets`
+no longer copies it from the Go fork or reports it as drift, and it now differs
+from the fork on purpose. The first difference is a `data-testid` attribute on
+every authored element of the pages and on the elements their scripts build, and
+the nav map page carries them too. The scheme is in `docs/frontend-testids.md`.
+Nothing a user sees changes.
+
 The engine facts the map and motion work rests on are in section 6 of
 `docs/robot-api.md`, and the battery facts behind the energy estimate are in
 section 3.8.

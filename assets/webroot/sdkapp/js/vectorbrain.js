@@ -196,8 +196,10 @@
     var frag = document.createDocumentFragment();
     frag.appendChild(document.createTextNode((bot && bot.ip ? bot.ip : "no ip") + sep + "firmware "));
     frag.appendChild(todoBadge());
+    frag.lastChild.setAttribute("data-testid", "sdk-dashboard-subline-firmware-badge");
     frag.appendChild(document.createTextNode(sep + "uptime "));
     frag.appendChild(todoBadge());
+    frag.lastChild.setAttribute("data-testid", "sdk-dashboard-subline-uptime-badge");
     frag.appendChild(document.createTextNode(sep + lastHeardText(bot)));
     sub.appendChild(frag);
   }
@@ -568,6 +570,8 @@
   function makeLogRow(entry) {
     var row = document.createElement("div");
     row.className = "vb-log-row";
+    var testidKey = "i" + logRows.indexOf(entry);
+    row.setAttribute("data-testid", "sdk-dashboard-log-row-" + testidKey);
 
     row.appendChild(makeCell("vb-lt", typeof entry.t === "number" ? timeString(entry.t) : ""));
 
@@ -579,6 +583,8 @@
 
     row.appendChild(makeCell("vb-lb", entry.bot ? String(entry.bot) : EMDASH));
     row.appendChild(makeCell("vb-lm", entry.msg ? String(entry.msg) : ""));
+    var testidCells = ["time", "level", "comp", "bot", "message"];
+    Array.prototype.forEach.call(row.children, function (cell, testidI) { cell.setAttribute("data-testid", "sdk-dashboard-log-" + testidCells[testidI] + "-text-" + testidKey); });
 
     return row;
   }
@@ -598,6 +604,7 @@
     // until the next poll returns.
     if (logRows.length === 0) {
       body.appendChild(makeCell("vb-log-empty", "waiting for log output..."));
+      body.lastChild.setAttribute("data-testid", "sdk-dashboard-log-empty-text");
       return;
     }
 

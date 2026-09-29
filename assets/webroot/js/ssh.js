@@ -3,6 +3,7 @@ function updateSSHStatus(statusString) {
   setupStatus.innerHTML = "";
   setupStatusP = document.createElement("p");
   setupStatusP.innerHTML = statusString;
+  setupStatusP.setAttribute("data-testid", "bot-setup-oskr-status-text");
   setupStatus.appendChild(setupStatusP);
 }
 

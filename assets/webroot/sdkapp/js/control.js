@@ -112,6 +112,7 @@ function sendForm(formURL) {
 let keysPressed = {};
 
 var stream = document.createElement("img");
+stream.setAttribute("data-testid", "bot-control-cam-img");
 
 function showCamStream() {
   //sendForm('/api-sdk/begin_cam_stream')

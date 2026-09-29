@@ -165,6 +165,7 @@ function getPhotos() {
     photoSection.innerHTML = "";
     if (xhr.response == "null") {
       var noPhotos = document.createElement("p");
+      noPhotos.setAttribute("data-testid", "bot-settings-photos-empty-text");
       noPhotos.innerHTML =
         "No photos found. Tell Vector to take a photo, then refresh the list.";
       photoSection.appendChild(noPhotos);
@@ -178,6 +179,10 @@ function getPhotos() {
       var thumbPic = document.createElement("img");
       var thumbDelete = document.createElement("button");
       thumbPic.src = "/api-sdk/get_image_thumb?serial=" + esn + "&id=" + imgId;
+      thumb.setAttribute("data-testid", "bot-settings-photos-item-" + imgId);
+      thumbLink.setAttribute("data-testid", "bot-settings-photos-link-" + imgId);
+      thumbPic.setAttribute("data-testid", "bot-settings-photos-img-" + imgId);
+      thumbDelete.setAttribute("data-testid", "bot-settings-photos-delete-btn-" + imgId);
       //thumb.classList = "center"
       thumbLink.classList = "center";
       thumbDelete.classList = "center";
@@ -291,6 +296,11 @@ function updateStats() {
     s1p4.textContent = "Seconds petted: " + Math.round(petMs / 1000);
     var s1p5 = document.createElement("p");
     s1p5.textContent = "Distance moved (cm): " + Math.round(cmMoved / 100);
+    s1p1.setAttribute("data-testid", "bot-settings-stats-days-alive-text");
+    s1p2.setAttribute("data-testid", "bot-settings-stats-trigger-word-text");
+    s1p3.setAttribute("data-testid", "bot-settings-stats-utility-features-text");
+    s1p4.setAttribute("data-testid", "bot-settings-stats-petted-text");
+    s1p5.setAttribute("data-testid", "bot-settings-stats-distance-text");
     s1.appendChild(s1p1);
     s1.appendChild(s1p2);
     s1.appendChild(s1p3);
@@ -437,6 +447,7 @@ function getCurrentSettings() {
     var s10 = document.getElementById("currentLocation");
     const s10P = document.createElement("p");
     s10P.textContent = "Current Location Setting: " + `${location}`;
+    s10P.setAttribute("data-testid", "bot-settings-location-current-text");
     document.getElementById("locationInput").placeholder = `${location}`;
     s10.innerHTML = "";
     s10.appendChild(s10P);
@@ -444,6 +455,7 @@ function getCurrentSettings() {
     var s11 = document.getElementById("currentTimeZone");
     const s11P = document.createElement("p");
     s11P.textContent = "Current Time Zone Setting: " + `${timezone}`;
+    s11P.setAttribute("data-testid", "bot-settings-timezone-current-text");
     document.getElementById("tzInput").value = `${timezone}`;
     s11.innerHTML = "";
     s11.appendChild(s11P);

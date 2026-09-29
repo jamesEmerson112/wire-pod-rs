@@ -72,7 +72,7 @@ async function updateBatteryInfo(serial, i) {
     }
     batteryLevel.className = "batteryLevel batteryUnknown";
     vectorFace.style.backgroundImage = "url(/assets/wififace.gif)";
-    tooltip.innerHTML = `<b>${serial}</b><br/>??%<br/> (Unable to connect)`;
+    tooltip.innerHTML = `<b data-testid="home-bot-battery-serial-text-${serial}">${serial}</b><br/>??%<br/> (Unable to connect)`;
     setTimeout(async () => {
       // Re-render the battery information
       updateBatteryInfo(serial, i);
@@ -106,13 +106,14 @@ async function updateBatteryInfo(serial, i) {
   batteryLevel.style.width = batteryPercentage + "%";
 
   // Clear tooltip, and replace serial number and the latest voltage
-  tooltip.innerHTML = `<b>${serial}</b><br/>~${batteryPercentage}%<br/> (${batteryStatus["battery_volts"].toFixed(2)}V)`;
+  tooltip.innerHTML = `<b data-testid="home-bot-battery-serial-text-${serial}">${serial}</b><br/>~${batteryPercentage}%<br/> (${batteryStatus["battery_volts"].toFixed(2)}V)`;
 
   // Update the charging status
   if (batteryStatus["is_on_charger_platform"]) {
     if (!batteryOutline.getElementsByClassName("charging").length) {
       var charging = document.createElement("div");
       charging.className = "charging";
+      charging.setAttribute("data-testid", `home-bot-battery-charging-icon-${serial}`);
       batteryOutline.appendChild(charging);
       vectorFace.style.backgroundImage = "url(/assets/expandface.gif)";
     }
@@ -163,6 +164,7 @@ async function renderBatteryInfo(serial, i = 0) {
   // For each robot, we'll create a new div to hold the battery information with a class of "batteryContainer"
   var batteryContainer = document.createElement("div");
   batteryContainer.className = "batteryContainer";
+  batteryContainer.setAttribute("data-testid", `home-bot-battery-root-${serial}`);
   botStats.appendChild(batteryContainer);
   batteryContainer.onclick = function() {
     window.location.href = "/sdkapp/settings.html?serial=" + serial;
@@ -172,26 +174,31 @@ async function renderBatteryInfo(serial, i = 0) {
 
   var tooltip = document.createElement("span");
   tooltip.className = "tooltip";
-  tooltip.innerHTML = `<b>${serial}</b>`;
+  tooltip.setAttribute("data-testid", `home-bot-battery-note-${serial}`);
+  tooltip.innerHTML = `<b data-testid="home-bot-battery-serial-text-${serial}">${serial}</b>`;
   batteryContainer.appendChild(tooltip);
 
   // Create a new div to hold the battery status with a class of "batteryOutline", this will be the outline of the battery status
   var batteryOutline = document.createElement("div");
   batteryOutline.className = "batteryOutline";
+  batteryOutline.setAttribute("data-testid", `home-bot-battery-outline-group-${serial}`);
   batteryContainer.appendChild(batteryOutline);
 
   var vectorFace = document.createElement("div");
   vectorFace.className = "vectorFace";
+  vectorFace.setAttribute("data-testid", `home-bot-battery-face-img-${serial}`);
   vectorFace.style.backgroundImage = "url(/assets/webface.gif)"; // default loading face
   batteryContainer.appendChild(vectorFace);
 
   // Create the colored div that will represent the battery level, with a class of "batteryLevel"
   var batteryLevel = document.createElement("div");
   batteryLevel.className = "batteryLevel";
+  batteryLevel.setAttribute("data-testid", `home-bot-battery-level-inner-${serial}`);
   batteryOutline.appendChild(batteryLevel);
 
   var chargeTimeRemaining = document.createElement("div");
   chargeTimeRemaining.className = "chargeTimeRemaining";
+  chargeTimeRemaining.setAttribute("data-testid", `home-bot-battery-charge-time-text-${serial}`);
   batteryOutline.appendChild(chargeTimeRemaining);
 
   // We will manage the battery level via class names, there are only 4 levels reported (0, 1, 2, 3)
@@ -208,7 +215,7 @@ async function renderBatteryInfo(serial, i = 0) {
   if (!batteryStatus) {
     batteryLevel.className = "batteryLevel batteryUnknown";
     vectorFace.style.backgroundImage = "url(/assets/wififace.gif)";
-    tooltip.innerHTML = `<b>${serial}</b><br/>??<br/> (Unable to connect)`;
+    tooltip.innerHTML = `<b data-testid="home-bot-battery-serial-text-${serial}">${serial}</b><br/>??<br/> (Unable to connect)`;
     setTimeout(async () => {
       // Re-render the battery information
       updateBatteryInfo(serial, i);
@@ -220,6 +227,7 @@ async function renderBatteryInfo(serial, i = 0) {
   if (batteryStatus["is_on_charger_platform"]) {
     var charging = document.createElement("div");
     charging.className = "charging";
+    charging.setAttribute("data-testid", `home-bot-battery-charging-icon-${serial}`);
     batteryOutline.appendChild(charging);
     vectorFace.style.backgroundImage = "url(/assets/expandface.gif)";
   } else {
@@ -247,6 +255,7 @@ async function processBotStats() {
     // While loading, set a loading gif in a class div of "botLoader" to the botStats div
     var botLoader = document.createElement("div");
     botLoader.className = "botLoader";
+    botLoader.setAttribute("data-testid", "home-bot-stats-loader-img");
     botStats.appendChild(botLoader);
 
     const sdkInfo = await getSDKInfo(); //{"global_guid":"tni1TRsTRTaNSapjo0Y+Sw==","robots":[{"esn":"00603f9b","ip_address":"10.42.0.248","guid":"5RlowyehhT8Qq7wEpF6JsQ==","activated":true},{"esn":"004047ef","ip_address":"10.42.0.175","guid":"ofoJZqLP3cwd9YpvXrdAfw==","activated":true}]}

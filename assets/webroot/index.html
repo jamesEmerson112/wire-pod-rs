@@ -15,217 +15,217 @@
   <meta http-equiv="Expires" content="Thu, 01 Jan 1970 00:00:00 GMT">
 </head>
 
-<body>
-  <div id="outer">
-    <div id="content" class="">
-      <h1>Wire-Pod</h1>
+<body data-testid="home-page-root">
+  <div data-testid="home-page-inner" id="outer">
+    <div data-testid="home-content-body" id="content" class="">
+      <h1 data-testid="home-title-heading">Wire-Pod</h1>
       <!-- Bot stats, connected and battery -->
-      <div id="botStats"></div>
+      <div data-testid="home-bot-stats-list" id="botStats"></div>
       <hr />
 
-      <div class="main-nav-parent">
+      <div data-testid="home-nav-list" class="main-nav-parent">
         <!--WP settings-->
-        <div class="main-nav-child">
-          <a href="setup.html"><i class="fa-solid fa-gear"></i><br />Server Settings</a>
+        <div data-testid="home-nav-server-settings-item" class="main-nav-child">
+          <a data-testid="home-nav-server-settings-link" href="setup.html"><i data-testid="home-nav-server-settings-icon" class="fa-solid fa-gear"></i><br />Server Settings</a>
         </div>
         <!--Bot Settings-->
-        <div class="main-nav-child">
-          <a href="/sdkapp"><i class="fa solid fa-toolbox"></i><br />Bot Settings</a>
+        <div data-testid="home-nav-bot-settings-item" class="main-nav-child">
+          <a data-testid="home-nav-bot-settings-link" href="/sdkapp"><i data-testid="home-nav-bot-settings-icon" class="fa solid fa-toolbox"></i><br />Bot Settings</a>
         </div>
         <!--Bot Setup-->
-        <div class="main-nav-child">
-          <a href="#" onclick="showBotAuth(); return false;"><i class="fa solid fa-robot" id="icon-BotAuth"
+        <div data-testid="home-nav-bot-setup-item" class="main-nav-child">
+          <a data-testid="home-nav-bot-setup-link" href="#" onclick="showBotAuth(); return false;"><i data-testid="home-nav-bot-setup-icon" class="fa solid fa-robot" id="icon-BotAuth"
               name="icon"></i><br />Bot Setup</a>
         </div>
         <!--Custom Intents-->
-        <div class="main-nav-child">
-          <a href="#" onclick="showIntents(); return false;"><i class="fa-solid fa-microphone-lines" id="icon-Intents"
+        <div data-testid="home-nav-intents-item" class="main-nav-child">
+          <a data-testid="home-nav-intents-link" href="#" onclick="showIntents(); return false;"><i data-testid="home-nav-intents-icon" class="fa-solid fa-microphone-lines" id="icon-Intents"
               name="icon"></i><br />Custom Intents</a>
         </div>
         <!--Logs-->
-        <div class="main-nav-child">
-          <a href="#" onclick="showLog(); return false;"><i class="fa-solid fa-file-lines" id="icon-Logs"
+        <div data-testid="home-nav-log-item" class="main-nav-child">
+          <a data-testid="home-nav-log-link" href="#" onclick="showLog(); return false;"><i data-testid="home-nav-log-icon" class="fa-solid fa-file-lines" id="icon-Logs"
               name="icon"></i><br />Log</a>
         </div>
         <!--Version-->
-        <div class="main-nav-child">
-          <a href="#" onclick="showVersion(); return false;"><i class="fa-solid fa-code-compare" id="icon-Version"
+        <div data-testid="home-nav-version-item" class="main-nav-child">
+          <a data-testid="home-nav-version-link" href="#" onclick="showVersion(); return false;"><i data-testid="home-nav-version-icon" class="fa-solid fa-code-compare" id="icon-Version"
               name="icon"></i><br />Version Info</a>
         </div>
         <!--UI Customizer-->
-        <div class="main-nav-child">
-          <a href="#" onclick="showUICustomizer(); return false;"><i class="fa-solid fa-pen-nib" id="icon-Customizer"
+        <div data-testid="home-nav-ui-settings-item" class="main-nav-child">
+          <a data-testid="home-nav-ui-settings-link" href="#" onclick="showUICustomizer(); return false;"><i data-testid="home-nav-ui-settings-icon" class="fa-solid fa-pen-nib" id="icon-Customizer"
               name="icon"></i><br />UI Settings</a>
         </div>
       </div>
       <hr />
 
-      <div id="botStatusStrip"></div>
+      <div data-testid="home-bot-status-list" id="botStatusStrip"></div>
 
-      <div id="section-intents" style="display: none">
-        <h2 id="foldable-add" onclick="toggleSection('content-add', 'content-edit')">
-          <span>+</span>
+      <div data-testid="intents-root" id="section-intents" style="display: none">
+        <h2 data-testid="intents-add-toggle-heading" id="foldable-add" onclick="toggleSection('content-add', 'content-edit')">
+          <span data-testid="intents-add-toggle-icon">+</span>
           Add a custom intent
         </h2>
-        <div class="content" id="content-add">
-          <p>
+        <div data-testid="intents-add-body" class="content" id="content-add">
+          <p data-testid="intents-add-help-text">
             For more details, see
-            <a href="https://github.com/kercre123/wire-pod/wiki/Custom-Intents" target="_blank">the Custom Intents page of the wiki</a>
+            <a data-testid="intents-add-wiki-link" href="https://github.com/kercre123/wire-pod/wiki/Custom-Intents" target="_blank">the Custom Intents page of the wiki</a>
           </p>
-          <div id="addIntentStatus"></div>
-          <form id="intentAddForm">
-            <label for="nameAdd">Custom intent name:</label>
-            <input type="text" name="nameAdd" id="nameAdd" /><br />
-            <label for="descriptionAdd">Custom intent description:</label>
-            <input type="text" name="descriptionAdd" id="descriptionAdd" /><br />
-            <label for="utterancesAdd">Utterances that will trigger the intent (separated by
+          <div data-testid="intents-add-status-group" id="addIntentStatus"></div>
+          <form data-testid="intents-add-form" id="intentAddForm">
+            <label data-testid="intents-add-name-label" for="nameAdd">Custom intent name:</label>
+            <input data-testid="intents-add-name-input" type="text" name="nameAdd" id="nameAdd" /><br />
+            <label data-testid="intents-add-description-label" for="descriptionAdd">Custom intent description:</label>
+            <input data-testid="intents-add-description-input" type="text" name="descriptionAdd" id="descriptionAdd" /><br />
+            <label data-testid="intents-add-utterances-label" for="utterancesAdd">Utterances that will trigger the intent (separated by
               ,):</label>
-            <input type="text" name="utterancesAdd" id="utterancesAdd" /><br />
-            <div id="intentAddSelect"></div>
-            <label for="paramnameAdd">Intent parameter name (not required):</label>
-            <input type="text" name="paramnameAdd" id="paramnameAdd" /><br />
-            <label for="paramvalueAdd">Intent parameter value (not required):</label>
-            <input type="text" name="paramvalueAdd" id="paramvalueAdd" /><br />
-            <label for="execAdd">Path to script/program to execute after sending intent (not
+            <input data-testid="intents-add-utterances-input" type="text" name="utterancesAdd" id="utterancesAdd" /><br />
+            <div data-testid="intents-add-intent-group" id="intentAddSelect"></div>
+            <label data-testid="intents-add-param-name-label" for="paramnameAdd">Intent parameter name (not required):</label>
+            <input data-testid="intents-add-param-name-input" type="text" name="paramnameAdd" id="paramnameAdd" /><br />
+            <label data-testid="intents-add-param-value-label" for="paramvalueAdd">Intent parameter value (not required):</label>
+            <input data-testid="intents-add-param-value-input" type="text" name="paramvalueAdd" id="paramvalueAdd" /><br />
+            <label data-testid="intents-add-exec-label" for="execAdd">Path to script/program to execute after sending intent (not
               required):</label>
-            <input type="text" name="execAdd" id="execAdd" /><br />
-            <label for="execAdd">Arguments for script/program (seperated by ,) (not required):</label>
-            <input type="text" name="execAddArgs" id="execAddArgs" size="50" /><br />
-            <label for="luaAdd">Lua code to run (not required):</label>
-            <textarea id="luaAdd"></textarea>
+            <input data-testid="intents-add-exec-input" type="text" name="execAdd" id="execAdd" /><br />
+            <label data-testid="intents-add-exec-args-label" for="execAdd">Arguments for script/program (seperated by ,) (not required):</label>
+            <input data-testid="intents-add-exec-args-input" type="text" name="execAddArgs" id="execAddArgs" size="50" /><br />
+            <label data-testid="intents-add-lua-label" for="luaAdd">Lua code to run (not required):</label>
+            <textarea data-testid="intents-add-lua-textarea" id="luaAdd"></textarea>
           </form>
-          <div>
-            <button onclick="sendIntentAdd()">Add intent</button>
+          <div data-testid="intents-add-actions">
+            <button data-testid="intents-add-submit-btn" onclick="sendIntentAdd()">Add intent</button>
           </div>
           <hr />
         </div>
 
-        <h2 id="foldable-edit" onclick="toggleSection('content-edit', 'content-add')">
-          <span>+</span>
+        <h2 data-testid="intents-edit-toggle-heading" id="foldable-edit" onclick="toggleSection('content-edit', 'content-add')">
+          <span data-testid="intents-edit-toggle-icon">+</span>
           Edit/delete a custom intent
         </h2>
-        <div class="content" id="content-edit">
-          <div id="editSelect"></div>
-          <div id="editIntentStatus"></div>
-          <div id="deleteIntentStatus"></div>
-          <div>
-            <div>
-              <button onclick="editFormCreate()">Edit selected intent</button>
-              <button onclick="deleteSelectedIntent()">
+        <div data-testid="intents-edit-body" class="content" id="content-edit">
+          <div data-testid="intents-edit-select-group" id="editSelect"></div>
+          <div data-testid="intents-edit-status-group" id="editIntentStatus"></div>
+          <div data-testid="intents-delete-status-group" id="deleteIntentStatus"></div>
+          <div data-testid="intents-edit-actions">
+            <div data-testid="intents-edit-actions-inner">
+              <button data-testid="intents-edit-open-btn" onclick="editFormCreate()">Edit selected intent</button>
+              <button data-testid="intents-edit-delete-btn" onclick="deleteSelectedIntent()">
                 Delete selected intent
               </button>
             </div>
           </div>
-          <div id="editIntentForm"></div>
+          <div data-testid="intents-edit-form-group" id="editIntentForm"></div>
           <hr />
         </div>
       </div>
 
-      <div id="section-botauth" style="display: none">
-        <h2>Authentication</h2>
+      <div data-testid="bot-setup-root" id="section-botauth" style="display: none">
+        <h2 data-testid="bot-setup-auth-heading">Authentication</h2>
         <hr class="small-hr">
-        <div>
-          <div id="disconnectButton"></div>
+        <div data-testid="bot-setup-disconnect-group">
+          <div data-testid="bot-setup-disconnect-actions" id="disconnectButton"></div>
         </div>
-        <div>
-          <div id="botAuth"></div>
+        <div data-testid="bot-setup-auth-group">
+          <div data-testid="bot-setup-auth-body" id="botAuth"></div>
         </div>
         <hr />
-        <div>
-          <h3>Configure an OSKR/dev-unlocked robot</h3>
+        <div data-testid="bot-setup-oskr-group">
+          <h3 data-testid="bot-setup-oskr-heading">Configure an OSKR/dev-unlocked robot</h3>
           <hr class="small-hr">
-          <small class="desc">Works with firmware 1.4 and above.</small>
-          <div id="oskrSetupProgress"></div>
-          <div id="oskrSetup">
-            <p><b>If you have an OSKR/dev-unlocked bot;</b> enter the bot's IP
+          <small data-testid="bot-setup-oskr-note" class="desc">Works with firmware 1.4 and above.</small>
+          <div data-testid="bot-setup-oskr-status-group" id="oskrSetupProgress"></div>
+          <div data-testid="bot-setup-oskr-body" id="oskrSetup">
+            <p data-testid="bot-setup-oskr-help-text"><b data-testid="bot-setup-oskr-help-lead">If you have an OSKR/dev-unlocked bot;</b> enter the bot's IP
               address and upload the bot's SSH key here, then click "Set up
               bot". After that, use the above section to finish setting up
               your bot.</p>
             <hr class="small-hr">
-            <input class="tinput" type="text" id="sshIp" name="sshIp" placeholder="Bot IP address" /><br />
-            <input type="file" id="sshKeyFile" name="sshKeyFile" /><br />
+            <input data-testid="bot-setup-oskr-ip-input" class="tinput" type="text" id="sshIp" name="sshIp" placeholder="Bot IP address" /><br />
+            <input data-testid="bot-setup-oskr-key-input" type="file" id="sshKeyFile" name="sshKeyFile" /><br />
             <hr class="small-hr">
-            <button onclick="doSSHSetup()">Set up bot</button>
+            <button data-testid="bot-setup-oskr-submit-btn" onclick="doSSHSetup()">Set up bot</button>
           </div>
         </div>
         <hr />
       </div>
 
-      <div id="section-log" style="display: none">
-        <h2>Log</h2>
+      <div data-testid="log-root" id="section-log" style="display: none">
+        <h2 data-testid="log-heading">Log</h2>
         <hr class="small-hr">
-        <div class="center">
-          <div style="text-align:left">
-            <label class="checkbox-label" for="logLevel">Level:</label>
-            <select id="logLevel">
-              <option value="debug">All</option>
-              <option value="info" selected="selected">Info</option>
-              <option value="warn">Warn</option>
-              <option value="error">Error</option>
+        <div data-testid="log-filters-group" class="center">
+          <div data-testid="log-filters-inner" style="text-align:left">
+            <label data-testid="log-level-label" class="checkbox-label" for="logLevel">Level:</label>
+            <select data-testid="log-level-select" id="logLevel">
+              <option data-testid="log-level-debug-item" value="debug">All</option>
+              <option data-testid="log-level-info-item" value="info" selected="selected">Info</option>
+              <option data-testid="log-level-warn-item" value="warn">Warn</option>
+              <option data-testid="log-level-error-item" value="error">Error</option>
             </select>
-            <label class="checkbox-label" for="logComp">Comp:</label>
-            <select id="logComp">
-              <option value="">All</option>
-              <option value="none">(none)</option>
+            <label data-testid="log-comp-label" class="checkbox-label" for="logComp">Comp:</label>
+            <select data-testid="log-comp-select" id="logComp">
+              <option data-testid="log-comp-all-item" value="">All</option>
+              <option data-testid="log-comp-none-item" value="none">(none)</option>
             </select>
-            <label class="checkbox-label" for="logSearch">Search:</label>
-            <input id="logSearch" type="text" placeholder="filter..." autocomplete="off" /><br />
-            <input id="logscrollbottom" name="logscrollbottom" type="checkbox" checked />
-            <label class="checkbox-label" for="logscrollbottom">Scroll to bottom</label>
+            <label data-testid="log-search-label" class="checkbox-label" for="logSearch">Search:</label>
+            <input data-testid="log-search-input" id="logSearch" type="text" placeholder="filter..." autocomplete="off" /><br />
+            <input data-testid="log-scroll-bottom-checkbox" id="logscrollbottom" name="logscrollbottom" type="checkbox" checked />
+            <label data-testid="log-scroll-bottom-label" class="checkbox-label" for="logscrollbottom">Scroll to bottom</label>
           </div>
         </div>
-        <div id="logTableWrap" class="log-table-wrap">
-          <table id="logTable">
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Level</th>
-                <th>Comp</th>
-                <th>Bot</th>
-                <th>Message</th>
+        <div data-testid="log-table-root" id="logTableWrap" class="log-table-wrap">
+          <table data-testid="log-table-inner" id="logTable">
+            <thead data-testid="log-table-header">
+              <tr data-testid="log-table-header-row">
+                <th data-testid="log-table-time-heading">Time</th>
+                <th data-testid="log-table-level-heading">Level</th>
+                <th data-testid="log-table-comp-heading">Comp</th>
+                <th data-testid="log-table-bot-heading">Bot</th>
+                <th data-testid="log-table-message-heading">Message</th>
               </tr>
             </thead>
-            <tbody id="logTableBody"></tbody>
+            <tbody data-testid="log-table-body" id="logTableBody"></tbody>
           </table>
         </div>
         <hr class="log-hr" />
       </div>
 
-      <div id="section-version" style="display: none">
-        <h2>Version</h2>
+      <div data-testid="version-root" id="section-version" style="display: none">
+        <h2 data-testid="version-heading">Version</h2>
         <hr class="small-hr">
-        <div id="versionDiv">
-          <button onclick="checkUpdate()">
+        <div data-testid="version-body" id="versionDiv">
+          <button data-testid="version-check-btn" onclick="checkUpdate()">
             Check For Update
           </button>
           <hr class="small-hr">
-          <p id="cVersion"></p>
-          <small class="desc" style="display: none;" id="cCommit"></small>
-          <p id="aUpdate"></p>
-          <a id="updateGuideLink" style="display: none" target="_blank"
+          <p data-testid="version-current-text" id="cVersion"></p>
+          <small data-testid="version-commit-note" class="desc" style="display: none;" id="cCommit"></small>
+          <p data-testid="version-update-text" id="aUpdate"></p>
+          <a data-testid="version-update-guide-link" id="updateGuideLink" style="display: none" target="_blank"
             href="https://github.com/kercre123/wire-pod/wiki/Things-to-Know#updating-wire-pod">Update Guide</a>
         </div>
         <hr />
       </div>
 
-      <div id="section-uicustomizer" style="display: none">
-        <h2>UI Customizer</h2>
+      <div data-testid="ui-settings-root" id="section-uicustomizer" style="display: none">
+        <h2 data-testid="ui-settings-heading">UI Customizer</h2>
         <hr class="small-hr">
-        <p>Accent Color</p>
-        <select onchange="setUIColor()" id="accent-color-choose">
-          <option value="teal" selected="selected">Teal (default)</option>
-          <option value="orange">Orange</option>
-          <option value="yellow">Yellow</option>
-          <option value="lime">Lime</option>
-          <option value="sapphire">Sapphire</option>
-          <option value="purple">Purple</option>
-          <option value="green">Green</option>
+        <p data-testid="ui-settings-accent-color-text">Accent Color</p>
+        <select data-testid="ui-settings-accent-color-select" onchange="setUIColor()" id="accent-color-choose">
+          <option data-testid="ui-settings-accent-color-teal-item" value="teal" selected="selected">Teal (default)</option>
+          <option data-testid="ui-settings-accent-color-orange-item" value="orange">Orange</option>
+          <option data-testid="ui-settings-accent-color-yellow-item" value="yellow">Yellow</option>
+          <option data-testid="ui-settings-accent-color-lime-item" value="lime">Lime</option>
+          <option data-testid="ui-settings-accent-color-sapphire-item" value="sapphire">Sapphire</option>
+          <option data-testid="ui-settings-accent-color-purple-item" value="purple">Purple</option>
+          <option data-testid="ui-settings-accent-color-green-item" value="green">Green</option>
         </select>
         <hr class="small-hr">
-        <p>Body Font</p>
-        <select onchange="setUIFont()" id="body-font-choose">
-          <option style="font-family: 'DroidSans';" value="droidsans" selected="selected">Droid Sans (default)</option>
-          <option style="font-family: 'IBMVGA';" value="ibmvga">IBM VGA 8x16 (retro)</option>
+        <p data-testid="ui-settings-body-font-text">Body Font</p>
+        <select data-testid="ui-settings-body-font-select" onchange="setUIFont()" id="body-font-choose">
+          <option data-testid="ui-settings-body-font-droidsans-item" style="font-family: 'DroidSans';" value="droidsans" selected="selected">Droid Sans (default)</option>
+          <option data-testid="ui-settings-body-font-ibmvga-item" style="font-family: 'IBMVGA';" value="ibmvga">IBM VGA 8x16 (retro)</option>
         </select>
         <hr />
       </div>

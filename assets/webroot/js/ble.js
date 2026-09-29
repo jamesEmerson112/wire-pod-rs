@@ -35,19 +35,19 @@ function checkBLECapability() {
 
 function showExternalSetupInstructions() {
   authEl.innerHTML = `
-    <p>Head to the following site on any device with Bluetooth support to set up your Vector.</p>
-    <a href="${vectorEpodSetup}" target="_blank">${vectorEpodSetup}</a>
+    <p data-testid="bot-setup-external-help-text">Head to the following site on any device with Bluetooth support to set up your Vector.</p>
+    <a data-testid="bot-setup-external-link" href="${vectorEpodSetup}" target="_blank">${vectorEpodSetup}</a>
     <br>
-    <small class="desc">Note: with OSKR/dev robots, it might give a warning about firmware. This can be ignored.</small>
+    <small data-testid="bot-setup-external-note" class="desc">Note: with OSKR/dev robots, it might give a warning about firmware. This can be ignored.</small>
   `;
 }
 
 function beginBLESetup() {
   authEl.innerHTML = `
-    <p>1. Place Vector on the charger.</p>
-    <p>2. Double press the button. A key should appear on screen.</p>
-    <p>3. Click 'Begin Scanning' and pair with your Vector.</p>
-    <button onclick="scanRobots(false)">Begin Scanning</button>
+    <p data-testid="bot-setup-pair-step-1-text">1. Place Vector on the charger.</p>
+    <p data-testid="bot-setup-pair-step-2-text">2. Double press the button. A key should appear on screen.</p>
+    <p data-testid="bot-setup-pair-step-3-text">3. Click 'Begin Scanning' and pair with your Vector.</p>
+    <button data-testid="bot-setup-pair-scan-btn" onclick="scanRobots(false)">Begin Scanning</button>
   `;
 }
 
@@ -60,25 +60,28 @@ function reInitBLE() {
 function scanRobots(returning) {
   const disconnectButtonDiv = document.getElementById("disconnectButton");
   disconnectButtonDiv.innerHTML = `
-    <button onclick="disconnect()">Disconnect</button>
+    <button data-testid="bot-setup-disconnect-btn" onclick="disconnect()">Disconnect</button>
   `;
   updateAuthel("Scanning...");
   fetch("/api-ble/scan", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" } })
     .then((response) => response.json())
     .then((parsed) => {
-      authEl.innerHTML = returning ? "<p>Incorrect PIN was entered, scanning again...</p>" : "";
-      authEl.innerHTML += "<small>Scanning...</small>";
+      authEl.innerHTML = returning ? "<p data-testid='bot-setup-scan-pin-error-text'>Incorrect PIN was entered, scanning again...</p>" : "";
+      authEl.innerHTML += "<small data-testid='bot-setup-scan-status-note'>Scanning...</small>";
 
       const buttonsDiv = document.createElement("div");
+      buttonsDiv.setAttribute("data-testid", "bot-setup-scan-robots-list");
       parsed.forEach((robot) => {
         const button = document.createElement("button");
         button.innerHTML = robot.name;
+        button.setAttribute("data-testid", `bot-setup-scan-robot-btn-${robot.id}`);
         button.onclick = () => connectRobot(robot.id);
         buttonsDiv.appendChild(button);
       });
 
       const rescanButton = document.createElement("button");
       rescanButton.innerHTML = "Re-scan";
+      rescanButton.setAttribute("data-testid", "bot-setup-scan-rescan-btn");
       rescanButton.onclick = () => {
         updateAuthel("Reiniting BLE then scanning...");
         reInitBLE().then(() => scanRobots(false));
@@ -120,10 +123,10 @@ function connectRobot(id) {
 
 function createPinEntry() {
   authEl.innerHTML = `
-    <p>Enter the pin shown on Vector's screen.</p>
-    <input type="text" id="pinEntry" placeholder="Enter PIN here" maxlength="6">
+    <p data-testid="bot-setup-pin-help-text">Enter the pin shown on Vector's screen.</p>
+    <input data-testid="bot-setup-pin-input" type="text" id="pinEntry" placeholder="Enter PIN here" maxlength="6">
     <br>
-    <button onclick="sendPin()">Send PIN</button>
+    <button data-testid="bot-setup-pin-send-btn" onclick="sendPin()">Send PIN</button>
   `;
 }
 
@@ -166,13 +169,13 @@ function scanWifi() {
     .then((response) => response.json())
     .then((networks) => {
       authEl.innerHTML = `
-        <p>Select a Wi-Fi network to connect Vector to.</p>
-        <button onclick="scanWifi()">Scan Again</button>
+        <p data-testid="bot-setup-wifi-help-text">Select a Wi-Fi network to connect Vector to.</p>
+        <button data-testid="bot-setup-wifi-rescan-btn" onclick="scanWifi()">Scan Again</button>
         <br>
         ${networks
           .map(
             (network) =>
-              network.ssid && `<button onclick="createWiFiPassEntry('${network.ssid}', '${network.authtype}')">${network.ssid}</button>`
+              network.ssid && `<button data-testid="bot-setup-wifi-network-btn-${network.ssid}" onclick="createWiFiPassEntry('${network.ssid}', '${network.authtype}')">${network.ssid}</button>`
           )
           .join("")}
       `;
@@ -184,11 +187,11 @@ function scanWifi() {
 
 function createWiFiPassEntry(ssid, authtype) {
   authEl.innerHTML = `
-    <button onclick="scanWifi()">Scan Again</button>
-    <p>Enter the password for ${ssid}</p>
-    <input type="text" id="passEntry" placeholder="Password">
+    <button data-testid="bot-setup-wifi-pass-rescan-btn" onclick="scanWifi()">Scan Again</button>
+    <p data-testid="bot-setup-wifi-pass-help-text">Enter the password for ${ssid}</p>
+    <input data-testid="bot-setup-wifi-pass-input" type="text" id="passEntry" placeholder="Password">
     <br>
-    <button onclick="connectWifi('${ssid}', '${authtype}')">Connect to Wi-Fi</button>
+    <button data-testid="bot-setup-wifi-connect-btn" onclick="connectWifi('${ssid}', '${authtype}')">Connect to Wi-Fi</button>
   `;
 }
 
@@ -248,10 +251,10 @@ function whatToDo() {
 
 function showRecoveryInstructions() {
   authEl.innerHTML = `
-    <p>1. Place Vector on the charger.</p>
-    <p>2. Hold the button for 15 seconds. He will turn off - keep holding it until he turns back on.</p>
-    <p>3. Click 'Begin Scanning' and pair with your Vector.</p>
-    <button onclick="scanRobots(false)">Begin Scanning</button>
+    <p data-testid="bot-setup-recovery-step-1-text">1. Place Vector on the charger.</p>
+    <p data-testid="bot-setup-recovery-step-2-text">2. Hold the button for 15 seconds. He will turn off - keep holding it until he turns back on.</p>
+    <p data-testid="bot-setup-recovery-step-3-text">3. Click 'Begin Scanning' and pair with your Vector.</p>
+    <button data-testid="bot-setup-recovery-scan-btn" onclick="scanRobots(false)">Begin Scanning</button>
   `;
   alert("Your bot is not on the correct firmware for wire-pod. Follow the directions to put him in recovery mode.");
 }
@@ -262,7 +265,7 @@ function showDevWarning() {
 }
 
 function showAuthButton() {
-  authEl.innerHTML = `<button onclick="doAuth()">AUTHENTICATE</button>`;
+  authEl.innerHTML = `<button data-testid="bot-setup-auth-btn" onclick="doAuth()">AUTHENTICATE</button>`;
 }
 
 function doOTA(url) {
@@ -294,7 +297,7 @@ function doOTA(url) {
 }
 
 function updateAuthel(update) {
-  authEl.innerHTML = `<p>${update}</p>`;
+  authEl.innerHTML = `<p data-testid="bot-setup-auth-status-text">${update}</p>`;
 }
 
 function doAuth() {
@@ -316,6 +319,7 @@ function showAuthError() {
   troubleshootingLink.href = "https://github.com/kercre123/wire-pod/wiki/Troubleshooting#error-logging-in-the-bot-is-likely-unable-to-communicate-with-your-wire-pod-instance";
   troubleshootingLink.target = "_blank";
   troubleshootingLink.innerText = "https://github.com/kercre123/wire-pod/wiki/Troubleshooting";
+  troubleshootingLink.setAttribute("data-testid", "bot-setup-auth-troubleshooting-link");
   authEl.appendChild(document.createElement("br"));
   authEl.appendChild(troubleshootingLink);
 }
@@ -323,9 +327,9 @@ function showAuthError() {
 function showWakeOptions() {
   updateAuthel("Authentication was successful! How would you like to wake Vector up?");
   authEl.innerHTML += `
-    <button onclick="doOnboard(true)">Wake with wake-up animation (recommended)</button>
+    <button data-testid="bot-setup-wake-anim-btn" onclick="doOnboard(true)">Wake with wake-up animation (recommended)</button>
     <br>
-    <button onclick="doOnboard(false)">Wake immediately, without wake-up animation</button>
+    <button data-testid="bot-setup-wake-now-btn" onclick="doOnboard(false)">Wake immediately, without wake-up animation</button>
   `;
 }
 
@@ -336,7 +340,7 @@ function doOnboard(withAnim) {
     updateAuthel("Vector is now fully set up! Use the Bot Settings tab to further configure your bot.");
     const disconnectButtonDiv = document.getElementById("disconnectButton");
     disconnectButtonDiv.innerHTML = `
-      <button onclick="checkBLECapability()">Return to pair instructions</button>
+      <button data-testid="bot-setup-return-btn" onclick="checkBLECapability()">Return to pair instructions</button>
     `;
   });
 }

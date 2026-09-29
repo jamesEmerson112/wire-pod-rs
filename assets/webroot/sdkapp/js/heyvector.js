@@ -1,6 +1,6 @@
 async function triggerHeyVector() {
   const statusDiv = document.getElementById("heyVectorStatus");
-  statusDiv.innerHTML = "<p>Triggering Hey Vector...</p>";
+  statusDiv.innerHTML = "<p data-testid='bot-settings-hey-vector-pending-text'>Triggering Hey Vector...</p>";
   
   try {
     const response = await fetch("/api-sdk/trigger_wake_word?serial=" + esn, {
@@ -17,7 +17,7 @@ async function triggerHeyVector() {
     const result = await response.text();
     
     if (result.includes("success") || result.includes("ok")) {
-      statusDiv.innerHTML = "<p style='color: var(--fg-color);'>Hey Vector triggered successfully!</p>";
+      statusDiv.innerHTML = "<p data-testid='bot-settings-hey-vector-success-text' style='color: var(--fg-color);'>Hey Vector triggered successfully!</p>";
     } else {
       throw new Error(result || "Unknown error");
     }

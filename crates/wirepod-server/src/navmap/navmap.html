@@ -71,57 +71,57 @@ dd.err { color: var(--red); }
 }
 </style>
 </head>
-<body>
-<header>
-  <h1>Vector nav map</h1>
-  <span id="head-serial"></span>
-  <p id="status" role="status" aria-live="polite">Connecting</p>
+<body data-testid="navmap-page-root">
+<header data-testid="navmap-header">
+  <h1 data-testid="navmap-title-heading">Vector nav map</h1>
+  <span data-testid="navmap-serial-text" id="head-serial"></span>
+  <p data-testid="navmap-status-text" id="status" role="status" aria-live="polite">Connecting</p>
 </header>
-<main>
-  <div id="stage">
-    <canvas id="map" role="img" aria-label="Vector's nav map, drawn nose-up: screen-up is his +x, screen-left is his +y"></canvas>
-    <div id="bars">
-      <div id="error-bar" class="bar err" hidden></div>
-      <div id="banner" class="bar warn" role="status" hidden></div>
-      <div id="frame-note" class="bar note" hidden></div>
+<main data-testid="navmap-body">
+  <div data-testid="navmap-stage-group" id="stage">
+    <canvas data-testid="navmap-canvas-media" id="map" role="img" aria-label="Vector's nav map, drawn nose-up: screen-up is his +x, screen-left is his +y"></canvas>
+    <div data-testid="navmap-bars-list" id="bars">
+      <div data-testid="navmap-error-note" id="error-bar" class="bar err" hidden></div>
+      <div data-testid="navmap-origin-banner-note" id="banner" class="bar warn" role="status" hidden></div>
+      <div data-testid="navmap-frame-note" id="frame-note" class="bar note" hidden></div>
     </div>
-    <div id="overlay" hidden>
-      <div class="card">
-        <h2 id="ov-title"></h2>
-        <p id="ov-text"></p>
-        <p id="ov-status"></p>
-        <div id="picker"></div>
+    <div data-testid="navmap-overlay-root" id="overlay" hidden>
+      <div data-testid="navmap-overlay-inner" class="card">
+        <h2 data-testid="navmap-overlay-heading" id="ov-title"></h2>
+        <p data-testid="navmap-overlay-text" id="ov-text"></p>
+        <p data-testid="navmap-overlay-status-text" id="ov-status"></p>
+        <div data-testid="navmap-picker-list" id="picker"></div>
       </div>
     </div>
-    <div id="tools">
-      <span class="hint">Scroll to zoom, drag to pan</span>
-      <button id="fit" type="button">Fit</button>
+    <div data-testid="navmap-tools-actions" id="tools">
+      <span data-testid="navmap-tools-hint-note" class="hint">Scroll to zoom, drag to pan</span>
+      <button data-testid="navmap-tools-fit-btn" id="fit" type="button">Fit</button>
     </div>
   </div>
-  <aside>
-    <section>
-      <h2>Robot</h2>
-      <dl>
-        <dt>Serial</dt><dd id="f-serial">–</dd>
-        <dt>Status</dt><dd id="f-status">–</dd>
-        <dt>Localization</dt><dd id="f-loc">–</dd>
-        <dt>Pose</dt><dd id="f-pose">–</dd>
-        <dt>Pose frame</dt><dd id="f-frame">–</dd>
+  <aside data-testid="navmap-panel-root">
+    <section data-testid="navmap-robot-group">
+      <h2 data-testid="navmap-robot-heading">Robot</h2>
+      <dl data-testid="navmap-robot-list">
+        <dt data-testid="navmap-robot-serial-eyebrow">Serial</dt><dd data-testid="navmap-robot-serial-text" id="f-serial">–</dd>
+        <dt data-testid="navmap-robot-status-eyebrow">Status</dt><dd data-testid="navmap-robot-status-text" id="f-status">–</dd>
+        <dt data-testid="navmap-robot-localization-eyebrow">Localization</dt><dd data-testid="navmap-robot-localization-text" id="f-loc">–</dd>
+        <dt data-testid="navmap-robot-pose-eyebrow">Pose</dt><dd data-testid="navmap-robot-pose-text" id="f-pose">–</dd>
+        <dt data-testid="navmap-robot-frame-eyebrow">Pose frame</dt><dd data-testid="navmap-robot-frame-text" id="f-frame">–</dd>
       </dl>
-      <div id="flags" class="chips"></div>
+      <div data-testid="navmap-robot-flags-list" id="flags" class="chips"></div>
     </section>
-    <section>
-      <h2>Map</h2>
-      <dl>
-        <dt>Origin</dt><dd id="f-origin">–</dd>
-        <dt>Root</dt><dd id="f-root">–</dd>
-        <dt>Quads</dt><dd id="f-quads">–</dd>
-        <dt>Last map</dt><dd id="f-age">–</dd>
+    <section data-testid="navmap-map-group">
+      <h2 data-testid="navmap-map-heading">Map</h2>
+      <dl data-testid="navmap-map-list">
+        <dt data-testid="navmap-map-origin-eyebrow">Origin</dt><dd data-testid="navmap-map-origin-text" id="f-origin">–</dd>
+        <dt data-testid="navmap-map-root-eyebrow">Root</dt><dd data-testid="navmap-map-root-text" id="f-root">–</dd>
+        <dt data-testid="navmap-map-quads-eyebrow">Quads</dt><dd data-testid="navmap-map-quads-text" id="f-quads">–</dd>
+        <dt data-testid="navmap-map-age-eyebrow">Last map</dt><dd data-testid="navmap-map-age-text" id="f-age">–</dd>
       </dl>
     </section>
-    <section>
-      <h2>Legend</h2>
-      <ul id="legend"></ul>
+    <section data-testid="navmap-legend-group">
+      <h2 data-testid="navmap-legend-heading">Legend</h2>
+      <ul data-testid="navmap-legend-list" id="legend"></ul>
     </section>
   </aside>
 </main>
@@ -233,6 +233,7 @@ dd.err { color: var(--red); }
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "pick";
+      btn.setAttribute("data-testid", `navmap-picker-btn-${b.esn}`);
       btn.textContent = b.ip ? `${b.esn} at ${b.ip}` : b.esn;
       btn.addEventListener("click", () => { useSerial(b.esn); refreshChrome(); schedule(0); });
       return btn;
@@ -474,12 +475,14 @@ dd.err { color: var(--red); }
     const chips = list.map((f) => {
       const s = document.createElement("span");
       s.className = `chip ${FLAG_TONE[f] || ""}`;
+      s.setAttribute("data-testid", `navmap-robot-flag-chip-${f}`);
       s.textContent = f;
       return s;
     });
     if (flags && !list.length) {
       const s = document.createElement("span");
       s.className = "chip";
+      s.setAttribute("data-testid", "navmap-robot-flag-none-chip");
       s.textContent = "no flags";
       chips.push(s);
     }
@@ -498,6 +501,12 @@ dd.err { color: var(--red); }
     $("legend").replaceChildren(...CONTENT.map((name, i) => {
       const li = document.createElement("li");
       li.innerHTML = '<span class="sw"><i></i></span><span class="num"></span><span class="name"></span><span class="count"></span>';
+      li.setAttribute("data-testid", `navmap-legend-item-${name}`);
+      li.querySelector(".sw").setAttribute("data-testid", `navmap-legend-swatch-icon-${name}`);
+      li.querySelector(".sw i").setAttribute("data-testid", `navmap-legend-swatch-inner-${name}`);
+      li.querySelector(".num").setAttribute("data-testid", `navmap-legend-num-text-${name}`);
+      li.querySelector(".name").setAttribute("data-testid", `navmap-legend-name-text-${name}`);
+      li.querySelector(".count").setAttribute("data-testid", `navmap-legend-count-text-${name}`);
       li.querySelector(".num").textContent = String(i);
       li.querySelector(".name").textContent = NEVER_WRITTEN.has(name) ? `${name} (never written)` : name;
       if (NEVER_WRITTEN.has(name)) {

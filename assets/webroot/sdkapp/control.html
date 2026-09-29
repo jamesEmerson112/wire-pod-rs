@@ -15,89 +15,89 @@
   <meta http-equiv="Expires" content="Thu, 01 Jan 1970 00:00:00 GMT">
 </head>
 
-<body onload="updateControlButtons()">
-  <div id="outer">
-    <div id="content">
-      <h1 class="center">Vector control (beta)</h1>
+<body data-testid="bot-control-page-root" onload="updateControlButtons()">
+  <div data-testid="bot-control-page-inner" id="outer">
+    <div data-testid="bot-control-content-body" id="content">
+      <h1 data-testid="bot-control-title-heading" class="center">Vector control (beta)</h1>
       <hr />
-      <div class="main-nav-parent">
-        <div class="main-nav-child">
-          <a href="#" onclick="goBackToSettings()"><i class="fa-solid fa-reply"></i><br />Back</a>
+      <div data-testid="bot-control-nav-list" class="main-nav-parent">
+        <div data-testid="bot-control-nav-back-item" class="main-nav-child">
+          <a data-testid="bot-control-nav-back-link" href="#" onclick="goBackToSettings()"><i data-testid="bot-control-nav-back-icon" class="fa-solid fa-reply"></i><br />Back</a>
         </div>
       </div>
       <hr />
 
-      <div id="sdkActions">
-        <h2 class="center">Camera Feed</h2>
+      <div data-testid="bot-control-actions-body" id="sdkActions">
+        <h2 data-testid="bot-control-cam-heading" class="center">Camera Feed</h2>
         <hr class="small-hr">
-        <div class="center" id="camStream"></div>
-        <div style="text-align: left;" class="center">
-          <label>
-            <input type="radio" name="cam" id="cam" onclick="showCamStream()">Begin Camera Stream<br>
+        <div data-testid="bot-control-cam-media" class="center" id="camStream"></div>
+        <div data-testid="bot-control-cam-group" style="text-align: left;" class="center">
+          <label data-testid="bot-control-cam-start-label">
+            <input data-testid="bot-control-cam-start-radio" type="radio" name="cam" id="cam" onclick="showCamStream()">Begin Camera Stream<br>
           </label>
-          <label>
-            <input type="radio" name="cam" id="cam" onclick="stopCamStream()" checked>Stop Camera Stream<br>
+          <label data-testid="bot-control-cam-stop-label">
+            <input data-testid="bot-control-cam-stop-radio" type="radio" name="cam" id="cam" onclick="stopCamStream()" checked>Stop Camera Stream<br>
           </label>
         </div>
         <hr />
 
-        <h2 class="center">Behavior Control</h2>
+        <h2 data-testid="bot-control-behavior-heading" class="center">Behavior Control</h2>
         <hr class="small-hr">
-        <small class="center">You must assume behavior control before performing any action</small>
-        <div style="text-align: left;" class="center">
-          <label>
-            <input type="radio" name="control" id="assume_control"
+        <small data-testid="bot-control-behavior-note" class="center">You must assume behavior control before performing any action</small>
+        <div data-testid="bot-control-behavior-group" style="text-align: left;" class="center">
+          <label data-testid="bot-control-behavior-assume-label">
+            <input data-testid="bot-control-behavior-assume-radio" type="radio" name="control" id="assume_control"
               onclick="sendForm('/api-sdk/assume_behavior_control?priority=high'); updateControlButtons();">Assume<br>
           </label>
-          <label>
-            <input type="radio" name="control" id="release_control"
+          <label data-testid="bot-control-behavior-release-label">
+            <input data-testid="bot-control-behavior-release-radio" type="radio" name="control" id="release_control"
               onclick="sendForm('/api-sdk/release_behavior_control'); updateControlButtons();" checked>Release<br>
           </label>
         </div>
         <hr />
 
-        <h2 class="center">Move Motors</h2>
+        <h2 data-testid="bot-control-keyboard-heading" class="center">Move Motors</h2>
         <hr class="small-hr">
-        <small class="center">Toggle Keyboard Controls (unstable) <br> WASD for wheels, R-lift up, F-lift down, T-head
+        <small data-testid="bot-control-keyboard-note" class="center">Toggle Keyboard Controls (unstable) <br> WASD for wheels, R-lift up, F-lift down, T-head
           up, G-head down</small>
-        <div style="text-align: left;" class="center">
-          <label>
-            <input type="radio" name="keycontrol" id="key_control_on" onclick="toggleKeyboard()" disabled>On<br>
+        <div data-testid="bot-control-keyboard-group" style="text-align: left;" class="center">
+          <label data-testid="bot-control-keyboard-on-label">
+            <input data-testid="bot-control-keyboard-on-radio" type="radio" name="keycontrol" id="key_control_on" onclick="toggleKeyboard()" disabled>On<br>
           </label>
-          <label>
-            <input type="radio" name="keycontrol" id="key_control_off" onclick="toggleKeyboard()" checked
+          <label data-testid="bot-control-keyboard-off-label">
+            <input data-testid="bot-control-keyboard-off-radio" type="radio" name="keycontrol" id="key_control_off" onclick="toggleKeyboard()" checked
               disabled>Off<br>
           </label>
         </div>
         <hr />
 
-        <h2 class="center">Mirror Mode</h2>
+        <h2 data-testid="bot-control-mirror-heading" class="center">Mirror Mode</h2>
         <hr class="small-hr">
-        <div style="text-align: left;" class="center">
-          <label>
-            <input type="radio" name="mirror" id="mirror_on" onclick="sendForm('/api-sdk/mirror_mode?enable=true')"
+        <div data-testid="bot-control-mirror-group" style="text-align: left;" class="center">
+          <label data-testid="bot-control-mirror-on-label">
+            <input data-testid="bot-control-mirror-on-radio" type="radio" name="mirror" id="mirror_on" onclick="sendForm('/api-sdk/mirror_mode?enable=true')"
               disabled>On<br>
           </label>
-          <label>
-            <input type="radio" name="mirror" id="mirror_off" onclick="sendForm('/api-sdk/mirror_mode?enable=false')"
+          <label data-testid="bot-control-mirror-off-label">
+            <input data-testid="bot-control-mirror-off-radio" type="radio" name="mirror" id="mirror_off" onclick="sendForm('/api-sdk/mirror_mode?enable=false')"
               checked disabled>Off<br>
           </label>
         </div>
         <hr />
 
-        <h2 class="center">Say Text</h2>
-        <div class="center">
-          <input class="tinput" name="textSay" id="textSay" type="text" placeholder="Put text here" disabled />
+        <h2 data-testid="bot-control-say-heading" class="center">Say Text</h2>
+        <div data-testid="bot-control-say-group" class="center">
+          <input data-testid="bot-control-say-input" class="tinput" name="textSay" id="textSay" type="text" placeholder="Put text here" disabled />
         </div>
-        <button onclick="sayText()" type="submit">Submit</button>
+        <button data-testid="bot-control-say-submit-btn" onclick="sayText()" type="submit">Submit</button>
       <hr />
-      <h2 class="center">Play Audio</h2>
-        <div class="center">
-          <input type="file" id="fileInput" accept=".wav">
+      <h2 data-testid="bot-control-audio-heading" class="center">Play Audio</h2>
+        <div data-testid="bot-control-audio-file-group" class="center">
+          <input data-testid="bot-control-audio-file-input" type="file" id="fileInput" accept=".wav">
         </div>
-        <button id="uploadButton" style="display: none;" type="submit">Send Audio</button>
-        <div div class="center">
-          <audio id="audioOutput" controls></audio>
+        <button data-testid="bot-control-audio-send-btn" id="uploadButton" style="display: none;" type="submit">Send Audio</button>
+        <div data-testid="bot-control-audio-player-group" div class="center">
+          <audio data-testid="bot-control-audio-media" id="audioOutput" controls></audio>
         </div>
       </div>
       <hr />

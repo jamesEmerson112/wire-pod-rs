@@ -29,16 +29,19 @@ function updateIntentSelection(element) {
         const select = document.createElement("select");
         select.name = `${element}intents`;
         select.id = `${element}intents`;
+        select.setAttribute("data-testid", `intents-choose-select-${element}`);
         listResponse.forEach((intent) => {
           if (!intent.issystem) {
             const option = document.createElement("option");
             option.value = intent.name;
             option.text = intent.name;
+            option.setAttribute("data-testid", `intents-choose-item-${element}-${intent.name}`);
             select.appendChild(option);
           }
         });
         const label = document.createElement("label");
         label.innerHTML = "Choose the intent: ";
+        label.setAttribute("data-testid", `intents-choose-label-${element}`);
         label.htmlFor = `${element}intents`;
         container.appendChild(label).appendChild(select);
 
@@ -46,6 +49,7 @@ function updateIntentSelection(element) {
       } else {
         const error = document.createElement("p");
         error.innerHTML = "No intents found, you must add one first";
+        error.setAttribute("data-testid", `intents-choose-empty-text-${element}`);
         container.appendChild(error);
       }
     }).catch(() => {
@@ -75,14 +79,17 @@ function createIntentSelect(element) {
   const select = document.createElement("select");
   select.name = `${element}intents`;
   select.id = `${element}intents`;
+  select.setAttribute("data-testid", `intents-add-intent-select-${element}`);
   intentsJson.forEach((intent) => {
     const option = document.createElement("option");
     option.value = intent;
     option.text = intent;
+    option.setAttribute("data-testid", `intents-add-intent-item-${element}-${intent}`);
     select.appendChild(option);
   });
   const label = document.createElement("label");
   label.innerHTML = "Intent to send to robot after script executed:";
+  label.setAttribute("data-testid", `intents-add-intent-label-${element}`);
   label.htmlFor = `${element}intents`;
   getE(element).innerHTML = "";
   getE(element).appendChild(label).appendChild(select);
@@ -99,23 +106,24 @@ function editFormCreate() {
         const form = document.createElement("form");
         form.id = "editIntentForm";
         form.name = "editIntentForm";
+        form.setAttribute("data-testid", "intents-edit-form");
         form.innerHTML = `
-          <label for="name">Name:<br><input type="text" id="name" value="${intent.name}"></label><br>
-          <label for="description">Description:<br><input type="text" id="description" value="${intent.description}"></label><br>
-          <label for="utterances">Utterances:<br><input type="text" id="utterances" value="${intent.utterances.join(",")}"></label><br>
-          <label for="intent">Intent:<br><select id="intent">${intentsJson
+          <label data-testid="intents-edit-form-name-label" for="name">Name:<br><input data-testid="intents-edit-form-name-input" type="text" id="name" value="${intent.name}"></label><br>
+          <label data-testid="intents-edit-form-description-label" for="description">Description:<br><input data-testid="intents-edit-form-description-input" type="text" id="description" value="${intent.description}"></label><br>
+          <label data-testid="intents-edit-form-utterances-label" for="utterances">Utterances:<br><input data-testid="intents-edit-form-utterances-input" type="text" id="utterances" value="${intent.utterances.join(",")}"></label><br>
+          <label data-testid="intents-edit-form-intent-label" for="intent">Intent:<br><select data-testid="intents-edit-form-intent-select" id="intent">${intentsJson
             .map(
               (name) =>
-                `<option value="${name}" ${name === intent.intent ? "selected" : ""
+                `<option data-testid="intents-edit-form-intent-item-${name}" value="${name}" ${name === intent.intent ? "selected" : ""
                 }>${name}</option>`
             )
             .join("")}</select></label><br>
-          <label for="paramname">Param Name:<br><input type="text" id="paramname" value="${intent.params.paramname}"></label><br>
-          <label for="paramvalue">Param Value:<br><input type="text" id="paramvalue" value="${intent.params.paramvalue}"></label><br>
-          <label for="exec">Exec:<br><input type="text" id="exec" value="${intent.exec}"></label><br>
-          <label for="execargs">Exec Args:<br><input type="text" id="execargs" value="${intent.execargs.join(",")}"></label><br>
-          <label for="luascript">Lua code to run:</label><br><textarea id="luascript">${intent.luascript}</textarea>
-          <button onclick="editIntent(${intentNumber})">Submit</button>
+          <label data-testid="intents-edit-form-param-name-label" for="paramname">Param Name:<br><input data-testid="intents-edit-form-param-name-input" type="text" id="paramname" value="${intent.params.paramname}"></label><br>
+          <label data-testid="intents-edit-form-param-value-label" for="paramvalue">Param Value:<br><input data-testid="intents-edit-form-param-value-input" type="text" id="paramvalue" value="${intent.params.paramvalue}"></label><br>
+          <label data-testid="intents-edit-form-exec-label" for="exec">Exec:<br><input data-testid="intents-edit-form-exec-input" type="text" id="exec" value="${intent.exec}"></label><br>
+          <label data-testid="intents-edit-form-exec-args-label" for="execargs">Exec Args:<br><input data-testid="intents-edit-form-exec-args-input" type="text" id="execargs" value="${intent.execargs.join(",")}"></label><br>
+          <label data-testid="intents-edit-form-lua-label" for="luascript">Lua code to run:</label><br><textarea data-testid="intents-edit-form-lua-textarea" id="luascript">${intent.luascript}</textarea>
+          <button data-testid="intents-edit-form-submit-btn" onclick="editIntent(${intentNumber})">Submit</button>
         `;
         //form.querySelector("#submit").onclick = () => editIntent(intentNumber);
         getE("editIntentForm").innerHTML = "";
@@ -465,6 +473,7 @@ function displayMessage(elementId, message) {
   element.innerHTML = "";
   const p = document.createElement("p");
   p.textContent = message;
+  p.setAttribute("data-testid", `status-message-text-${elementId}`);
   element.appendChild(p);
 }
 
@@ -473,6 +482,7 @@ function displayError(elementId, message) {
   element.innerHTML = "";
   const error = document.createElement("p");
   error.innerHTML = message;
+  error.setAttribute("data-testid", `status-error-text-${elementId}`);
   element.appendChild(error);
 }
 
@@ -547,14 +557,18 @@ function registerComp(comp) {
   const opt = document.createElement("option");
   opt.value = comp;
   opt.textContent = comp;
+  opt.setAttribute("data-testid", `log-comp-item-${comp}`);
   getE("logComp").appendChild(opt);
 }
 
 function makeDateRow(t) {
   const tr = document.createElement("tr");
   tr.className = "log-date-row";
+  const testidDate = new Date(t).toLocaleDateString("en-CA");
+  tr.setAttribute("data-testid", "log-table-date-row-" + testidDate);
   const td = document.createElement("td");
   td.colSpan = 5;
+  td.setAttribute("data-testid", "log-table-date-text-" + testidDate);
   td.textContent = "— " + logDateString(t) + " —";
   tr.appendChild(td);
   return tr;
@@ -562,29 +576,36 @@ function makeDateRow(t) {
 
 function makeLogRow(e) {
   const tr = document.createElement("tr");
+  const testidKey = "i" + logEntries.indexOf(e);
+  tr.setAttribute("data-testid", "log-table-row-" + testidKey);
 
   const tdTime = document.createElement("td");
   tdTime.className = "log-time";
+  tdTime.setAttribute("data-testid", "log-table-time-text-" + testidKey);
   tdTime.textContent = logTimeString(e.t);
   tr.appendChild(tdTime);
 
   const tdLevel = document.createElement("td");
   tdLevel.className = "level-" + e.level;
+  tdLevel.setAttribute("data-testid", "log-table-level-text-" + testidKey);
   tdLevel.textContent = e.level;
   tr.appendChild(tdLevel);
 
   const tdComp = document.createElement("td");
   tdComp.className = e.comp ? "comp-" + e.comp : "log-empty";
+  tdComp.setAttribute("data-testid", "log-table-comp-text-" + testidKey);
   tdComp.textContent = e.comp || "—";
   tr.appendChild(tdComp);
 
   const tdBot = document.createElement("td");
   tdBot.className = e.bot ? "log-bot" : "log-bot log-empty";
+  tdBot.setAttribute("data-testid", "log-table-bot-text-" + testidKey);
   tdBot.textContent = e.bot || "—";
   tr.appendChild(tdBot);
 
   const tdMsg = document.createElement("td");
   tdMsg.className = "log-msg";
+  tdMsg.setAttribute("data-testid", "log-table-message-text-" + testidKey);
   tdMsg.textContent = e.msg;
   tr.appendChild(tdMsg);
 
@@ -787,6 +808,7 @@ function renderBotStatus(bots) {
   if (!bots || bots.length === 0) {
     const span = document.createElement("span");
     span.className = "bot-status-empty";
+    span.setAttribute("data-testid", "home-bot-status-empty-text");
     span.textContent = "no robots seen yet";
     strip.appendChild(span);
     return;
@@ -794,13 +816,16 @@ function renderBotStatus(bots) {
   bots.forEach((bot) => {
     const pill = document.createElement("span");
     pill.className = "bot-status-pill";
+    pill.setAttribute("data-testid", `home-bot-status-pill-${bot.esn}`);
 
     const dot = document.createElement("span");
     dot.className = "status-dot status-" + bot.status;
+    dot.setAttribute("data-testid", `home-bot-status-icon-${bot.esn}`);
     pill.appendChild(dot);
 
     const label = document.createElement("span");
     label.className = "bot-status-label";
+    label.setAttribute("data-testid", `home-bot-status-text-${bot.esn}`);
     if (bot.status === "online") {
       label.textContent = bot.esn + " · online (" + bot.timesince + "s ago)";
     } else if (bot.status === "offline") {

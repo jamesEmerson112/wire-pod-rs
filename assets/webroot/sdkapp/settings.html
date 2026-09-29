@@ -15,135 +15,135 @@
   <meta http-equiv="Expires" content="Thu, 01 Jan 1970 00:00:00 GMT">
 </head>
 
-<body>
+<body data-testid="sdk-dashboard-page-root">
 
-  <div id="outer">
-    <div id="content" class="">
+  <div data-testid="sdk-dashboard-page-inner" id="outer">
+    <div data-testid="sdk-dashboard-content-body" id="content" class="">
 
-      <div class="vb-wrap">
-        <div class="vb-card" id="vbCard">
+      <div data-testid="sdk-dashboard-wrap-group" class="vb-wrap">
+        <div data-testid="sdk-dashboard-root" class="vb-card" id="vbCard">
 
-          <div class="vb-head">
-            <div class="vb-ident">
-              <img class="vb-avatar" id="vbAvatar" src="/assets/face.gif" alt="">
-              <div class="vb-ident-text">
-                <div class="vb-ident-line">
-                  <span class="vb-name">VECTOR</span>
-                  <span class="vb-serial" id="vbSerial"></span>
-                  <span class="vb-pill" id="vbStatusPill"><span class="vb-dot"></span><span id="vbStatusText">...</span></span>
+          <div data-testid="sdk-dashboard-header" class="vb-head">
+            <div data-testid="sdk-dashboard-ident-group" class="vb-ident">
+              <img data-testid="sdk-dashboard-avatar-img" class="vb-avatar" id="vbAvatar" src="/assets/face.gif" alt="">
+              <div data-testid="sdk-dashboard-ident-body" class="vb-ident-text">
+                <div data-testid="sdk-dashboard-ident-row" class="vb-ident-line">
+                  <span data-testid="sdk-dashboard-name-text" class="vb-name">VECTOR</span>
+                  <span data-testid="sdk-dashboard-serial-text" class="vb-serial" id="vbSerial"></span>
+                  <span data-testid="sdk-dashboard-status-pill" class="vb-pill" id="vbStatusPill"><span data-testid="sdk-dashboard-status-icon" class="vb-dot"></span><span data-testid="sdk-dashboard-status-text" id="vbStatusText">...</span></span>
                 </div>
-                <div class="vb-sub" id="vbSubline"></div>
+                <div data-testid="sdk-dashboard-subline-text" class="vb-sub" id="vbSubline"></div>
               </div>
             </div>
-            <div class="vb-readouts">
-              <div class="vb-readout">
-                <div class="vb-rl">BATTERY</div>
-                <div class="vb-rv vb-rv-accent"><span id="vbBattPct">--</span> <span class="vb-ru" id="vbBattVolts"></span></div>
+            <div data-testid="sdk-dashboard-readouts-group" class="vb-readouts">
+              <div data-testid="sdk-dashboard-battery-item" class="vb-readout">
+                <div data-testid="sdk-dashboard-battery-eyebrow" class="vb-rl">BATTERY</div>
+                <div data-testid="sdk-dashboard-battery-body" class="vb-rv vb-rv-accent"><span data-testid="sdk-dashboard-battery-percent-text" id="vbBattPct">--</span> <span data-testid="sdk-dashboard-battery-volts-text" class="vb-ru" id="vbBattVolts"></span></div>
               </div>
-              <div class="vb-readout">
-                <div class="vb-rl">THROUGHPUT</div>
-                <div class="vb-rv">&#8595;<span id="vbThroughput">--</span> <span class="vb-ru">kB/s</span></div>
+              <div data-testid="sdk-dashboard-throughput-item" class="vb-readout">
+                <div data-testid="sdk-dashboard-throughput-eyebrow" class="vb-rl">THROUGHPUT</div>
+                <div data-testid="sdk-dashboard-throughput-body" class="vb-rv">&#8595;<span data-testid="sdk-dashboard-throughput-value-text" id="vbThroughput">--</span> <span data-testid="sdk-dashboard-throughput-unit-text" class="vb-ru">kB/s</span></div>
               </div>
-              <div class="vb-readout">
-                <div class="vb-rl">LATENCY</div>
-                <div class="vb-rv"><span id="vbLatency">--</span><span class="vb-ru">ms</span></div>
+              <div data-testid="sdk-dashboard-latency-item" class="vb-readout">
+                <div data-testid="sdk-dashboard-latency-eyebrow" class="vb-rl">LATENCY</div>
+                <div data-testid="sdk-dashboard-latency-body" class="vb-rv"><span data-testid="sdk-dashboard-latency-value-text" id="vbLatency">--</span><span data-testid="sdk-dashboard-latency-unit-text" class="vb-ru">ms</span></div>
               </div>
-              <button class="vb-gear" id="vbGear" type="button" title="Settings" aria-label="Open settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"></circle><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.5-2-3.4-2.3 1a7.7 7.7 0 0 0-2.6-1.5L14.2 2h-4l-.3 2.6a7.7 7.7 0 0 0-2.6 1.5l-2.3-1-2 3.4 2 1.5a7.6 7.6 0 0 0 0 3l-2 1.5 2 3.4 2.3-1a7.7 7.7 0 0 0 2.6 1.5l.3 2.6h4l.3-2.6a7.7 7.7 0 0 0 2.6-1.5l2.3 1 2-3.4z"></path></svg></button>
+              <button data-testid="sdk-dashboard-settings-btn" class="vb-gear" id="vbGear" type="button" title="Settings" aria-label="Open settings"><svg data-testid="sdk-dashboard-settings-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"></circle><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.5-2-3.4-2.3 1a7.7 7.7 0 0 0-2.6-1.5L14.2 2h-4l-.3 2.6a7.7 7.7 0 0 0-2.6 1.5l-2.3-1-2 3.4 2 1.5a7.6 7.6 0 0 0 0 3l-2 1.5 2 3.4 2.3-1a7.7 7.7 0 0 0 2.6 1.5l.3 2.6h4l.3-2.6a7.7 7.7 0 0 0 2.6-1.5l2.3 1 2-3.4z"></path></svg></button>
             </div>
           </div>
 
-          <div class="vb-body">
+          <div data-testid="sdk-dashboard-body" class="vb-body">
 
-            <div class="vb-col vb-col-l">
+            <div data-testid="sdk-dashboard-left-col" class="vb-col vb-col-l">
 
-              <section class="vb-panel vb-panel-cam">
-                <div class="vb-phead">
-                  <span class="vb-ptitle"><svg class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#00ff80" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>CAMERA &middot; WHAT VECTOR SEES</span>
-                  <span class="vb-pacc vb-rec"><span class="vb-recdot"></span>REC 30fps</span>
+              <section data-testid="sdk-dashboard-cam-root" class="vb-panel vb-panel-cam">
+                <div data-testid="sdk-dashboard-cam-header" class="vb-phead">
+                  <span data-testid="sdk-dashboard-cam-heading" class="vb-ptitle"><svg data-testid="sdk-dashboard-cam-icon" class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#00ff80" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>CAMERA &middot; WHAT VECTOR SEES</span>
+                  <span data-testid="sdk-dashboard-cam-rec-badge" class="vb-pacc vb-rec"><span data-testid="sdk-dashboard-cam-rec-icon" class="vb-recdot"></span>REC 30fps</span>
                 </div>
-                <div class="vb-pbody">
-                  <div class="vb-cam-frame" id="vbCamFrame">
-                    <img class="vb-cam" id="vbCam" alt="Vector camera stream">
-                    <div class="vb-cam-cross"></div>
-                    <div class="vb-cam-meta">640&#215;360 &middot; /cam-stream</div>
+                <div data-testid="sdk-dashboard-cam-body" class="vb-pbody">
+                  <div data-testid="sdk-dashboard-cam-media" class="vb-cam-frame" id="vbCamFrame">
+                    <img data-testid="sdk-dashboard-cam-img" class="vb-cam" id="vbCam" alt="Vector camera stream">
+                    <div data-testid="sdk-dashboard-cam-crosshair-icon" class="vb-cam-cross"></div>
+                    <div data-testid="sdk-dashboard-cam-meta-note" class="vb-cam-meta">640&#215;360 &middot; /cam-stream</div>
                   </div>
                 </div>
               </section>
 
-              <section class="vb-panel vb-panel-grow">
-                <div class="vb-phead">
-                  <span class="vb-ptitle"><svg class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffb000" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"></path></svg>ACTIONS &middot; MOTOR STATE</span>
-                  <span class="vb-pacc"><span class="vb-badge vb-badge-todo">TODO</span></span>
+              <section data-testid="sdk-dashboard-motor-root" class="vb-panel vb-panel-grow">
+                <div data-testid="sdk-dashboard-motor-header" class="vb-phead">
+                  <span data-testid="sdk-dashboard-motor-heading" class="vb-ptitle"><svg data-testid="sdk-dashboard-motor-icon" class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#ffb000" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"></path></svg>ACTIONS &middot; MOTOR STATE</span>
+                  <span data-testid="sdk-dashboard-motor-status-group" class="vb-pacc"><span data-testid="sdk-dashboard-motor-todo-badge" class="vb-badge vb-badge-todo">TODO</span></span>
                 </div>
-                <div class="vb-pbody">
-                  <div class="vb-act-label">Current action</div>
-                  <div class="vb-act-value">Tracking face &middot; idle</div>
-                  <div class="vb-stats">
-                    <div class="vb-stat"><div class="vb-sl">HEAD ANGLE</div><div class="vb-sv">+12&deg;</div></div>
-                    <div class="vb-stat"><div class="vb-sl">LIFT HEIGHT</div><div class="vb-sv">32 mm</div></div>
-                    <div class="vb-stat"><div class="vb-sl">WHEELS L/R</div><div class="vb-sv">0.12 m/s</div></div>
-                    <div class="vb-stat"><div class="vb-sl">SPEAKER</div><div class="vb-sv">vol 3/5</div></div>
+                <div data-testid="sdk-dashboard-motor-body" class="vb-pbody">
+                  <div data-testid="sdk-dashboard-motor-action-eyebrow" class="vb-act-label">Current action</div>
+                  <div data-testid="sdk-dashboard-motor-action-text" class="vb-act-value">Tracking face &middot; idle</div>
+                  <div data-testid="sdk-dashboard-motor-stats-list" class="vb-stats">
+                    <div data-testid="sdk-dashboard-motor-head-angle-item" class="vb-stat"><div data-testid="sdk-dashboard-motor-head-angle-eyebrow" class="vb-sl">HEAD ANGLE</div><div data-testid="sdk-dashboard-motor-head-angle-text" class="vb-sv">+12&deg;</div></div>
+                    <div data-testid="sdk-dashboard-motor-lift-height-item" class="vb-stat"><div data-testid="sdk-dashboard-motor-lift-height-eyebrow" class="vb-sl">LIFT HEIGHT</div><div data-testid="sdk-dashboard-motor-lift-height-text" class="vb-sv">32 mm</div></div>
+                    <div data-testid="sdk-dashboard-motor-wheels-item" class="vb-stat"><div data-testid="sdk-dashboard-motor-wheels-eyebrow" class="vb-sl">WHEELS L/R</div><div data-testid="sdk-dashboard-motor-wheels-text" class="vb-sv">0.12 m/s</div></div>
+                    <div data-testid="sdk-dashboard-motor-speaker-item" class="vb-stat"><div data-testid="sdk-dashboard-motor-speaker-eyebrow" class="vb-sl">SPEAKER</div><div data-testid="sdk-dashboard-motor-speaker-text" class="vb-sv">vol 3/5</div></div>
                   </div>
-                  <div class="vb-queued"><span class="vb-tag-queued">QUEUED</span> return to charger &middot; idle timeout 90s</div>
+                  <div data-testid="sdk-dashboard-motor-queued-note" class="vb-queued"><span data-testid="sdk-dashboard-motor-queued-badge" class="vb-tag-queued">QUEUED</span> return to charger &middot; idle timeout 90s</div>
                 </div>
               </section>
 
             </div>
 
-            <div class="vb-col vb-col-m">
+            <div data-testid="sdk-dashboard-middle-col" class="vb-col vb-col-m">
 
-              <section class="vb-panel vb-panel-grow">
-                <div class="vb-phead">
-                  <span class="vb-ptitle"><svg class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#29e0d6" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3z"></path><path d="M9 3v15M15 6v15"></path></svg>NAVIGATION &middot; SLAM MAP</span>
-                  <span class="vb-pacc">X 1.2m &middot; Y 0.4m &middot; &theta; 34&deg; <span class="vb-badge vb-badge-todo">TODO</span></span>
+              <section data-testid="sdk-dashboard-map-root" class="vb-panel vb-panel-grow">
+                <div data-testid="sdk-dashboard-map-header" class="vb-phead">
+                  <span data-testid="sdk-dashboard-map-heading" class="vb-ptitle"><svg data-testid="sdk-dashboard-map-icon" class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#29e0d6" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3z"></path><path d="M9 3v15M15 6v15"></path></svg>NAVIGATION &middot; SLAM MAP</span>
+                  <span data-testid="sdk-dashboard-map-pose-text" class="vb-pacc">X 1.2m &middot; Y 0.4m &middot; &theta; 34&deg; <span data-testid="sdk-dashboard-map-todo-badge" class="vb-badge vb-badge-todo">TODO</span></span>
                 </div>
-                <div class="vb-pbody">
-                  <svg class="vb-map" viewBox="0 0 380 250" preserveAspectRatio="none" role="img" aria-label="SLAM map (demo data)">
+                <div data-testid="sdk-dashboard-map-body" class="vb-pbody">
+                  <svg data-testid="sdk-dashboard-map-media" class="vb-map" viewBox="0 0 380 250" preserveAspectRatio="none" role="img" aria-label="SLAM map (demo data)">
                     <defs>
                       <pattern id="vbMapGrid" width="30" height="30" patternUnits="userSpaceOnUse">
                         <path d="M30 0H0V30" fill="none" stroke="#29e0d6" stroke-opacity="0.09" stroke-width="1"></path>
                       </pattern>
                       <path id="vbMapPath" d="M46,206 C110,170 120,150 176,120 S250,70 320,44" fill="none"></path>
                     </defs>
-                    <rect x="0" y="0" width="380" height="250" fill="url(#vbMapGrid)"></rect>
-                    <rect x="150" y="150" width="70" height="26" rx="4" fill="#ffffff" fill-opacity="0.06" stroke="#ffffff" stroke-opacity="0.14"></rect>
-                    <rect x="245" y="120" width="30" height="52" rx="4" fill="#ffffff" fill-opacity="0.06" stroke="#ffffff" stroke-opacity="0.14"></rect>
-                    <use class="vb-map-path" href="#vbMapPath" stroke="#00ff80" stroke-width="2" stroke-dasharray="6 6"></use>
-                    <g transform="translate(46,206)"><rect x="-11" y="-9" width="22" height="18" rx="3" fill="none" stroke="#ced100" stroke-width="1.6"></rect><path d="M-4,-2 L2,-2 L-1,2 L4,2" fill="none" stroke="#ced100" stroke-width="1.6"></path></g>
-                    <text x="46" y="230" text-anchor="middle" font-family="monospace" font-size="9" fill="#8a8a8a">charger</text>
-                    <g transform="translate(320,44)"><rect x="-8" y="-8" width="16" height="16" rx="2" fill="#29e0d6" fill-opacity="0.2" stroke="#29e0d6" stroke-width="1.6"></rect></g>
-                    <text x="320" y="30" text-anchor="middle" font-family="monospace" font-size="9" fill="#8a8a8a">voice source</text>
-                    <g class="vb-map-bot"><circle r="14" fill="#00ff80" fill-opacity="0.14"></circle><polygon points="9,0 -6,-6 -6,6" fill="#00ff80" stroke="#0a0b0d" stroke-width="1"></polygon><animateMotion dur="7s" repeatCount="indefinite" rotate="auto"><mpath href="#vbMapPath"></mpath></animateMotion></g>
+                    <rect data-testid="sdk-dashboard-map-grid-inner" x="0" y="0" width="380" height="250" fill="url(#vbMapGrid)"></rect>
+                    <rect data-testid="sdk-dashboard-map-obstacle-left-item" x="150" y="150" width="70" height="26" rx="4" fill="#ffffff" fill-opacity="0.06" stroke="#ffffff" stroke-opacity="0.14"></rect>
+                    <rect data-testid="sdk-dashboard-map-obstacle-right-item" x="245" y="120" width="30" height="52" rx="4" fill="#ffffff" fill-opacity="0.06" stroke="#ffffff" stroke-opacity="0.14"></rect>
+                    <use data-testid="sdk-dashboard-map-route-item" class="vb-map-path" href="#vbMapPath" stroke="#00ff80" stroke-width="2" stroke-dasharray="6 6"></use>
+                    <g data-testid="sdk-dashboard-map-charger-group" transform="translate(46,206)"><rect x="-11" y="-9" width="22" height="18" rx="3" fill="none" stroke="#ced100" stroke-width="1.6"></rect><path d="M-4,-2 L2,-2 L-1,2 L4,2" fill="none" stroke="#ced100" stroke-width="1.6"></path></g>
+                    <text data-testid="sdk-dashboard-map-charger-text" x="46" y="230" text-anchor="middle" font-family="monospace" font-size="9" fill="#8a8a8a">charger</text>
+                    <g data-testid="sdk-dashboard-map-target-group" transform="translate(320,44)"><rect x="-8" y="-8" width="16" height="16" rx="2" fill="#29e0d6" fill-opacity="0.2" stroke="#29e0d6" stroke-width="1.6"></rect></g>
+                    <text data-testid="sdk-dashboard-map-target-text" x="320" y="30" text-anchor="middle" font-family="monospace" font-size="9" fill="#8a8a8a">voice source</text>
+                    <g data-testid="sdk-dashboard-map-robot-group" class="vb-map-bot"><circle r="14" fill="#00ff80" fill-opacity="0.14"></circle><polygon points="9,0 -6,-6 -6,6" fill="#00ff80" stroke="#0a0b0d" stroke-width="1"></polygon><animateMotion dur="7s" repeatCount="indefinite" rotate="auto"><mpath href="#vbMapPath"></mpath></animateMotion></g>
                   </svg>
-                  <div class="vb-map-legend">
-                    <span class="vb-lg"><span class="vb-sw vb-sw-robot"></span>robot</span>
-                    <span class="vb-lg"><span class="vb-sw vb-sw-charger"></span>charger</span>
-                    <span class="vb-lg"><span class="vb-sw vb-sw-target"></span>target</span>
-                    <span class="vb-lg"><span class="vb-sw vb-sw-obstacle"></span>obstacle</span>
+                  <div data-testid="sdk-dashboard-map-legend-list" class="vb-map-legend">
+                    <span data-testid="sdk-dashboard-map-legend-robot-item" class="vb-lg"><span data-testid="sdk-dashboard-map-legend-robot-icon" class="vb-sw vb-sw-robot"></span>robot</span>
+                    <span data-testid="sdk-dashboard-map-legend-charger-item" class="vb-lg"><span data-testid="sdk-dashboard-map-legend-charger-icon" class="vb-sw vb-sw-charger"></span>charger</span>
+                    <span data-testid="sdk-dashboard-map-legend-target-item" class="vb-lg"><span data-testid="sdk-dashboard-map-legend-target-icon" class="vb-sw vb-sw-target"></span>target</span>
+                    <span data-testid="sdk-dashboard-map-legend-obstacle-item" class="vb-lg"><span data-testid="sdk-dashboard-map-legend-obstacle-icon" class="vb-sw vb-sw-obstacle"></span>obstacle</span>
                   </div>
                 </div>
               </section>
 
-              <section class="vb-panel">
-                <div class="vb-phead">
-                  <span class="vb-ptitle"><svg class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#98c379" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9a12 12 0 0 1 16 0"></path><path d="M7 12.5a7 7 0 0 1 10 0"></path><path d="M10 16a3 3 0 0 1 4 0"></path><circle cx="12" cy="19" r="1" fill="#98c379" stroke="none"></circle></svg>CONNECTIVITY &middot; DATA TRANSFER</span>
-                  <span class="vb-pacc"><button class="vb-chip" id="vbNetRun" type="button" title="Measure throughput over a five second window">RUN</button></span>
+              <section data-testid="sdk-dashboard-net-root" class="vb-panel">
+                <div data-testid="sdk-dashboard-net-header" class="vb-phead">
+                  <span data-testid="sdk-dashboard-net-heading" class="vb-ptitle"><svg data-testid="sdk-dashboard-net-icon" class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#98c379" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9a12 12 0 0 1 16 0"></path><path d="M7 12.5a7 7 0 0 1 10 0"></path><path d="M10 16a3 3 0 0 1 4 0"></path><circle cx="12" cy="19" r="1" fill="#98c379" stroke="none"></circle></svg>CONNECTIVITY &middot; DATA TRANSFER</span>
+                  <span data-testid="sdk-dashboard-net-actions" class="vb-pacc"><button data-testid="sdk-dashboard-net-run-btn" class="vb-chip" id="vbNetRun" type="button" title="Measure throughput over a five second window">RUN</button></span>
                 </div>
-                <div class="vb-pbody">
-                  <div class="vb-conn">
-                    <div class="vb-spark">
-                      <div class="vb-spark-label">&#8595; DOWN &middot; <span id="vbDownLabel">--</span></div>
-                      <svg class="vb-spark-svg" viewBox="0 0 200 34" preserveAspectRatio="none" aria-hidden="true"><polyline id="vbDownSpark" fill="none" stroke="#00ff80" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" points=""></polyline></svg>
+                <div data-testid="sdk-dashboard-net-body" class="vb-pbody">
+                  <div data-testid="sdk-dashboard-net-inner" class="vb-conn">
+                    <div data-testid="sdk-dashboard-net-down-group" class="vb-spark">
+                      <div data-testid="sdk-dashboard-net-down-eyebrow" class="vb-spark-label">&#8595; DOWN &middot; <span data-testid="sdk-dashboard-net-down-text" id="vbDownLabel">--</span></div>
+                      <svg data-testid="sdk-dashboard-net-down-spark-media" class="vb-spark-svg" viewBox="0 0 200 34" preserveAspectRatio="none" aria-hidden="true"><polyline data-testid="sdk-dashboard-net-down-spark-item" id="vbDownSpark" fill="none" stroke="#00ff80" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" points=""></polyline></svg>
                     </div>
-                    <div class="vb-spark">
-                      <div class="vb-spark-label">LATENCY &middot; <span id="vbLatLabel">--</span></div>
-                      <svg class="vb-spark-svg" viewBox="0 0 200 34" preserveAspectRatio="none" aria-hidden="true"><polyline id="vbLatSpark" fill="none" stroke="#29e0d6" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" points=""></polyline></svg>
+                    <div data-testid="sdk-dashboard-net-latency-group" class="vb-spark">
+                      <div data-testid="sdk-dashboard-net-latency-eyebrow" class="vb-spark-label">LATENCY &middot; <span data-testid="sdk-dashboard-net-latency-text" id="vbLatLabel">--</span></div>
+                      <svg data-testid="sdk-dashboard-net-latency-spark-media" class="vb-spark-svg" viewBox="0 0 200 34" preserveAspectRatio="none" aria-hidden="true"><polyline data-testid="sdk-dashboard-net-latency-spark-item" id="vbLatSpark" fill="none" stroke="#29e0d6" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round" points=""></polyline></svg>
                     </div>
-                    <div class="vb-conn-kv">
-                      <span class="vb-kvk">endpoint</span><span class="vb-kvv" id="vbNetTarget">--</span>
-                      <span class="vb-kvk">jitter</span><span class="vb-kvv" id="vbNetJitter">--</span>
-                      <span class="vb-kvk">loss</span><span class="vb-kvv" id="vbNetLoss">--</span>
-                      <span class="vb-kvk">probe</span><span class="vb-kvv vb-kvv-accent" id="vbNetProbe">--</span>
+                    <div data-testid="sdk-dashboard-net-stats-list" class="vb-conn-kv">
+                      <span data-testid="sdk-dashboard-net-endpoint-eyebrow" class="vb-kvk">endpoint</span><span data-testid="sdk-dashboard-net-endpoint-text" class="vb-kvv" id="vbNetTarget">--</span>
+                      <span data-testid="sdk-dashboard-net-jitter-eyebrow" class="vb-kvk">jitter</span><span data-testid="sdk-dashboard-net-jitter-text" class="vb-kvv" id="vbNetJitter">--</span>
+                      <span data-testid="sdk-dashboard-net-loss-eyebrow" class="vb-kvk">loss</span><span data-testid="sdk-dashboard-net-loss-text" class="vb-kvv" id="vbNetLoss">--</span>
+                      <span data-testid="sdk-dashboard-net-probe-eyebrow" class="vb-kvk">probe</span><span data-testid="sdk-dashboard-net-probe-text" class="vb-kvv vb-kvv-accent" id="vbNetProbe">--</span>
                     </div>
                   </div>
                 </div>
@@ -151,49 +151,49 @@
 
             </div>
 
-            <div class="vb-col vb-col-r">
+            <div data-testid="sdk-dashboard-right-col" class="vb-col vb-col-r">
 
-              <section class="vb-panel vb-panel-talk">
-                <div class="vb-phead">
-                  <span class="vb-ptitle"><svg class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#00ff80" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><line x1="12" y1="18" x2="12" y2="22"></line></svg>TALK TO VECTOR</span>
-                  <span class="vb-pacc"><span class="vb-badge vb-badge-todo">TODO</span></span>
+              <section data-testid="sdk-dashboard-talk-root" class="vb-panel vb-panel-talk">
+                <div data-testid="sdk-dashboard-talk-header" class="vb-phead">
+                  <span data-testid="sdk-dashboard-talk-heading" class="vb-ptitle"><svg data-testid="sdk-dashboard-talk-icon" class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#00ff80" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="11" rx="3"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><line x1="12" y1="18" x2="12" y2="22"></line></svg>TALK TO VECTOR</span>
+                  <span data-testid="sdk-dashboard-talk-status-group" class="vb-pacc"><span data-testid="sdk-dashboard-talk-todo-badge" class="vb-badge vb-badge-todo">TODO</span></span>
                 </div>
-                <div class="vb-pbody">
-                  <div class="vb-chat">
-                    <div class="vb-bubble">Hi Kevin &#8212; I'm awake and listening. Tap the mic and talk to me.</div>
-                    <div class="vb-bubble-meta">VECTOR &middot; ready</div>
+                <div data-testid="sdk-dashboard-talk-body" class="vb-pbody">
+                  <div data-testid="sdk-dashboard-talk-chat-list" class="vb-chat">
+                    <div data-testid="sdk-dashboard-talk-bubble-text" class="vb-bubble">Hi Kevin &#8212; I'm awake and listening. Tap the mic and talk to me.</div>
+                    <div data-testid="sdk-dashboard-talk-bubble-note" class="vb-bubble-meta">VECTOR &middot; ready</div>
                   </div>
                 </div>
-                <div class="vb-talk-bar">
-                  <div class="vb-talk-input">
-                    <button class="vb-mic" type="button" title="Not wired up yet" aria-label="Talk to Vector (not wired up yet)"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#06130c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="11" rx="3" fill="#06130c" stroke="none"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><line x1="12" y1="18" x2="12" y2="22"></line></svg></button>
-                    <input class="vb-talk-field" type="text" placeholder="Tap to talk&#8212; or type a message..." title="Not wired up yet" readonly>
+                <div data-testid="sdk-dashboard-talk-footer" class="vb-talk-bar">
+                  <div data-testid="sdk-dashboard-talk-input-group" class="vb-talk-input">
+                    <button data-testid="sdk-dashboard-talk-mic-btn" class="vb-mic" type="button" title="Not wired up yet" aria-label="Talk to Vector (not wired up yet)"><svg data-testid="sdk-dashboard-talk-mic-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#06130c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="11" rx="3" fill="#06130c" stroke="none"></rect><path d="M5 11a7 7 0 0 0 14 0"></path><line x1="12" y1="18" x2="12" y2="22"></line></svg></button>
+                    <input data-testid="sdk-dashboard-talk-input" class="vb-talk-field" type="text" placeholder="Tap to talk&#8212; or type a message..." title="Not wired up yet" readonly>
                   </div>
                 </div>
               </section>
 
-              <section class="vb-panel vb-panel-grow">
-                <div class="vb-phead">
-                  <span class="vb-ptitle"><svg class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#c586ff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="7.5" ry="3"></ellipse><path d="M4.5 5.5v13c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3v-13"></path><path d="M4.5 12c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3"></path></svg>MEMORY &middot; RAG STORE</span>
-                  <span class="vb-pacc">3,412 vecs <span class="vb-badge vb-badge-todo">TODO</span></span>
+              <section data-testid="sdk-dashboard-memory-root" class="vb-panel vb-panel-grow">
+                <div data-testid="sdk-dashboard-memory-header" class="vb-phead">
+                  <span data-testid="sdk-dashboard-memory-heading" class="vb-ptitle"><svg data-testid="sdk-dashboard-memory-icon" class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#c586ff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="7.5" ry="3"></ellipse><path d="M4.5 5.5v13c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3v-13"></path><path d="M4.5 12c0 1.66 3.36 3 7.5 3s7.5-1.34 7.5-3"></path></svg>MEMORY &middot; RAG STORE</span>
+                  <span data-testid="sdk-dashboard-memory-status-group" class="vb-pacc">3,412 vecs <span data-testid="sdk-dashboard-memory-todo-badge" class="vb-badge vb-badge-todo">TODO</span></span>
                 </div>
-                <div class="vb-pbody">
-                  <div class="vb-mem-sub">Recently recalled &middot; model all-MiniLM-L6</div>
-                  <div class="vb-mem-row">
-                    <div class="vb-mem-line"><span class="vb-mem-txt">User's name is Kevin</span><span class="vb-mem-score">0.94</span></div>
-                    <div class="vb-mem-bar"><i class="vb-mem-fill" style="width:94%"></i></div>
+                <div data-testid="sdk-dashboard-memory-body" class="vb-pbody">
+                  <div data-testid="sdk-dashboard-memory-eyebrow" class="vb-mem-sub">Recently recalled &middot; model all-MiniLM-L6</div>
+                  <div data-testid="sdk-dashboard-memory-name-row" class="vb-mem-row">
+                    <div data-testid="sdk-dashboard-memory-name-inner" class="vb-mem-line"><span data-testid="sdk-dashboard-memory-name-text" class="vb-mem-txt">User's name is Kevin</span><span data-testid="sdk-dashboard-memory-name-score-text" class="vb-mem-score">0.94</span></div>
+                    <div data-testid="sdk-dashboard-memory-name-bar-group" class="vb-mem-bar"><i data-testid="sdk-dashboard-memory-name-bar-inner" class="vb-mem-fill" style="width:94%"></i></div>
                   </div>
-                  <div class="vb-mem-row">
-                    <div class="vb-mem-line"><span class="vb-mem-txt">Loves the fist-bump trick</span><span class="vb-mem-score">0.88</span></div>
-                    <div class="vb-mem-bar"><i class="vb-mem-fill" style="width:88%"></i></div>
+                  <div data-testid="sdk-dashboard-memory-fist-bump-row" class="vb-mem-row">
+                    <div data-testid="sdk-dashboard-memory-fist-bump-inner" class="vb-mem-line"><span data-testid="sdk-dashboard-memory-fist-bump-text" class="vb-mem-txt">Loves the fist-bump trick</span><span data-testid="sdk-dashboard-memory-fist-bump-score-text" class="vb-mem-score">0.88</span></div>
+                    <div data-testid="sdk-dashboard-memory-fist-bump-bar-group" class="vb-mem-bar"><i data-testid="sdk-dashboard-memory-fist-bump-bar-inner" class="vb-mem-fill" style="width:88%"></i></div>
                   </div>
-                  <div class="vb-mem-row">
-                    <div class="vb-mem-line"><span class="vb-mem-txt">Charger is by the window</span><span class="vb-mem-score">0.81</span></div>
-                    <div class="vb-mem-bar"><i class="vb-mem-fill" style="width:81%"></i></div>
+                  <div data-testid="sdk-dashboard-memory-charger-row" class="vb-mem-row">
+                    <div data-testid="sdk-dashboard-memory-charger-inner" class="vb-mem-line"><span data-testid="sdk-dashboard-memory-charger-text" class="vb-mem-txt">Charger is by the window</span><span data-testid="sdk-dashboard-memory-charger-score-text" class="vb-mem-score">0.81</span></div>
+                    <div data-testid="sdk-dashboard-memory-charger-bar-group" class="vb-mem-bar"><i data-testid="sdk-dashboard-memory-charger-bar-inner" class="vb-mem-fill" style="width:81%"></i></div>
                   </div>
-                  <div class="vb-mem-row vb-mem-row-dim">
-                    <div class="vb-mem-line"><span class="vb-mem-txt">Prefers metric units</span><span class="vb-mem-score">0.64</span></div>
-                    <div class="vb-mem-bar"><i class="vb-mem-fill" style="width:64%"></i></div>
+                  <div data-testid="sdk-dashboard-memory-units-row" class="vb-mem-row vb-mem-row-dim">
+                    <div data-testid="sdk-dashboard-memory-units-inner" class="vb-mem-line"><span data-testid="sdk-dashboard-memory-units-text" class="vb-mem-txt">Prefers metric units</span><span data-testid="sdk-dashboard-memory-units-score-text" class="vb-mem-score">0.64</span></div>
+                    <div data-testid="sdk-dashboard-memory-units-bar-group" class="vb-mem-bar"><i data-testid="sdk-dashboard-memory-units-bar-inner" class="vb-mem-fill" style="width:64%"></i></div>
                   </div>
                 </div>
               </section>
@@ -202,19 +202,19 @@
 
           </div>
 
-          <div class="vb-foot">
-            <section class="vb-panel vb-panel-log">
-              <div class="vb-phead">
-                <span class="vb-ptitle"><svg class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#e5c07b" stroke-width="1.7" stroke-linecap="round"><path d="M4 7h16M4 12h11M4 17h16"></path></svg>LIVE LOG</span>
-                <div class="vb-pacc vb-chips" id="vbLogChips">
-                  <span class="vb-chip vb-chip-on" data-level="">All</span>
-                  <span class="vb-chip" data-level="info">Info</span>
-                  <span class="vb-chip" data-level="warn">Warn</span>
-                  <span class="vb-chip" data-level="error">Error</span>
+          <div data-testid="sdk-dashboard-footer" class="vb-foot">
+            <section data-testid="sdk-dashboard-log-root" class="vb-panel vb-panel-log">
+              <div data-testid="sdk-dashboard-log-header" class="vb-phead">
+                <span data-testid="sdk-dashboard-log-heading" class="vb-ptitle"><svg data-testid="sdk-dashboard-log-icon" class="vb-picon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#e5c07b" stroke-width="1.7" stroke-linecap="round"><path d="M4 7h16M4 12h11M4 17h16"></path></svg>LIVE LOG</span>
+                <div data-testid="sdk-dashboard-log-chips-list" class="vb-pacc vb-chips" id="vbLogChips">
+                  <span data-testid="sdk-dashboard-log-level-all-chip" class="vb-chip vb-chip-on" data-level="">All</span>
+                  <span data-testid="sdk-dashboard-log-level-info-chip" class="vb-chip" data-level="info">Info</span>
+                  <span data-testid="sdk-dashboard-log-level-warn-chip" class="vb-chip" data-level="warn">Warn</span>
+                  <span data-testid="sdk-dashboard-log-level-error-chip" class="vb-chip" data-level="error">Error</span>
                 </div>
               </div>
-              <div class="vb-pbody">
-                <div class="vb-log-body" id="vbLogBody"></div>
+              <div data-testid="sdk-dashboard-log-body" class="vb-pbody">
+                <div data-testid="sdk-dashboard-log-list" class="vb-log-body" id="vbLogBody"></div>
               </div>
             </section>
           </div>
@@ -222,234 +222,234 @@
         </div>
       </div>
 
-      <div class="vb-scrim" id="vbScrim"></div>
-      <aside class="vb-drawer" id="vbDrawer">
-        <div class="vb-drawer-head">
-          <span class="vb-drawer-title">VECTOR CONFIGURATION</span>
-          <button class="vb-drawer-close" id="vbDrawerClose" type="button" title="Close" aria-label="Close settings"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+      <div data-testid="sdk-dashboard-drawer-scrim-group" class="vb-scrim" id="vbScrim"></div>
+      <aside data-testid="sdk-dashboard-drawer-root" class="vb-drawer" id="vbDrawer">
+        <div data-testid="sdk-dashboard-drawer-header" class="vb-drawer-head">
+          <span data-testid="sdk-dashboard-drawer-heading" class="vb-drawer-title">VECTOR CONFIGURATION</span>
+          <button data-testid="sdk-dashboard-drawer-close-btn" class="vb-drawer-close" id="vbDrawerClose" type="button" title="Close" aria-label="Close settings"><svg data-testid="sdk-dashboard-drawer-close-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
         </div>
 
-      <div class="main-nav-parent">
-        <div class="main-nav-child"><a href="/sdkapp"><i class="fa-solid fa-reply"></i><br />Back</a></div>
-        <div class="main-nav-child"><a href="#" onclick="goToControlPage()"><i
+      <div data-testid="bot-settings-nav-list" class="main-nav-parent">
+        <div data-testid="bot-settings-nav-back-item" class="main-nav-child"><a data-testid="bot-settings-nav-back-link" href="/sdkapp"><i data-testid="bot-settings-nav-back-icon" class="fa-solid fa-reply"></i><br />Back</a></div>
+        <div data-testid="bot-settings-nav-control-item" class="main-nav-child"><a data-testid="bot-settings-nav-control-link" href="#" onclick="goToControlPage()"><i data-testid="bot-settings-nav-control-icon"
               class="fa-solid fa-gamepad"></i><br />Control<br /></a></div>
-        <div class="main-nav-child"><a href="#" onclick="showSection('section-volume'); return false;"><i
+        <div data-testid="bot-settings-nav-volume-item" class="main-nav-child"><a data-testid="bot-settings-nav-volume-link" href="#" onclick="showSection('section-volume'); return false;"><i data-testid="bot-settings-nav-volume-icon"
               class="fa-solid fa-volume-high" id="icon-volume" name="icon"></i><br />Volume</a></div>
-        <div class="main-nav-child"><a href="#" onclick="showSection('section-eyes'); return false;"><i
+        <div data-testid="bot-settings-nav-eyes-item" class="main-nav-child"><a data-testid="bot-settings-nav-eyes-link" href="#" onclick="showSection('section-eyes'); return false;"><i data-testid="bot-settings-nav-eyes-icon"
               class="fa-solid fa-eye" id="icon-eyes" name="icon"></i><br />Eye Color</a></div>
-        <div class="main-nav-child"><a href="#" onclick="showSection('section-face'); return false;"><i
+        <div data-testid="bot-settings-nav-faces-item" class="main-nav-child"><a data-testid="bot-settings-nav-faces-link" href="#" onclick="showSection('section-face'); return false;"><i data-testid="bot-settings-nav-faces-icon"
               class="fa-solid fa-user" id="icon-face" name="icon"></i><br />Faces</a></div>
-        <div class="main-nav-child"><a href="#" onclick="showSection('section-actions'); return false;"><i
+        <div data-testid="bot-settings-nav-quick-actions-item" class="main-nav-child"><a data-testid="bot-settings-nav-quick-actions-link" href="#" onclick="showSection('section-actions'); return false;"><i data-testid="bot-settings-nav-quick-actions-icon"
               class="fa-solid fa-person-running" id="icon-actions" name="icon"></i><br />Actions</a></div>
-        <div class="main-nav-child"><a href="#" onclick="showSection('section-stim'); return false;"><i
+        <div data-testid="bot-settings-nav-stim-item" class="main-nav-child"><a data-testid="bot-settings-nav-stim-link" href="#" onclick="showSection('section-stim'); return false;"><i data-testid="bot-settings-nav-stim-icon"
               class="fa-solid fa-face-laugh-beam" id="icon-stim" name="icon"></i><br />Stim</a></div>
-        <div class="main-nav-child"><a href="#" onclick="showSection('section-stats'); return false;"><i
+        <div data-testid="bot-settings-nav-stats-item" class="main-nav-child"><a data-testid="bot-settings-nav-stats-link" href="#" onclick="showSection('section-stats'); return false;"><i data-testid="bot-settings-nav-stats-icon"
               class="fa-solid fa-chart-simple" id="icon-stats" name="icon"></i><br />Statistics</a></div>
-        <div class="main-nav-child"><a href="#" onclick="showSection('section-photos'); getPhotos(); return false;"><i
+        <div data-testid="bot-settings-nav-photos-item" class="main-nav-child"><a data-testid="bot-settings-nav-photos-link" href="#" onclick="showSection('section-photos'); getPhotos(); return false;"><i data-testid="bot-settings-nav-photos-icon"
               class="fa-solid fa-images" id="icon-photos" name="icon"></i><br />Photos</a></div>
-        <div class="main-nav-child"><a href="#" onclick="showSection('section-locale'); return false;"><i
+        <div data-testid="bot-settings-nav-locale-item" class="main-nav-child"><a data-testid="bot-settings-nav-locale-link" href="#" onclick="showSection('section-locale'); return false;"><i data-testid="bot-settings-nav-locale-icon"
               class="fa-solid fa-earth-americas" id="icon-locale" name="icon"></i><br />Locale</a></div>
-        <div class="main-nav-child"><a href="#" onclick="showSection('section-time'); return false;"><i
+        <div data-testid="bot-settings-nav-time-item" class="main-nav-child"><a data-testid="bot-settings-nav-time-link" href="#" onclick="showSection('section-time'); return false;"><i data-testid="bot-settings-nav-time-icon"
               class="fa-solid fa-clock" id="icon-time" name="icon"></i><br />Time</a></div>
-        <div class="main-nav-child"><a href="#" onclick="showSection('section-temp'); return false;"><i
+        <div data-testid="bot-settings-nav-temp-item" class="main-nav-child"><a data-testid="bot-settings-nav-temp-link" href="#" onclick="showSection('section-temp'); return false;"><i data-testid="bot-settings-nav-temp-icon"
               class="fa-solid fa-temperature-half" id="icon-temp" name="icon"></i><br />Units</a></div>
-        <div class="main-nav-child"><a href="#" onclick="showSection('section-button'); return false;"><i
+        <div data-testid="bot-settings-nav-button-item" class="main-nav-child"><a data-testid="bot-settings-nav-button-link" href="#" onclick="showSection('section-button'); return false;"><i data-testid="bot-settings-nav-button-icon"
               class="fa-solid fa-circle-dot" id="icon-button" name="icon"></i><br />Button</a></div>
-        <div class="main-nav-child"><a href="#" onclick="showSection('section-alexa'); return false;"><i
+        <div data-testid="bot-settings-nav-alexa-item" class="main-nav-child"><a data-testid="bot-settings-nav-alexa-link" href="#" onclick="showSection('section-alexa'); return false;"><i data-testid="bot-settings-nav-alexa-icon"
               class="fa-solid fa-house-signal" id="icon-alexa" name="icon"></i><br />Alexa</a></div>
-        <div class="main-nav-child"><a href="#" onclick="showSection('section-location'); return false;"><i
+        <div data-testid="bot-settings-nav-location-item" class="main-nav-child"><a data-testid="bot-settings-nav-location-link" href="#" onclick="showSection('section-location'); return false;"><i data-testid="bot-settings-nav-location-icon"
               class="fa-solid fa-location-crosshairs" id="icon-location" name="icon"></i><br />Location</a></div>
-        <div class="main-nav-child"><a href="#" onclick="showSection('section-timezone'); return false;"><i
+        <div data-testid="bot-settings-nav-timezone-item" class="main-nav-child"><a data-testid="bot-settings-nav-timezone-link" href="#" onclick="showSection('section-timezone'); return false;"><i data-testid="bot-settings-nav-timezone-icon"
               class="fa-solid fa-hourglass" id="icon-timezone" name="icon"></i><br />Time Zone</a></div>
       </div>
       <hr>
 
-      <div id="section-volume" class="toggleable-section" style="display:none;">
-        <h2 class="center">Volume</h2>
+      <div data-testid="bot-settings-volume-root" id="section-volume" class="toggleable-section" style="display:none;">
+        <h2 data-testid="bot-settings-volume-heading" class="center">Volume</h2>
         <hr class="small-hr">
-        <div id="currentVolume" class="center"></div>
-        <div style="text-align: left;" class="center">
-          <label>
-            <input type="radio" name="vol" id="Mute" value="Mute" onclick="sendForm('/api-sdk/volume?volume=0')">Mute
+        <div data-testid="bot-settings-volume-current-group" id="currentVolume" class="center"></div>
+        <div data-testid="bot-settings-volume-options-group" style="text-align: left;" class="center">
+          <label data-testid="bot-settings-volume-mute-label">
+            <input data-testid="bot-settings-volume-mute-radio" type="radio" name="vol" id="Mute" value="Mute" onclick="sendForm('/api-sdk/volume?volume=0')">Mute
           </label>
-          <label>
-            <input type="radio" name="vol" id="Low" value="Low" onclick="sendForm('/api-sdk/volume?volume=1')">Low
+          <label data-testid="bot-settings-volume-low-label">
+            <input data-testid="bot-settings-volume-low-radio" type="radio" name="vol" id="Low" value="Low" onclick="sendForm('/api-sdk/volume?volume=1')">Low
           </label>
-          <label>
-            <input type="radio" name="vol" id="Medium Low" value="Medium Low"
+          <label data-testid="bot-settings-volume-medium-low-label">
+            <input data-testid="bot-settings-volume-medium-low-radio" type="radio" name="vol" id="Medium Low" value="Medium Low"
               onclick="sendForm('/api-sdk/volume?volume=2')">Medium Low
           </label>
-          <label>
-            <input type="radio" name="vol" id="Medium" value="Medium"
+          <label data-testid="bot-settings-volume-medium-label">
+            <input data-testid="bot-settings-volume-medium-radio" type="radio" name="vol" id="Medium" value="Medium"
               onclick="sendForm('/api-sdk/volume?volume=3')">Medium
           </label>
-          <label>
-            <input type="radio" name="vol" id="Medium High" value="Medium High"
+          <label data-testid="bot-settings-volume-medium-high-label">
+            <input data-testid="bot-settings-volume-medium-high-radio" type="radio" name="vol" id="Medium High" value="Medium High"
               onclick="sendForm('/api-sdk/volume?volume=4')">Medium High
           </label>
-          <label>
-            <input type="radio" name="vol" id="High" value="High" onclick="sendForm('/api-sdk/volume?volume=5')">High
+          <label data-testid="bot-settings-volume-high-label">
+            <input data-testid="bot-settings-volume-high-radio" type="radio" name="vol" id="High" value="High" onclick="sendForm('/api-sdk/volume?volume=5')">High
           </label>
         </div>
         <br>
         <hr>
       </div>
 
-      <div id="section-eyes" class="toggleable-section" style="display:none;">
-        <h2 style="margin-bottom: 0px;">Eye Color</h2>
+      <div data-testid="bot-settings-eyes-root" id="section-eyes" class="toggleable-section" style="display:none;">
+        <h2 data-testid="bot-settings-eyes-heading" style="margin-bottom: 0px;">Eye Color</h2>
         <hr class="small-hr">
-        <h4 style="margin-bottom: 0px; margin-top:0px;">Preset Eye Colors:</h4>
-        <div style="text-align: left;" class="center">
-          <label>
-            <input type="radio" name="eye" id="Teal" value="Teal"
+        <h4 data-testid="bot-settings-eyes-preset-heading" style="margin-bottom: 0px; margin-top:0px;">Preset Eye Colors:</h4>
+        <div data-testid="bot-settings-eyes-preset-group" style="text-align: left;" class="center">
+          <label data-testid="bot-settings-eyes-teal-label">
+            <input data-testid="bot-settings-eyes-teal-radio" type="radio" name="eye" id="Teal" value="Teal"
               onclick="sendForm('/api-sdk/eye_color?color=0')">Teal<br>
           </label>
-          <label>
-            <input type="radio" name="eye" id="Orange" value="Orange"
+          <label data-testid="bot-settings-eyes-orange-label">
+            <input data-testid="bot-settings-eyes-orange-radio" type="radio" name="eye" id="Orange" value="Orange"
               onclick="sendForm('/api-sdk/eye_color?color=1')">Orange<br>
           </label>
-          <label>
-            <input type="radio" name="eye" id="Yellow" value="Yellow"
+          <label data-testid="bot-settings-eyes-yellow-label">
+            <input data-testid="bot-settings-eyes-yellow-radio" type="radio" name="eye" id="Yellow" value="Yellow"
               onclick="sendForm('/api-sdk/eye_color?color=2')">Yellow<br>
           </label>
-          <label>
-            <input type="radio" name="eye" id="Lime Green" value="Lime Green"
+          <label data-testid="bot-settings-eyes-lime-green-label">
+            <input data-testid="bot-settings-eyes-lime-green-radio" type="radio" name="eye" id="Lime Green" value="Lime Green"
               onclick="sendForm('/api-sdk/eye_color?color=3')">Lime Green<br>
           </label>
-          <label>
-            <input type="radio" name="eye" id="Azure Blue" value="Azure Blue"
+          <label data-testid="bot-settings-eyes-azure-blue-label">
+            <input data-testid="bot-settings-eyes-azure-blue-radio" type="radio" name="eye" id="Azure Blue" value="Azure Blue"
               onclick="sendForm('/api-sdk/eye_color?color=4')">Azure Blue<br>
           </label>
-          <label>
-            <input type="radio" name="eye" id="Purple" value="Purple"
+          <label data-testid="bot-settings-eyes-purple-label">
+            <input data-testid="bot-settings-eyes-purple-radio" type="radio" name="eye" id="Purple" value="Purple"
               onclick="sendForm('/api-sdk/eye_color?color=5')">Purple<br>
           </label>
-          <label>
-            <input type="radio" name="eye" id="Other Green" value="Other Green"
+          <label data-testid="bot-settings-eyes-other-green-label">
+            <input data-testid="bot-settings-eyes-other-green-radio" type="radio" name="eye" id="Other Green" value="Other Green"
               onclick="sendForm('/api-sdk/eye_color?color=6')">Other Green<br>
           </label>
         </div>
         <br />
         <hr class="small-hr">
-        <h4 style="margin-top: 0px;" class="center">Custom Eye Color:</h4>
-        <div class="center" id="picker"></div><br />
-        <div class="center">
-          <button class="settings" onclick="sendCustomColor()">Submit</button>
+        <h4 data-testid="bot-settings-eyes-custom-heading" style="margin-top: 0px;" class="center">Custom Eye Color:</h4>
+        <div data-testid="bot-settings-eyes-picker-group" class="center" id="picker"></div><br />
+        <div data-testid="bot-settings-eyes-custom-actions" class="center">
+          <button data-testid="bot-settings-eyes-custom-submit-btn" class="settings" onclick="sendCustomColor()">Submit</button>
         </div>
         <hr>
       </div>
 
-      <div id="section-face" class="toggleable-section" style="display:none;">
-        <h2 class="center">Face Manager</h2>
+      <div data-testid="bot-settings-faces-root" id="section-face" class="toggleable-section" style="display:none;">
+        <h2 data-testid="bot-settings-faces-heading" class="center">Face Manager</h2>
         <hr class="small-hr">
-        <h3 class="center">Modify existing faces:</h3>
-        <p class="center">Choose the face you would like to modify.</p>
-        <div class="center">
-          <select id="faceList" name="faceList"></select>
+        <h3 data-testid="bot-settings-faces-modify-heading" class="center">Modify existing faces:</h3>
+        <p data-testid="bot-settings-faces-modify-help-text" class="center">Choose the face you would like to modify.</p>
+        <div data-testid="bot-settings-faces-select-group" class="center">
+          <select data-testid="bot-settings-faces-select" id="faceList" name="faceList"></select>
         </div>
-        <div class="center">
-          <button class="center" onclick="refreshFaceList()">Refresh list</button>
+        <div data-testid="bot-settings-faces-refresh-actions" class="center">
+          <button data-testid="bot-settings-faces-refresh-btn" class="center" onclick="refreshFaceList()">Refresh list</button>
         </div>
-        <div class="center">
-          <div id="faceButtons">
-            <button onclick="deleteFace()">Delete</button>
-            <button onclick="renameFace()">Rename</button>
+        <div data-testid="bot-settings-faces-buttons-group" class="center">
+          <div data-testid="bot-settings-faces-actions" id="faceButtons">
+            <button data-testid="bot-settings-faces-delete-btn" onclick="deleteFace()">Delete</button>
+            <button data-testid="bot-settings-faces-rename-btn" onclick="renameFace()">Rename</button>
           </div>
         </div>
         <hr class="small-hr">
-        <h3 class="center">Add a new face:</h3>
-        <p class="center">Enter a name you'd like to add:</p>
-        <div class="center">
-          <input class="tinput" id="faceInput" name="faceInput" type="text" placeholder="Put name here">
+        <h3 data-testid="bot-settings-faces-add-heading" class="center">Add a new face:</h3>
+        <p data-testid="bot-settings-faces-add-help-text" class="center">Enter a name you'd like to add:</p>
+        <div data-testid="bot-settings-faces-add-group" class="center">
+          <input data-testid="bot-settings-faces-add-input" class="tinput" id="faceInput" name="faceInput" type="text" placeholder="Put name here">
         </div>
-        <div class="center">
-          <button onclick="addFace()">Add Face</button>
+        <div data-testid="bot-settings-faces-add-actions" class="center">
+          <button data-testid="bot-settings-faces-add-btn" onclick="addFace()">Add Face</button>
         </div>
         <hr>
       </div>
 
-      <div id="section-actions" class="toggleable-section" style="display:none;">
-        <h2 class="center">Quick Actions</h2>
+      <div data-testid="bot-settings-quick-actions-root" id="section-actions" class="toggleable-section" style="display:none;">
+        <h2 data-testid="bot-settings-quick-actions-heading" class="center">Quick Actions</h2>
         <hr class="small-hr">
-        <div class="center">
-          <button onclick="sendForm('/api-sdk/cloud_intent?intent=explore_start')">Explore
+        <div data-testid="bot-settings-quick-actions-list" class="center">
+          <button data-testid="bot-settings-quick-actions-explore-btn" onclick="sendForm('/api-sdk/cloud_intent?intent=explore_start')">Explore
             Start</button>
-          <button onclick="sendForm('/api-sdk/cloud_intent?intent=intent_imperative_dance')">Listen for
+          <button data-testid="bot-settings-quick-actions-listen-beat-btn" onclick="sendForm('/api-sdk/cloud_intent?intent=intent_imperative_dance')">Listen for
             Beat</button>
-          <button onclick="sendForm('/api-sdk/cloud_intent?intent=intent_system_sleep')">Go to
+          <button data-testid="bot-settings-quick-actions-sleep-btn" onclick="sendForm('/api-sdk/cloud_intent?intent=intent_system_sleep')">Go to
             Sleep</button>
-          <button onclick="sendForm('/api-sdk/cloud_intent?intent=intent_imperative_fetchcube')">Fetch
+          <button data-testid="bot-settings-quick-actions-fetch-cube-btn" onclick="sendForm('/api-sdk/cloud_intent?intent=intent_imperative_fetchcube')">Fetch
             Cube</button>
-          <button onclick="sendForm('/api-sdk/cloud_intent?intent=intent_system_charger')">Go
+          <button data-testid="bot-settings-quick-actions-go-home-btn" onclick="sendForm('/api-sdk/cloud_intent?intent=intent_system_charger')">Go
             Home</button>
         </div>
         <hr class="small-hr">
-        <h3 class="center">Trigger Hey Vector</h3>
-        <p class="center">Trigger the "Hey Vector" wakeword remotely</p>
-        <p class="center">(Only Dev firmware and 2.0.1.6085ep or later)</p>
-        <div id="heyVectorStatus" class="center"></div>
-        <div class="center">
-          <button onclick="triggerHeyVector()">Trigger "Hey Vector"</button>
+        <h3 data-testid="bot-settings-hey-vector-heading" class="center">Trigger Hey Vector</h3>
+        <p data-testid="bot-settings-hey-vector-help-text" class="center">Trigger the "Hey Vector" wakeword remotely</p>
+        <p data-testid="bot-settings-hey-vector-firmware-note" class="center">(Only Dev firmware and 2.0.1.6085ep or later)</p>
+        <div data-testid="bot-settings-hey-vector-status-group" id="heyVectorStatus" class="center"></div>
+        <div data-testid="bot-settings-hey-vector-actions" class="center">
+          <button data-testid="bot-settings-hey-vector-trigger-btn" onclick="triggerHeyVector()">Trigger "Hey Vector"</button>
         </div>
         <hr>
       </div>
 
-      <div id="section-stim" class="toggleable-section" style="display:none;">
-        <h2 class="center">Stimulation</h2>
+      <div data-testid="bot-settings-stim-root" id="section-stim" class="toggleable-section" style="display:none;">
+        <h2 data-testid="bot-settings-stim-heading" class="center">Stimulation</h2>
         <hr class="small-hr">
-        <div class="center">
-          <canvas id="stimChart"></canvas>
+        <div data-testid="bot-settings-stim-chart-group" class="center">
+          <canvas data-testid="bot-settings-stim-chart-media" id="stimChart"></canvas>
         </div>
         <hr>
       </div>
 
-      <div id="section-stats" class="toggleable-section" style="display:none;">
-        <h2 class="center">Statistics</h2>
+      <div data-testid="bot-settings-stats-root" id="section-stats" class="toggleable-section" style="display:none;">
+        <h2 data-testid="bot-settings-stats-heading" class="center">Statistics</h2>
         <hr class="small-hr">
-        <button onclick="updateStats()">Refresh</button><br>
-        <div id="statsSection"></div>
+        <button data-testid="bot-settings-stats-refresh-btn" onclick="updateStats()">Refresh</button><br>
+        <div data-testid="bot-settings-stats-list" id="statsSection"></div>
         <hr>
       </div>
 
-      <div id="section-photos" class="toggleable-section" style="display:none;">
-        <h2 class="center">Photos</h2>
+      <div data-testid="bot-settings-photos-root" id="section-photos" class="toggleable-section" style="display:none;">
+        <h2 data-testid="bot-settings-photos-heading" class="center">Photos</h2>
         <hr class="small-hr">
-        <div class="center">
-          <button onclick="getPhotos()">Refresh List</button>
+        <div data-testid="bot-settings-photos-actions" class="center">
+          <button data-testid="bot-settings-photos-refresh-btn" onclick="getPhotos()">Refresh List</button>
         </div>
-        <div class="center">
-          <div id="photoSection"></div>
+        <div data-testid="bot-settings-photos-group" class="center">
+          <div data-testid="bot-settings-photos-list" id="photoSection"></div>
         </div>
         <hr>
       </div>
 
-      <div id="section-locale" class="toggleable-section" style="display:none;">
-        <h2 class="center">Locale</h2>
+      <div data-testid="bot-settings-locale-root" id="section-locale" class="toggleable-section" style="display:none;">
+        <h2 data-testid="bot-settings-locale-heading" class="center">Locale</h2>
         <hr class="small-hr">
-        <div id="currentLocale" class="center"></div>
-        <div style="text-align: left;" class="center">
-          <label>
-            <input type="radio" name="locale" id="en-US" value="English (US)"
+        <div data-testid="bot-settings-locale-current-group" id="currentLocale" class="center"></div>
+        <div data-testid="bot-settings-locale-options-group" style="text-align: left;" class="center">
+          <label data-testid="bot-settings-locale-en-us-label">
+            <input data-testid="bot-settings-locale-en-us-radio" type="radio" name="locale" id="en-US" value="English (US)"
               onclick="sendForm('/api-sdk/locale?locale=en-US')">English (US)<br>
           </label>
-          <label>
-            <input type="radio" name="locale" id="en-GB" value="English (GB)"
+          <label data-testid="bot-settings-locale-en-gb-label">
+            <input data-testid="bot-settings-locale-en-gb-radio" type="radio" name="locale" id="en-GB" value="English (GB)"
               onclick="sendForm('/api-sdk/locale?locale=en-GB')">English (GB)<br>
           </label>
-          <label>
-            <input type="radio" name="locale" id="en-AU" value="English (AU)"
+          <label data-testid="bot-settings-locale-en-au-label">
+            <input data-testid="bot-settings-locale-en-au-radio" type="radio" name="locale" id="en-AU" value="English (AU)"
               onclick="sendForm('/api-sdk/locale?locale=en-AU')">English (AU)<br>
           </label>
-          <label>
-            <input type="radio" name="locale" id="de-DE" value="German"
+          <label data-testid="bot-settings-locale-de-de-label">
+            <input data-testid="bot-settings-locale-de-de-radio" type="radio" name="locale" id="de-DE" value="German"
               onclick="sendForm('/api-sdk/locale?locale=de-DE')">German<br>
           </label>
-          <label>
-            <input type="radio" name="locale" id="fr-FR" value="French"
+          <label data-testid="bot-settings-locale-fr-fr-label">
+            <input data-testid="bot-settings-locale-fr-fr-radio" type="radio" name="locale" id="fr-FR" value="French"
               onclick="sendForm('/api-sdk/locale?locale=fr-FR')">French<br>
           </label>
-          <label>
-            <input type="radio" name="locale" id="ja-FP" value="Japanese"
+          <label data-testid="bot-settings-locale-ja-jp-label">
+            <input data-testid="bot-settings-locale-ja-jp-radio" type="radio" name="locale" id="ja-FP" value="Japanese"
               onclick="sendForm('/api-sdk/locale?locale=ja-JP')">Japanese<br>
           </label>
         </div>
@@ -457,17 +457,17 @@
         <hr>
       </div>
 
-      <div id="section-time" class="toggleable-section" style="display:none;">
-        <h2 class="center">Time Format</h2>
+      <div data-testid="bot-settings-time-root" id="section-time" class="toggleable-section" style="display:none;">
+        <h2 data-testid="bot-settings-time-heading" class="center">Time Format</h2>
         <hr class="small-hr">
-        <div id="currentTimeSet" class="center"></div>
-        <div style="text-align: left;" class="center">
-          <label>
-            <input type="radio" name="time" id="12 Hour" value="12 Hour"
+        <div data-testid="bot-settings-time-current-group" id="currentTimeSet" class="center"></div>
+        <div data-testid="bot-settings-time-options-group" style="text-align: left;" class="center">
+          <label data-testid="bot-settings-time-12-hour-label">
+            <input data-testid="bot-settings-time-12-hour-radio" type="radio" name="time" id="12 Hour" value="12 Hour"
               onclick="sendForm('/api-sdk/time_format_12')">12 Hour<br>
           </label>
-          <label>
-            <input type="radio" name="time" id="24 Hour" value="24 Hour"
+          <label data-testid="bot-settings-time-24-hour-label">
+            <input data-testid="bot-settings-time-24-hour-radio" type="radio" name="time" id="24 Hour" value="24 Hour"
               onclick="sendForm('/api-sdk/time_format_24')">24 Hour<br>
           </label>
         </div>
@@ -475,17 +475,17 @@
         <hr>
       </div>
 
-      <div id="section-temp" class="toggleable-section" style="display:none;">
-        <h2 class="center">Temp Format</h2>
+      <div data-testid="bot-settings-temp-root" id="section-temp" class="toggleable-section" style="display:none;">
+        <h2 data-testid="bot-settings-temp-heading" class="center">Temp Format</h2>
         <hr class="small-hr">
-        <div id="currentTempFormat" class="center"></div>
-        <div style="text-align: left;" class="center">
-          <label>
-            <input type="radio" name="temp" id="Celsius" value="Celsius"
+        <div data-testid="bot-settings-temp-current-group" id="currentTempFormat" class="center"></div>
+        <div data-testid="bot-settings-temp-options-group" style="text-align: left;" class="center">
+          <label data-testid="bot-settings-temp-celsius-label">
+            <input data-testid="bot-settings-temp-celsius-radio" type="radio" name="temp" id="Celsius" value="Celsius"
               onclick="sendForm('/api-sdk/temp_c')">Celsius<br>
           </label>
-          <label>
-            <input type="radio" name="temp" id="Fahrenheit" value="Fahrenheit"
+          <label data-testid="bot-settings-temp-fahrenheit-label">
+            <input data-testid="bot-settings-temp-fahrenheit-radio" type="radio" name="temp" id="Fahrenheit" value="Fahrenheit"
               onclick="sendForm('/api-sdk/temp_f')">Fahrenheit<br>
           </label>
         </div>
@@ -493,17 +493,17 @@
         <hr>
       </div>
 
-      <div id="section-button" class="toggleable-section" style="display:none;">
-        <h2 class="center">Button Action</h2>
+      <div data-testid="bot-settings-button-root" id="section-button" class="toggleable-section" style="display:none;">
+        <h2 data-testid="bot-settings-button-heading" class="center">Button Action</h2>
         <hr class="small-hr">
-        <div id="currentButton" class="center"></div>
-        <div style="text-align: left;" class="center">
-          <label>
-            <input type="radio" name="but" id="Hey Vector" value="Hey Vector"
+        <div data-testid="bot-settings-button-current-group" id="currentButton" class="center"></div>
+        <div data-testid="bot-settings-button-options-group" style="text-align: left;" class="center">
+          <label data-testid="bot-settings-button-hey-vector-label">
+            <input data-testid="bot-settings-button-hey-vector-radio" type="radio" name="but" id="Hey Vector" value="Hey Vector"
               onclick="sendForm('/api-sdk/button_hey_vector')">Hey Vector<br>
           </label>
-          <label>
-            <input type="radio" name="but" id="Alexa" value="Alexa"
+          <label data-testid="bot-settings-button-alexa-label">
+            <input data-testid="bot-settings-button-alexa-radio" type="radio" name="but" id="Alexa" value="Alexa"
               onclick="sendForm('/api-sdk/button_alexa')">Alexa<br>
           </label>
         </div>
@@ -511,92 +511,92 @@
         <hr>
       </div>
 
-      <div id="section-alexa" class="toggleable-section" style="display:none;">
-        <h2 class="center">Alexa</h2>
+      <div data-testid="bot-settings-alexa-root" id="section-alexa" class="toggleable-section" style="display:none;">
+        <h2 data-testid="bot-settings-alexa-heading" class="center">Alexa</h2>
         <hr class="small-hr">
-        <div id="alexaStatus" class="center"></div>
-        <a class="center" target="_blank" rel="noopener noreferrer"
+        <div data-testid="bot-settings-alexa-status-group" id="alexaStatus" class="center"></div>
+        <a data-testid="bot-settings-alexa-code-link" class="center" target="_blank" rel="noopener noreferrer"
           href="https://amazon.com/code">https://amazon.com/code</a>
         <hr class="small-hr">
-        <div class="center">
-          <button onclick="sendForm('/api-sdk/alexa_sign_in')">Signin Alexa</button>
-          <button onclick="sendForm('/api-sdk/alexa_sign_out')">Signout Alexa</button>
+        <div data-testid="bot-settings-alexa-actions" class="center">
+          <button data-testid="bot-settings-alexa-sign-in-btn" onclick="sendForm('/api-sdk/alexa_sign_in')">Signin Alexa</button>
+          <button data-testid="bot-settings-alexa-sign-out-btn" onclick="sendForm('/api-sdk/alexa_sign_out')">Signout Alexa</button>
         </div>
         <hr>
       </div>
 
-      <div id="section-location" class="toggleable-section" style="display:none;">
-        <h2 class="center">Set Location</h2>
+      <div data-testid="bot-settings-location-root" id="section-location" class="toggleable-section" style="display:none;">
+        <h2 data-testid="bot-settings-location-heading" class="center">Set Location</h2>
         <hr class="small-hr">
-        <div id="currentLocation"></div>
-        <small class="desc">Example: San Francisco, California</small>
-        <div class="center">
-          <input class="tinput" id="locationInput" name="locationInput" type="text" placeholder="Put location here">
+        <div data-testid="bot-settings-location-current-group" id="currentLocation"></div>
+        <small data-testid="bot-settings-location-example-note" class="desc">Example: San Francisco, California</small>
+        <div data-testid="bot-settings-location-input-group" class="center">
+          <input data-testid="bot-settings-location-input" class="tinput" id="locationInput" name="locationInput" type="text" placeholder="Put location here">
         </div>
         <hr class="small-hr">
-        <button onclick="sendLocation()">Submit Location</button>
+        <button data-testid="bot-settings-location-submit-btn" onclick="sendLocation()">Submit Location</button>
         <hr>
       </div>
 
-      <div id="section-timezone" class="toggleable-section" style="display:none;">
-        <h2 style="margin-bottom:0px;">Set Time Zone</h2>
+      <div data-testid="bot-settings-timezone-root" id="section-timezone" class="toggleable-section" style="display:none;">
+        <h2 data-testid="bot-settings-timezone-heading" style="margin-bottom:0px;">Set Time Zone</h2>
         <hr class="small-hr">
-        <div id="currentTimeZone" class="center"></div>
-        <div class="center">
+        <div data-testid="bot-settings-timezone-current-group" id="currentTimeZone" class="center"></div>
+        <div data-testid="bot-settings-timezone-select-group" class="center">
           <!--<input class="tinput" id="tzInput" name="tzInput" type="text" placeholder="Put time zone here">-->
-          <select id="tzInput" value="" class="vec-field">
-            <option value="Pacific/Honolulu">Pacific/Honolulu</option>
-            <option value="America/Juneau">America/Juneau</option>
-            <option value="America/Los_Angeles">America/Los_Angeles</option>
-            <option value="America/Phoenix">America/Phoenix</option>
-            <option value="America/Denver">America/Denver</option>
-            <option value="America/Lima">America/Lima</option>
-            <option value="America/Chicago">America/Chicago</option>
-            <option value="America/Bogota">America/Bogota</option>
-            <option value="America/New_York">America/New_York</option>
-            <option value="America/Argentina/Buenos_Aires">America/Argentina/Buenos_Aires</option>
-            <option value="America/Santiago">America/Santiago</option>
-            <option value="America/Sao_Paulo">America/Sao_Paulo</option>
-            <option value="America/Halifax">America/Halifax</option>
-            <option value="America/St_Johns">America/St_Johns</option>
-            <option value="GMT">GMT</option>
-            <option value="Europe/Lisbon">Europe/Lisbon</option>
-            <option value="Europe/London">Europe/London</option>
-            <option value="Europe/Paris">Europe/Paris</option>
-            <option value="Europe/Athens">Europe/Athens</option>
-            <option value="Europe/Istanbul">Europe/Istanbul</option>
-            <option value="Europe/Moscow">Europe/Moscow</option>
-            <option value="Africa/Lagos">Africa/Lagos</option>
-            <option value="Africa/Harare">Africa/Harare</option>
-            <option value="Africa/Addis_Ababa">Africa/Addis_Ababa</option>
-            <option value="Asia/Dubai">Asia/Dubai</option>
-            <option value="Asia/Tehran">Asia/Tehran</option>
-            <option value="Asia/Karachi">Asia/Karachi</option>
-            <option value="Asia/Kolkata">Asia/Kolkata</option>
-            <option value="Asia/Dhaka">Asia/Dhaka</option>
-            <option value="Asia/Bangkok">Asia/Bangkok</option>
-            <option value="Asia/Jakarta">Asia/Jakarta</option>
-            <option value="Asia/Hong_Kong">Asia/Hong_Kong</option>
-            <option value="Asia/Singapore">Asia/Singapore</option>
-            <option value="Asia/Manila">Asia/Manila</option>
-            <option value="Asia/Seoul">Asia/Seoul</option>
-            <option value="Asia/Tokyo">Asia/Tokyo</option>
-            <option value="Australia/Perth">Australia/Perth</option>
-            <option value="Australia/Darwin">Australia/Darwin</option>
-            <option value="Australia/Adelaide">Australia/Adelaide</option>
-            <option value="Australia/Brisbane">Australia/Brisbane</option>
-            <option value="Australia/Sydney">Australia/Sydney</option>
-            <option value="Australia/Auckland">Australia/Auckland</option>
+          <select data-testid="bot-settings-timezone-select" id="tzInput" value="" class="vec-field">
+            <option data-testid="bot-settings-timezone-pacific-honolulu-item" value="Pacific/Honolulu">Pacific/Honolulu</option>
+            <option data-testid="bot-settings-timezone-america-juneau-item" value="America/Juneau">America/Juneau</option>
+            <option data-testid="bot-settings-timezone-america-los-angeles-item" value="America/Los_Angeles">America/Los_Angeles</option>
+            <option data-testid="bot-settings-timezone-america-phoenix-item" value="America/Phoenix">America/Phoenix</option>
+            <option data-testid="bot-settings-timezone-america-denver-item" value="America/Denver">America/Denver</option>
+            <option data-testid="bot-settings-timezone-america-lima-item" value="America/Lima">America/Lima</option>
+            <option data-testid="bot-settings-timezone-america-chicago-item" value="America/Chicago">America/Chicago</option>
+            <option data-testid="bot-settings-timezone-america-bogota-item" value="America/Bogota">America/Bogota</option>
+            <option data-testid="bot-settings-timezone-america-new-york-item" value="America/New_York">America/New_York</option>
+            <option data-testid="bot-settings-timezone-america-argentina-buenos-aires-item" value="America/Argentina/Buenos_Aires">America/Argentina/Buenos_Aires</option>
+            <option data-testid="bot-settings-timezone-america-santiago-item" value="America/Santiago">America/Santiago</option>
+            <option data-testid="bot-settings-timezone-america-sao-paulo-item" value="America/Sao_Paulo">America/Sao_Paulo</option>
+            <option data-testid="bot-settings-timezone-america-halifax-item" value="America/Halifax">America/Halifax</option>
+            <option data-testid="bot-settings-timezone-america-st-johns-item" value="America/St_Johns">America/St_Johns</option>
+            <option data-testid="bot-settings-timezone-gmt-item" value="GMT">GMT</option>
+            <option data-testid="bot-settings-timezone-europe-lisbon-item" value="Europe/Lisbon">Europe/Lisbon</option>
+            <option data-testid="bot-settings-timezone-europe-london-item" value="Europe/London">Europe/London</option>
+            <option data-testid="bot-settings-timezone-europe-paris-item" value="Europe/Paris">Europe/Paris</option>
+            <option data-testid="bot-settings-timezone-europe-athens-item" value="Europe/Athens">Europe/Athens</option>
+            <option data-testid="bot-settings-timezone-europe-istanbul-item" value="Europe/Istanbul">Europe/Istanbul</option>
+            <option data-testid="bot-settings-timezone-europe-moscow-item" value="Europe/Moscow">Europe/Moscow</option>
+            <option data-testid="bot-settings-timezone-africa-lagos-item" value="Africa/Lagos">Africa/Lagos</option>
+            <option data-testid="bot-settings-timezone-africa-harare-item" value="Africa/Harare">Africa/Harare</option>
+            <option data-testid="bot-settings-timezone-africa-addis-ababa-item" value="Africa/Addis_Ababa">Africa/Addis_Ababa</option>
+            <option data-testid="bot-settings-timezone-asia-dubai-item" value="Asia/Dubai">Asia/Dubai</option>
+            <option data-testid="bot-settings-timezone-asia-tehran-item" value="Asia/Tehran">Asia/Tehran</option>
+            <option data-testid="bot-settings-timezone-asia-karachi-item" value="Asia/Karachi">Asia/Karachi</option>
+            <option data-testid="bot-settings-timezone-asia-kolkata-item" value="Asia/Kolkata">Asia/Kolkata</option>
+            <option data-testid="bot-settings-timezone-asia-dhaka-item" value="Asia/Dhaka">Asia/Dhaka</option>
+            <option data-testid="bot-settings-timezone-asia-bangkok-item" value="Asia/Bangkok">Asia/Bangkok</option>
+            <option data-testid="bot-settings-timezone-asia-jakarta-item" value="Asia/Jakarta">Asia/Jakarta</option>
+            <option data-testid="bot-settings-timezone-asia-hong-kong-item" value="Asia/Hong_Kong">Asia/Hong_Kong</option>
+            <option data-testid="bot-settings-timezone-asia-singapore-item" value="Asia/Singapore">Asia/Singapore</option>
+            <option data-testid="bot-settings-timezone-asia-manila-item" value="Asia/Manila">Asia/Manila</option>
+            <option data-testid="bot-settings-timezone-asia-seoul-item" value="Asia/Seoul">Asia/Seoul</option>
+            <option data-testid="bot-settings-timezone-asia-tokyo-item" value="Asia/Tokyo">Asia/Tokyo</option>
+            <option data-testid="bot-settings-timezone-australia-perth-item" value="Australia/Perth">Australia/Perth</option>
+            <option data-testid="bot-settings-timezone-australia-darwin-item" value="Australia/Darwin">Australia/Darwin</option>
+            <option data-testid="bot-settings-timezone-australia-adelaide-item" value="Australia/Adelaide">Australia/Adelaide</option>
+            <option data-testid="bot-settings-timezone-australia-brisbane-item" value="Australia/Brisbane">Australia/Brisbane</option>
+            <option data-testid="bot-settings-timezone-australia-sydney-item" value="Australia/Sydney">Australia/Sydney</option>
+            <option data-testid="bot-settings-timezone-australia-auckland-item" value="Australia/Auckland">Australia/Auckland</option>
           </select>
         </div>
         <br />
         <hr class="small-hr">
-        <button onclick="sendTimeZone()">Submit Time Zone</button>
+        <button data-testid="bot-settings-timezone-submit-btn" onclick="sendTimeZone()">Submit Time Zone</button>
         <hr>
       </div>
       </aside>
 
-      <div id="botStats" class="vb-hidden"></div>
+      <div data-testid="sdk-dashboard-bot-stats-list" id="botStats" class="vb-hidden"></div>
 
     </div>
   </div>

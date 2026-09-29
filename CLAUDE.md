@@ -96,7 +96,7 @@ Conventions that the existing code depends on:
 
 ## Assets are a contract
 
-`assets/webroot/` is owned by this repo from 2026-09-28, by the user's decision. It is edited here directly, it is no longer synced from the Go fork, and it differs from the fork on purpose. `cargo xtask sync-assets` neither copies it nor reports it as drift.
+`assets/webroot/` is owned by this repo from 2026-09-28, by the user's decision. It is edited here directly, it is no longer synced from the Go fork, and it differs from the fork on purpose. `cargo xtask sync-assets` neither copies it nor reports it as drift. Its elements carry `data-testid` attributes in the scheme set out in `docs/frontend-testids.md`, and new markup follows that scheme.
 
 The rest of `assets/` is still vendored byte-identically from the Go repo and synced with xtask: `intent-data/`, `epod/`, `weather-map.json`, `stttest.pcm` and `pod-bot-install.sh`. Never hand-edit those; change the Go repo and re-sync. `assets/MANIFEST.sha256` is maintained by xtask and lists every file under `assets/`, with webroot hashed from this repo's own copy. Text assets are stored with CRLF, as the Windows Go checkout has them, and `.gitattributes` sets `* -text` so Git converts no line endings anywhere in this repo. Keep CRLF when editing webroot.
 

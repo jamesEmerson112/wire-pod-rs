@@ -19,6 +19,7 @@ function refreshFaceList() {
         var option = document.createElement("option");
         option.text = "No faces found. You must tell Vector your name.";
         option.value = "none";
+        option.setAttribute("data-testid", "bot-settings-faces-none-item");
         areThereFaces = false;
         x.add(option);
       } else {
@@ -29,6 +30,7 @@ function refreshFaceList() {
           var option = document.createElement("option");
           option.text = jsonResp[i]["name"];
           option.value = jsonResp[i]["face_id"] + ":" + jsonResp[i]["name"];
+          option.setAttribute("data-testid", "bot-settings-faces-item-" + jsonResp[i]["face_id"]);
           x.add(option);
         }
         if (showFaceButtons == true) {

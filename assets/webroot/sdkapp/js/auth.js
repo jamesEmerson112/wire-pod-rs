@@ -10,6 +10,7 @@ getSDKInfo().then((jsonResp) => {
     var option = document.createElement("option");
     option.text = jsonResp["robots"][i]["esn"];
     option.value = jsonResp["robots"][i]["esn"];
+    option.setAttribute("data-testid", "bot-picker-bot-item-" + jsonResp["robots"][i]["esn"]);
     botList.add(option);
   }
 }).catch((error) => {

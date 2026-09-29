@@ -11,5 +11,6 @@ docs/*
 !docs/robot-api.md
 !docs/robot-api.html
 !docs/pending-upstream.md
+!docs/frontend-testids.md
 !docs/archive/
 .gstack/

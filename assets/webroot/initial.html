@@ -16,68 +16,68 @@
   <meta http-equiv="Expires" content="Thu, 01 Jan 1970 00:00:00 GMT">
 </head>
 
-<body>
-  <div id="outer">
-    <div id="content" class="">
-      <h1>Wire-Pod Setup</h1>
+<body data-testid="setup-page-root">
+  <div data-testid="setup-page-inner" id="outer">
+    <div data-testid="setup-content-body" id="content" class="">
+      <h1 data-testid="setup-title-heading">Wire-Pod Setup</h1>
       <hr />
-      <div id="setup-status"></div>
-      <div id="config-options" style="display: block">
-        <p>
+      <div data-testid="setup-status-group" id="setup-status"></div>
+      <div data-testid="setup-options-body" id="config-options" style="display: block">
+        <p data-testid="setup-options-lead">
           Welcome to wire-pod! Configure these
           options to your liking then click the "Submit Settings" button at the
           bottom to finish setting up wire-pod.
         </p>
         <hr />
-        <div id="section-conn" style="display: block">
-          <h3>Connection Method</h3>
+        <div data-testid="setup-conn-root" id="section-conn" style="display: block">
+          <h3 data-testid="setup-conn-heading">Connection Method</h3>
           <hr class="small-hr">
-          <div class="center" id="connStatus"></div>
-          <select onchange="checkConn()" name="connSelection" id="connSelection">
-            <option value="ep">
+          <div data-testid="setup-conn-status-group" class="center" id="connStatus"></div>
+          <select data-testid="setup-conn-select" onchange="checkConn()" name="connSelection" id="connSelection">
+            <option data-testid="setup-conn-ep-item" value="ep">
               Escape Pod (recommended for regular, production robots)
             </option>
-            <option value="ip">
+            <option data-testid="setup-conn-ip-item" value="ip">
               IP Address (recommended for OSKR/dev-unlocked robots)
             </option>
           </select>
-          <div class="center" id="portViz" style="display: none">
-            <label for="portInput">Input custom port here (default is 443)</label>
-            <input type="text" id="portInput" name="portInput" placeholder="443" />
+          <div data-testid="setup-conn-port-group" class="center" id="portViz" style="display: none">
+            <label data-testid="setup-conn-port-label" for="portInput">Input custom port here (default is 443)</label>
+            <input data-testid="setup-conn-port-input" type="text" id="portInput" name="portInput" placeholder="443" />
           </div>
           <hr />
         </div>
 
-        <div id="section-language" style="display: none">
-          <h3>Speech-to-Text Language</h3>
+        <div data-testid="setup-language-root" id="section-language" style="display: none">
+          <h3 data-testid="setup-language-heading">Speech-to-Text Language</h3>
           <hr class="small-hr">
-          <div class="center" id="languageStatus"></div>
-          <div id="languageSelectionDiv">
-            <select name="languageSelection" id="languageSelection">
-              <option value="en-US">English (US)</option>
-              <option value="it-IT">Italian (IT)</option>
-              <option value="es-ES">Spanish (ES)</option>
-              <option value="fr-FR">French (FR)</option>
-              <option value="de-DE">German (DE)</option>
-              <option value="pt-BR">Portuguese (BR)</option>
-              <option value="pl-PL">Polish (PL)</option>
-              <option value="tr-TR">Turkish (TR)</option>
-              <option value="ko-KR">Korean (KR)</option>
-              <option value="zh-CN">Chinese (CN)</option>
-              <option value="ru-RU">Russian (RU)</option>
-              <option value="nt-NL">Dutch (NL)</option>
-              <option value="uk-UA">Ukrainian (UA)</option>
-              <option value="vi-VN">VietNamese (VN)</option>
+          <div data-testid="setup-language-status-group" class="center" id="languageStatus"></div>
+          <div data-testid="setup-language-select-group" id="languageSelectionDiv">
+            <select data-testid="setup-language-select" name="languageSelection" id="languageSelection">
+              <option data-testid="setup-language-en-us-item" value="en-US">English (US)</option>
+              <option data-testid="setup-language-it-it-item" value="it-IT">Italian (IT)</option>
+              <option data-testid="setup-language-es-es-item" value="es-ES">Spanish (ES)</option>
+              <option data-testid="setup-language-fr-fr-item" value="fr-FR">French (FR)</option>
+              <option data-testid="setup-language-de-de-item" value="de-DE">German (DE)</option>
+              <option data-testid="setup-language-pt-br-item" value="pt-BR">Portuguese (BR)</option>
+              <option data-testid="setup-language-pl-pl-item" value="pl-PL">Polish (PL)</option>
+              <option data-testid="setup-language-tr-tr-item" value="tr-TR">Turkish (TR)</option>
+              <option data-testid="setup-language-ko-kr-item" value="ko-KR">Korean (KR)</option>
+              <option data-testid="setup-language-zh-cn-item" value="zh-CN">Chinese (CN)</option>
+              <option data-testid="setup-language-ru-ru-item" value="ru-RU">Russian (RU)</option>
+              <option data-testid="setup-language-nt-nl-item" value="nt-NL">Dutch (NL)</option>
+              <option data-testid="setup-language-uk-ua-item" value="uk-UA">Ukrainian (UA)</option>
+              <option data-testid="setup-language-vi-vn-item" value="vi-VN">VietNamese (VN)</option>
             </select>
           </div>
           <hr />
         </div>
 
-        <small class="desc">Weather and Knowledge Graph settings can be configured in the Server Settings page once
+        <small data-testid="setup-options-note" class="desc">Weather and Knowledge Graph settings can be configured in the Server Settings page once
           wire-pod is set up.</small>
         <hr />
 
-        <button onclick="sendSetupInfo()">
+        <button data-testid="setup-submit-btn" onclick="sendSetupInfo()">
           Submit Settings
         </button>
       </div>
