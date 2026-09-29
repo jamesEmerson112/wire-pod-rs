@@ -994,7 +994,7 @@ body:has(.vb-wrap) {
   color: var(--vb-muted);
 }
 
-/* vectorbrain.js toggles this on #vbBattPct at 20% or below. */
+/* vectorbrain.js toggles this on #vbBattPct at or below the go-home percent. */
 #vbBattPct.vb-batt-low {
   color: var(--vb-alert);
 }

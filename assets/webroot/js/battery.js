@@ -42,6 +42,66 @@ function getBatteryPercentage(voltage) {
   return Math.max(0, Math.min(100, Math.round(percentage))); // Ensure percentage is within 0-100%
 }
 
+// The server's time-based energy estimate, which replaces the voltage curve
+// wherever it has one: the voltage he reports does not change off the charger.
+// Answers the /api-energy body, or null when the route is missing (the Go
+// server answers 404), fails, or answers something other than an object.
+async function getEnergyEstimate(serial) {
+  try {
+    const response = await fetch("/api-energy?serial=" + encodeURIComponent(serial));
+    if (!response.ok) {
+      return null;
+    }
+    const energy = await response.json();
+    return energy && typeof energy === "object" ? energy : null;
+  } catch {
+    return null;
+  }
+}
+
+// Whether an /api-energy body has an estimate to show. A robot the server has
+// never seen answers known: false and no energy_percent.
+function energyUsable(energy) {
+  return !!energy && typeof energy.energy_percent === "number" && isFinite(energy.energy_percent);
+}
+
+// The percentage at or below which the battery reads low: the watchdog's
+// go-home threshold when the server answers one, otherwise Go's default of 25.
+// 0 means the watchdog is disabled and nothing reads low.
+function energyLowPercent(energy) {
+  if (energy && typeof energy.gohome_percent === "number") {
+    return energy.gohome_percent;
+  }
+  return 25;
+}
+
+// Puts the estimate on a home page battery card: the bar's width and colour and
+// the tooltip. Answers false and changes nothing when there is no estimate, so
+// the caller keeps the voltage display.
+function showEnergyEstimate(serial, energy, batteryLevel, tooltip, volts) {
+  if (!energyUsable(energy)) {
+    return false;
+  }
+  const percent = Math.max(0, Math.min(100, Math.round(energy.energy_percent)));
+  const lowAt = energyLowPercent(energy);
+  let level = 2;
+  if (lowAt > 0 && energy.energy_percent <= lowAt) {
+    level = 0;
+  } else if (percent < 50) {
+    level = 1;
+  }
+  const batteryLevelClass = "batteryLevel battery" + level;
+  if (batteryLevel.className !== batteryLevelClass) {
+    batteryLevel.className = batteryLevelClass;
+  }
+  batteryLevel.style.width = percent + "%";
+
+  const left = energy.on_charger ? "charging" : `about ${Math.round(energy.minutes_left)} min left`;
+  const reported = typeof volts === "number" ? `<br/> (${volts.toFixed(2)}V reported)` : "";
+  tooltip.innerHTML = `<b data-testid="home-bot-battery-serial-text-${serial}">${serial}</b><br/><span data-testid="home-bot-battery-estimate-text-${serial}">${energy.guess ? "~" : ""}${percent}%<br/>${left}</span>${reported}`;
+  return true;
+}
+
 
 async function updateBatteryInfo(serial, i) {
   var batteryContainer = document.getElementsByClassName("batteryContainer")[i];
@@ -80,33 +140,41 @@ async function updateBatteryInfo(serial, i) {
     return;
   }
 
-  let batteryPercentage = getBatteryPercentage(batteryStatus["battery_volts"]);
-  if (batteryStatus["battery_level"] === 2) {
-    // If the battery level is 2, we'll update the colors to reflect the battery level
-    if (batteryPercentage < 20) {
-      batteryStatus["battery_level"] = 0;
-    } else if (batteryPercentage < 50) {
-      batteryStatus["battery_level"] = 1;
+  const energy = await getEnergyEstimate(serial);
+  const estimated = showEnergyEstimate(serial, energy, batteryLevel, tooltip, batteryStatus["battery_volts"]);
+  if (estimated) {
+    if (batteryStatus["battery_level"] === 1 && !batteryStatus["is_on_charger_platform"]) {
+      vectorFace.style.backgroundImage = "url(/assets/homeface.gif)";
     }
-  } else if (batteryStatus["battery_level"] === 1 && !batteryStatus["is_on_charger_platform"]) {
-    // Cap the battery level at 15% if the battery level is 1 and not charging
-    vectorFace.style.backgroundImage = "url(/assets/homeface.gif)";
-    batteryPercentage = Math.min(15, batteryPercentage);
-    batteryStatus["battery_level"] = 0; // Set color to red
+  } else {
+    let batteryPercentage = getBatteryPercentage(batteryStatus["battery_volts"]);
+    if (batteryStatus["battery_level"] === 2) {
+      // If the battery level is 2, we'll update the colors to reflect the battery level
+      if (batteryPercentage < 20) {
+        batteryStatus["battery_level"] = 0;
+      } else if (batteryPercentage < 50) {
+        batteryStatus["battery_level"] = 1;
+      }
+    } else if (batteryStatus["battery_level"] === 1 && !batteryStatus["is_on_charger_platform"]) {
+      // Cap the battery level at 15% if the battery level is 1 and not charging
+      vectorFace.style.backgroundImage = "url(/assets/homeface.gif)";
+      batteryPercentage = Math.min(15, batteryPercentage);
+      batteryStatus["battery_level"] = 0; // Set color to red
+    }
+
+
+    // Set the battery level based on the battery_level value and handle the rest in css
+    const batteryLevelClass = "batteryLevel battery" + batteryStatus["battery_level"];
+    if (batteryLevel.className !== batteryLevelClass) {
+      batteryLevel.className = batteryLevelClass;
+    }
+
+    // Update the battery level
+    batteryLevel.style.width = batteryPercentage + "%";
+
+    // Clear tooltip, and replace serial number and the latest voltage
+    tooltip.innerHTML = `<b data-testid="home-bot-battery-serial-text-${serial}">${serial}</b><br/>~${batteryPercentage}%<br/> (${batteryStatus["battery_volts"].toFixed(2)}V)`;
   }
-
-
-  // Set the battery level based on the battery_level value and handle the rest in css
-  const batteryLevelClass = "batteryLevel battery" + batteryStatus["battery_level"];
-  if (batteryLevel.className !== batteryLevelClass) {
-    batteryLevel.className = batteryLevelClass;
-  }
-  
-  // Update the battery level
-  batteryLevel.style.width = batteryPercentage + "%";
-
-  // Clear tooltip, and replace serial number and the latest voltage
-  tooltip.innerHTML = `<b data-testid="home-bot-battery-serial-text-${serial}">${serial}</b><br/>~${batteryPercentage}%<br/> (${batteryStatus["battery_volts"].toFixed(2)}V)`;
 
   // Update the charging status
   if (batteryStatus["is_on_charger_platform"]) {
@@ -125,8 +193,10 @@ async function updateBatteryInfo(serial, i) {
       chargeTimeRemaining.innerHTML = "";
     }else {
       chargeTimeRemaining.innerHTML = "Full";
-      // assume 100% if Full
-      batteryLevel.style.width = "100%";
+      // assume 100% if Full, unless the estimate is showing
+      if (!estimated) {
+        batteryLevel.style.width = "100%";
+      }
       const month = new Date().getMonth();
       const day = new Date().getUTCDate();
       if (month == 0 || month == 11) {
@@ -234,15 +304,18 @@ async function renderBatteryInfo(serial, i = 0) {
     vectorFace.style.backgroundImage = "url(/assets/facegaze.gif)";
   }
 
-  // Set the battery level based on the battery_level value and handle the rest in css
-  batteryLevel.className = "batteryLevel battery" + batteryStatus["battery_level"];
-  const batteryPercentage = getBatteryPercentage(batteryStatus["battery_volts"]);
-  batteryLevel.style.width = batteryPercentage + "%";
+  const energy = await getEnergyEstimate(serial);
+  if (!showEnergyEstimate(serial, energy, batteryLevel, tooltip, batteryStatus["battery_volts"])) {
+    // Set the battery level based on the battery_level value and handle the rest in css
+    batteryLevel.className = "batteryLevel battery" + batteryStatus["battery_level"];
+    const batteryPercentage = getBatteryPercentage(batteryStatus["battery_volts"]);
+    batteryLevel.style.width = batteryPercentage + "%";
 
-  tooltip.innerHTML += `<br/>~${batteryPercentage}%`;
+    tooltip.innerHTML += `<br/>~${batteryPercentage}%`;
 
-  // Add the battery voltage to the tooltip
-  tooltip.innerHTML += `<br/> (${batteryStatus["battery_volts"].toFixed(2)}V)`;
+    // Add the battery voltage to the tooltip
+    tooltip.innerHTML += `<br/> (${batteryStatus["battery_volts"].toFixed(2)}V)`;
+  }
 
   setTimeout(async () => {
     // Re-render the battery information

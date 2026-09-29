@@ -6,10 +6,12 @@
 // so nothing in here may throw into those: every entry point is guarded and a missing
 // element means "this page does not have that part" rather than an error.
 //
-// Reuses two existing globals instead of reimplementing them:
+// Reuses existing globals instead of reimplementing them:
 //   getBatteryStatus(serial)     - sdkapp/js/common.js
 //   getBatteryPercentage(volts)  - ../js/battery.js  (mirrored by bwBatteryPercent in
 //                                  batterywatchdog.go; keep the single source of truth)
+//   getEnergyEstimate(serial), energyUsable(energy), energyLowPercent(energy)
+//                                - ../js/battery.js, shared with the home page's cards
 
 (function () {
   "use strict";
@@ -32,9 +34,6 @@
   // not wake by itself, so retrying forever is pure waste.
   var CAM_MAX_RETRIES = 3;
   var STATUS_FAIL_LIMIT = 3;
-  // Matches the default of APIConfig.Battery.GoHomePercent (batterywatchdog.go), so
-  // the readout turns red before the watchdog sends the robot home, not after.
-  var BATT_LOW_PCT = 25;
 
   // Built from char codes rather than written literally so this file stays pure ASCII:
   // settings.html declares no <meta charset>, so nothing here depends on how it is decoded.
@@ -282,9 +281,104 @@
 
   // ------------------------------------------------------------------------- battery
 
-  function renderBattery(status) {
+  // The last answer of each battery source, replaced when its request settles, so
+  // whichever lands first renders without waiting up to 15s for get_battery.
+  var battStatus = null;
+  var battEnergy = null;
+
+  function energyUsable(energy) {
+    return typeof window.energyUsable === "function" && window.energyUsable(energy);
+  }
+
+  // The watchdog's go-home percent as the server answers it with the estimate, or
+  // the Go default when there is no /api-energy, so the readout turns red before the
+  // watchdog sends the robot home, not after. 0 means the watchdog is disabled.
+  function lowPercent(energy) {
+    return typeof window.energyLowPercent === "function" ? window.energyLowPercent(energy) : 0;
+  }
+
+  function setBattTitle(text) {
+    var item = el("vbBattItem");
+    if (!item) {
+      return;
+    }
+    if (text) {
+      item.setAttribute("title", text);
+    } else {
+      item.removeAttribute("title");
+    }
+  }
+
+  function modelMinutes(minutes, learned) {
+    var figure = typeof minutes === "number" ? Math.round(minutes) + " min" : "unknown";
+    return figure + (learned ? " (learned)" : " (default)");
+  }
+
+  // What the estimate rests on, and the reported voltage for reference only.
+  function estimateTitle(energy, volts) {
+    var lines = ["Energy estimate: time-based, kept by the server"];
+    if (energy.guess) {
+      lines.push("A guess until he next leaves or reaches the charger");
+    }
+    if (!energy.known) {
+      lines.push("Not yet confirmed by a battery poll since the server started");
+    }
+    lines.push(
+      "Runtime " + modelMinutes(energy.runtime_minutes, energy.runtime_learned) +
+        ", charge time " + modelMinutes(energy.charge_minutes, energy.charge_learned)
+    );
+    var lowAt = lowPercent(energy);
+    lines.push(lowAt > 0 ? "Sent home at " + lowAt + "%" : "Go-home watchdog disabled");
+    if (volts !== null) {
+      lines.push(
+        "Reported voltage " + volts.toFixed(2) + "V, for reference only: it does not change off the charger"
+      );
+    }
+    return lines.join("\n");
+  }
+
+  function renderEstimate(energy, volts) {
+    var pctEl = el("vbBattPct");
+    var timeEl = el("vbBattTime");
+    var voltsEl = el("vbBattVolts");
+    var percent = Math.max(0, Math.min(100, Math.round(energy.energy_percent)));
+    var lowAt = lowPercent(energy);
+
+    if (pctEl) {
+      pctEl.textContent = (energy.guess ? "~" : "") + percent + "%";
+      pctEl.classList.toggle("vb-batt-low", lowAt > 0 && energy.energy_percent <= lowAt);
+    }
+    if (timeEl) {
+      if (energy.on_charger) {
+        timeEl.textContent = "charging";
+      } else if (typeof energy.minutes_left === "number") {
+        timeEl.textContent = "about " + Math.round(energy.minutes_left) + " min left";
+      } else {
+        timeEl.textContent = "";
+      }
+    }
+    if (voltsEl) {
+      voltsEl.textContent = "";
+    }
+    setBattTitle(estimateTitle(energy, volts));
+  }
+
+  function renderBattery(status, energy) {
     var pctEl = el("vbBattPct");
     var voltsEl = el("vbBattVolts");
+    var timeEl = el("vbBattTime");
+    var volts = status && typeof status.battery_volts === "number" ? status.battery_volts : null;
+
+    if (energyUsable(energy)) {
+      renderEstimate(energy, volts);
+      return;
+    }
+
+    // The voltage display, as it was before the estimate existed.
+    if (timeEl) {
+      timeEl.textContent = "";
+    }
+    setBattTitle("");
 
     if (!status) {
       if (pctEl) {
@@ -297,7 +391,6 @@
       return;
     }
 
-    var volts = typeof status.battery_volts === "number" ? status.battery_volts : null;
 
     var percent = null;
     // Only called with a real reading. getBatteryPercentage answers a flat 70 for a
@@ -313,9 +406,10 @@
       }
     }
 
+    var lowAt = lowPercent(energy);
     if (pctEl) {
       pctEl.textContent = percent === null ? "--" : percent + "%";
-      pctEl.classList.toggle("vb-batt-low", percent !== null && percent <= BATT_LOW_PCT);
+      pctEl.classList.toggle("vb-batt-low", percent !== null && lowAt > 0 && percent <= lowAt);
     }
 
     if (voltsEl) {
@@ -330,25 +424,45 @@
     }
   }
 
+  function renderBatteryNow() {
+    renderBattery(battStatus, battEnergy);
+  }
+
   function pollBattery() {
     if (!vbEsn || (!el("vbBattPct") && !el("vbBattVolts"))) {
       return null;
     }
-    if (typeof window.getBatteryStatus !== "function") {
-      return null;
-    }
     // getBatteryStatus calls .json() unconditionally, so it throws on the plain-text
     // "error: ..." body /api-sdk/ returns for an unreachable robot.
-    return Promise.resolve()
+    var status = Promise.resolve()
       .then(function () {
-        return window.getBatteryStatus(vbEsn);
+        return typeof window.getBatteryStatus === "function" ? window.getBatteryStatus(vbEsn) : null;
       })
-      .then(function (status) {
-        renderBattery(status && typeof status === "object" ? status : null);
+      .then(
+        function (answer) {
+          battStatus = answer && typeof answer === "object" ? answer : null;
+        },
+        function () {
+          battStatus = null;
+        }
+      )
+      .then(renderBatteryNow);
+    // The estimate only reads the server's model and never dials the robot.
+    // getEnergyEstimate answers null for the Go server's 404 and for any failure.
+    var energy = Promise.resolve()
+      .then(function () {
+        return typeof window.getEnergyEstimate === "function" ? window.getEnergyEstimate(vbEsn) : null;
       })
-      .catch(function () {
-        renderBattery(null);
-      });
+      .then(
+        function (answer) {
+          battEnergy = answer || null;
+        },
+        function () {
+          battEnergy = null;
+        }
+      )
+      .then(renderBatteryNow);
+    return Promise.all([status, energy]);
   }
 
   // -------------------------------------------------------------------------- camera
@@ -1171,7 +1285,7 @@
     }
 
     renderStatus(null);
-    renderBattery(null);
+    renderBattery(null, null);
     initDrawer();
     initLogChips();
     renderLogs();
