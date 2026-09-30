@@ -488,7 +488,7 @@ From the 24-hour soak of 2026-09-28 to 29, with the energy build installed:
 - **Windows handles leaked,** rising steadily from 240 to 3,186 in the soak, about 116 an hour. Fixed on 2026-09-30:
   - **The cause.** The mDNS registration loop built a new `mdns-sd` daemon every 30.6 seconds, as Go builds a new zeroconf server, and mdns-sd 0.11.5 leaks about 1.3 handles for every daemon it builds and shuts down.
   - **The measurement.** A scratch program measured +1.34 handles per daemon lifecycle, whether or not the shutdown was awaited. A single daemon reused for 400 register-and-unregister cycles showed no per-cycle growth.
-  - **The fix.** The registration loop and the browse loop now each keep one daemon, and re-register or re-browse on it. That sends the network the same goodbye and announcement.
+  - **The fix.** The registration loop and the browse loop now each keep one daemon, and re-register or re-browse on it. That sends the network the same goodbye and announcement. Deployed at 10:57 that day, the server held 229 to 233 handles through its first hour, about 117 re-registrations, and `escapepod.local` resolved in all 61 one-minute checks.
   - **Routes ruled out.** Bursts of 300 requests to the web routes, and of 60 to the battery call and the map snapshot, left the count unchanged.
 - **Stale heartbeat connections.** The robot's port-80 connections stay open after he reboots without closing them; there were four after two deaths. Nothing times them out. It is small, but it grows with every reboot.
 - **The robot during the soak.** He died twice off the charger:
