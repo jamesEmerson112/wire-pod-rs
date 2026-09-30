@@ -47,10 +47,13 @@ fn get_outbound_ip() -> IpAddr {
 
 pub async fn post_mdns_when_new_vector() {
     tokio::time::sleep(Duration::from_secs(5)).await;
+    // Go builds a new resolver for each 80-second browse. One daemon serves
+    // them all here, because mdns-sd 0.11.5 leaks about 1.3 handles for every
+    // daemon it builds and shuts down.
+    let Ok(daemon) = ServiceDaemon::new() else {
+        return;
+    };
     loop {
-        let Ok(daemon) = ServiceDaemon::new() else {
-            return;
-        };
         let entries = match daemon.browse(VECTOR_SERVICE) {
             Ok(entries) => entries,
             Err(err) => {
@@ -60,20 +63,25 @@ pub async fn post_mdns_when_new_vector() {
             }
         };
         let deadline = tokio::time::Instant::now() + Duration::from_secs(80);
+        let mut found = false;
         loop {
             match tokio::time::timeout_at(deadline, entries.recv_async()).await {
                 Ok(Ok(ServiceEvent::ServiceFound(_, _) | ServiceEvent::ServiceResolved(_))) => {
-                    tracing::info!(target: "mdns", "Vector discovered on network, broadcasting mDNS");
-                    let _ = daemon.shutdown();
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                    post_mdns_now();
-                    return;
+                    found = true;
+                    break;
                 }
                 Ok(Ok(_)) => continue,
                 Ok(Err(_)) | Err(_) => break,
             }
         }
-        let _ = daemon.shutdown();
+        let _ = daemon.stop_browse(VECTOR_SERVICE);
+        if found {
+            tracing::info!(target: "mdns", "Vector discovered on network, broadcasting mDNS");
+            let _ = daemon.shutdown();
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            post_mdns_now();
+            return;
+        }
     }
 }
 
@@ -99,19 +107,37 @@ pub async fn post_mdns() {
         }
     });
     tracing::info!(target: "mdns", "Registering escapepod.local on network (loop)");
+    // Go shuts its zeroconf server down and builds a new one every cycle. Here
+    // one daemon lives across cycles and the record is unregistered and
+    // registered again, which sends the same goodbye and announcement, because
+    // mdns-sd 0.11.5 leaks about 1.3 handles for every daemon it builds and
+    // shuts down: 117 an hour at this pace. A daemon whose register fails is
+    // replaced on the next cycle.
+    let mut daemon: Option<ServiceDaemon> = None;
     loop {
         let ip_addr = get_outbound_ip();
-        let daemon = match ServiceDaemon::new().and_then(|daemon| {
-            let info = service_info(ip_addr)?;
-            daemon.register(info)?;
-            Ok(daemon)
-        }) {
-            Ok(daemon) => Some(daemon),
-            Err(err) => {
-                tracing::info!(target: "mdns", "{err}");
-                None
+        if daemon.is_none() {
+            match ServiceDaemon::new() {
+                Ok(built) => daemon = Some(built),
+                Err(err) => tracing::info!(target: "mdns", "{err}"),
             }
-        };
+        }
+        let mut registered = None;
+        if let Some(current) = &daemon {
+            let outcome = service_info(ip_addr).and_then(|info| {
+                let fullname = info.get_fullname().to_owned();
+                current.register(info).map(|()| fullname)
+            });
+            match outcome {
+                Ok(fullname) => registered = Some(fullname),
+                Err(err) => {
+                    tracing::info!(target: "mdns", "{err}");
+                    if let Some(failed) = daemon.take() {
+                        let _ = failed.shutdown();
+                    }
+                }
+            }
+        }
         if std::env::var("PRINT_MDNS").as_deref() == Ok("true") {
             tracing::info!(target: "mdns", "mDNS broadcasted");
         }
@@ -121,8 +147,10 @@ pub async fn post_mdns() {
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
-        if let Some(daemon) = daemon {
-            let _ = daemon.shutdown();
+        if let (Some(current), Some(fullname)) = (&daemon, registered)
+            && let Ok(done) = current.unregister(&fullname)
+        {
+            let _ = tokio::time::timeout(Duration::from_secs(2), done.recv_async()).await;
         }
         tokio::time::sleep(Duration::from_millis(333)).await;
     }

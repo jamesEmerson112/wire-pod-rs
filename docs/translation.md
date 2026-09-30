@@ -477,6 +477,26 @@ section 3.8.
 
 Translation reached 100% of its scope on 2026-09-20. Stage 2 of the M6 plan triages this list.
 
+From the 24-hour soak of 2026-09-28 to 29, with the energy build installed:
+
+- Passed:
+  - **Uptime.** The server answered all 26 hourly checks, and kept running afterwards.
+  - **Memory.** Private memory held at 664 to 672 MB.
+  - **mDNS.** `escapepod.local` resolved in every check.
+  - **Behaviour control.** It was granted and released 6 times each.
+  - **jdocs and errors.** The jdoc versions never went backwards, and no error lines were logged.
+- **Windows handles leaked,** rising steadily from 240 to 3,186 in the soak, about 116 an hour. Fixed on 2026-09-30:
+  - **The cause.** The mDNS registration loop built a new `mdns-sd` daemon every 30.6 seconds, as Go builds a new zeroconf server, and mdns-sd 0.11.5 leaks about 1.3 handles for every daemon it builds and shuts down.
+  - **The measurement.** A scratch program measured +1.34 handles per daemon lifecycle, whether or not the shutdown was awaited. A single daemon reused for 400 register-and-unregister cycles showed no per-cycle growth.
+  - **The fix.** The registration loop and the browse loop now each keep one daemon, and re-register or re-browse on it. That sends the network the same goodbye and announcement.
+  - **Routes ruled out.** Bursts of 300 requests to the web routes, and of 60 to the battery call and the map snapshot, left the count unchanged.
+- **Stale heartbeat connections.** The robot's port-80 connections stay open after he reboots without closing them; there were four after two deaths. Nothing times them out. It is small, but it grows with every reboot.
+- **The robot during the soak.** He died twice off the charger:
+  - once stuck on a wire
+  - once when the watchdog's 3-minute drive home could not find the charger in low light
+
+  The energy estimate warned on time both times. It also accepted a false FULL at 3.60 V right after a deep drain, which still needs a voltage floor. The drive home at 00:40 on 2026-09-29 failed within 5 s with `ResourceExhausted: h2 protocol error`, which is not explained yet.
+
 From the first deploy on 2026-09-28, with the tray build installed over Go by
 `scripts/deploy-windows.ps1`:
 
