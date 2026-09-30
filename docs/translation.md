@@ -496,6 +496,13 @@ From the 24-hour soak of 2026-09-28 to 29, with the energy build installed:
   - once when the watchdog's 3-minute drive home could not find the charger in low light
 
   The energy estimate warned on time both times. It also accepted a false FULL at 3.60 V right after a deep drain, which still needs a voltage floor. The drive home at 00:40 on 2026-09-29 failed within 5 s with `ResourceExhausted: h2 protocol error`, which is not explained yet.
+- **The HTTP/2 connection to him is torn down, and it kills him.** It happened again on 2026-09-30, twice in one trip:
+  - **11:13:32.** 102 s into the watchdog's `DriveOnCharger`, that call and the nav map feed failed in the same second with `ResourceExhausted: h2 protocol error`.
+  - **11:24:47.** The control request and the map feed failed together with `h2 protocol error: error reading a body from connection`.
+
+  So the whole connection dies, not one call. tonic maps the HTTP/2 reason `ENHANCE_YOUR_CALM` to `ResourceExhausted`. The leading hypothesis, not yet tested, is the h2 crate's own limits on stream resets per connection: `max_concurrent_reset_streams` and `max_local_error_reset_streams`. The server closes many streams on that one long-lived connection (map feed streams, state stream reopens, camera and event streams), and h2 ends a connection with `ENHANCE_YOUR_CALM` when too many resets pile up. The other candidate is the robot's grpc-go gateway sending `GOAWAY ENHANCE_YOUR_CALM`. Both times it turned an on-time energy warning into a death, so it is the first thing to fix before the cutover.
+- **The low-battery flag leaves about four minutes.** Twice the robot went silent 3 min 56 s and 4 min 21 s after the watchdog saw the flag, matching the power controller's 250 s countdown (`analog.cpp:347`). The energy estimate's 0% is that flag, so its minutes left come before this reserve. Once the flag is up his own emergency behaviour takes control, and the watchdog cannot drive him.
+- **Death records.** Each death is recorded under `E:\wire-pod-debug\deaths\` by a watcher run from the session scratchpad. A record holds the last map and pose, the path, the energy estimate and the log tail. The first is `20260930-122932`. In that death he was set down after a pick-up at 11:02, never saw the charger again, and stayed within 38 cm of where he was set down.
 
 From the first deploy on 2026-09-28, with the tray build installed over Go by
 `scripts/deploy-windows.ps1`:
