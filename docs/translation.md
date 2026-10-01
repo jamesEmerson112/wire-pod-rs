@@ -426,19 +426,31 @@ left with at least 30%. It is also learned from his docking voltage, which is a
 live reading, after a trip of at least five minutes that used at least 20
 percentage points. That reading is converted with the web UI's curve, rescaled
 so that 3.62 V is 0 and 4.1 V is 100. The charge time is learned when his level
-reads FULL on the charger, provided he docked with at most 70%. Each lesson is
-averaged with the old value and clamped between 5 minutes and 6 hours. A robot
-seen for the first time starts from a guess taken from his reported voltage.
+reads FULL on the charger, provided he docked with at most 70%. A lesson from
+his low-battery flag or from FULL moves the old value halfway to what it
+observed. A docking reading moves the runtime only a quarter of the way, because
+it proved noisier. Every result is clamped between 5 minutes and 6 hours. A
+robot seen for the first time starts from a guess taken from his reported
+voltage.
+
+Since 2026-09-30 a FULL reading below 3.9 V is ignored, because right after a
+deep drain his firmware reports FULL on an empty battery; a real full charge
+reads 4.00 to 4.06 V. When he leaves the charger with a reading below 3.9 V,
+the trip starts from the lower of the estimate and that voltage.
 
 The watchdog now also sends him home when the energy is at or below
-`gohome_percent`, on the first such poll. That trigger shares Go's attempts,
-cooldowns and drive home, and the voltage trigger stays exactly as Go has it.
-One thing around it differs from Go. A voltage of 0, which a robot switched on
-off the charger reports until he first docks, makes Go reset its counters and
-skip the poll. Here it only keeps the voltage trigger from firing, so the energy
-trigger still can. His low-battery flag triggers nothing in the watchdog,
-because his own emergency behaviour already drives him home at that point and
-outranks SDK control. The model is kept per robot in `energy.json` at the root
+`gohome_percent`, on the first such poll, using Go's drive home. Since
+2026-09-30 that trigger has no cooldown and no give-up. A drive home that does
+not reach the charger is tried again on the next poll, 30 seconds later,
+because a low estimate means minutes are left, and Go's 10-minute cooldown let
+him die after one failed search. The trigger stands down once his low-battery
+flag is up, because his own emergency behaviour then takes over: the robot's
+mode selector ranks `EmergencyMode` above `SDKOverrideAll` and interrupts it.
+The voltage trigger stays exactly as Go has it, with its hysteresis, cooldown
+and give-up. One more thing around it differs from Go. A voltage of 0, which a
+robot switched on off the charger reports until he first docks, makes Go reset
+its counters and skip the poll. Here it only keeps the voltage trigger from
+firing, so the energy trigger still can. The model is kept per robot in `energy.json` at the root
 of the data directory. Go never reads that file, so a rollback to Go is
 unaffected. `GET /api-energy?serial=<esn>` on the web port answers the estimate
 as JSON, with the watchdog's `gohome_percent` beside it; it never dials the
@@ -495,7 +507,7 @@ From the 24-hour soak of 2026-09-28 to 29, with the energy build installed:
   - once stuck on a wire
   - once when the watchdog's 3-minute drive home could not find the charger in low light
 
-  The energy estimate warned on time both times. It also accepted a false FULL at 3.60 V right after a deep drain, which still needs a voltage floor. The drive home at 00:40 on 2026-09-29 failed within 5 s with `ResourceExhausted: h2 protocol error`, which is not explained yet.
+  The energy estimate warned on time both times. It also accepted a false FULL at 3.60 V right after a deep drain; since 2026-09-30 a FULL below 3.9 V is ignored. The drive home at 00:40 on 2026-09-29 failed within 5 s with `ResourceExhausted: h2 protocol error`, which is not explained yet.
 - **The HTTP/2 connection to him is torn down, and it kills him.** It happened again on 2026-09-30, twice in one trip:
   - **11:13:32.** 102 s into the watchdog's `DriveOnCharger`, that call and the nav map feed failed in the same second with `ResourceExhausted: h2 protocol error`.
   - **11:24:47.** The control request and the map feed failed together with `h2 protocol error: error reading a body from connection`.
@@ -503,6 +515,15 @@ From the 24-hour soak of 2026-09-28 to 29, with the energy build installed:
   So the whole connection dies, not one call. tonic maps the HTTP/2 reason `ENHANCE_YOUR_CALM` to `ResourceExhausted`. The leading hypothesis, not yet tested, is the h2 crate's own limits on stream resets per connection: `max_concurrent_reset_streams` and `max_local_error_reset_streams`. The server closes many streams on that one long-lived connection (map feed streams, state stream reopens, camera and event streams), and h2 ends a connection with `ENHANCE_YOUR_CALM` when too many resets pile up. The other candidate is the robot's grpc-go gateway sending `GOAWAY ENHANCE_YOUR_CALM`. Both times it turned an on-time energy warning into a death, so it is the first thing to fix before the cutover.
 - **The low-battery flag leaves about four minutes.** Twice the robot went silent 3 min 56 s and 4 min 21 s after the watchdog saw the flag, matching the power controller's 250 s countdown (`analog.cpp:347`). The energy estimate's 0% is that flag, so its minutes left come before this reserve. Once the flag is up his own emergency behaviour takes control, and the watchdog cannot drive him.
 - **Death records.** Each death is recorded under `E:\wire-pod-debug\deaths\` by a watcher run from the session scratchpad. A record holds the last map and pose, the path, the energy estimate and the log tail. The first is `20260930-122932`. In that death he was set down after a pick-up at 11:02, never saw the charger again, and stayed within 38 cm of where he was set down.
+- **Two more deaths that afternoon, neither from the HTTP/2 teardown.** In both the energy trigger fired on time and the estimate was right: his low-battery flag rose 19 minutes after he left the charger, against a learned runtime of 18.
+  - **15:32, the charger not found** (record `20260930-153429`). The trigger fired at 15:24:11 at 22%. The 3-minute drive home ran out at 15:27:11 without finding the charger, and the 10-minute cooldown after a failed drive meant there was no second try. His flag rose at 15:28:41 and he went silent four minutes later. His map was in frame 5, and his last pose was not localized to anything.
+  - **18:03, stuck on a wire** (record `20260930-180501`). The trigger fired at 17:51:54, when he was about 37 cm from the charger. The drive home carried him about 1 m away instead, and he lost his localization on the way. There he caught on a wire and moved less than 7 cm from 17:53:41 until his flag rose at 17:58:55. Retrying cannot free a robot that is caught, so this is left for fleet management, which needs to detect it.
+  - **A false FULL again.** Revived on the charger, he read FULL at 16:13, a minute after he first answered, and the estimate took it as a full charge. At 16:22 he left "at ~100%" with a reading of 3.62 V, and his flag rose a minute later.
+  - **Fixed the same evening.**
+    - **The drive home.** The energy trigger now retries a failed drive home on the next poll, with no cooldown or give-up, and stands down at his low-battery flag.
+    - **The false FULL.** The estimate ignores a FULL below 3.9 V, and starts a trip from the voltage when he leaves below it.
+    - **Docking readings.** They teach the runtime at a quarter weight, because one 3.79 V reading had moved it from 17 to 27 minutes.
+    - **The go-home point.** It was raised from 25% to 40% in this PC's `apiConfig.json`, which leaves about 7 minutes before his flag, room for two searches.
 
 From the first deploy on 2026-09-28, with the tray build installed over Go by
 `scripts/deploy-windows.ps1`:
