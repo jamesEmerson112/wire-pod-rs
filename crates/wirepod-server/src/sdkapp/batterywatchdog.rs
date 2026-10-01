@@ -16,7 +16,9 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_util::sync::CancellationToken;
 use wirepod_core::logger::COMP_SDK;
 use wirepod_core::robot::energy::{BatteryObservation, battery_percent};
-use wirepod_core::{AppState, BotStatusKind, Esn, GetRobotError, RobotEntry, Timings};
+use wirepod_core::{
+    AppState, BatteryLevel, BotStatusKind, Esn, GetRobotError, RobotEntry, Timings,
+};
 use wirepod_proto::anki::vector::external_interface as pb;
 use wirepod_vector::motionlog::{control_granted, control_released};
 use wirepod_vector::{logged, sdk_client, status_error};
@@ -35,6 +37,7 @@ struct BotState {
     have_reading: bool,
     last_home: bool,
     sent_home: bool,
+    low_flag_noted: bool,
 }
 
 struct CachedConn {
@@ -197,21 +200,38 @@ impl Watchdog {
                 bot.attempts = 0;
                 bot.cooling_until = Duration::ZERO;
                 bot.sent_home = false;
+                bot.low_flag_noted = false;
                 return;
             }
             // Go also resets and returns on a voltage of 0 or less, which a
             // robot switched on off the charger reports until he first docks.
             // Here it only keeps the voltage trigger from firing, so the energy
             // trigger still can.
-            if cooling || threshold <= 0 {
+            if threshold <= 0 {
                 bot.consecutive_low = 0;
                 return;
             }
             // The estimate is not noisy, so it sends him home on the first
-            // poll at or below the threshold.
-            let energy_low =
+            // poll at or below the threshold. Unlike the voltage trigger it has
+            // no cooldown and no give-up, because a low estimate means minutes
+            // left, and it stands down once his LOW flag is up, because his
+            // emergency behaviour then outranks SDK control.
+            let mut energy_low =
                 estimate.filter(|estimate| estimate.energy_percent <= f64::from(threshold));
-            if energy_low.is_none() {
+            if energy_low.is_some() && reading.level == BatteryLevel::Low {
+                if !bot.low_flag_noted {
+                    bot.low_flag_noted = true;
+                    tracing::info!(target: COMP_SDK, bot = %esn, "battery watchdog: his low-battery flag is up; leaving the drive home to his own emergency behaviour");
+                }
+                energy_low = None;
+            }
+            if energy_low.is_some() {
+                bot.consecutive_low = 0;
+            } else {
+                if cooling {
+                    bot.consecutive_low = 0;
+                    return;
+                }
                 if volts > 0.0 && percent <= threshold {
                     bot.consecutive_low += 1;
                 } else {
@@ -220,18 +240,19 @@ impl Watchdog {
                 if bot.consecutive_low < HYSTERESIS_N {
                     return;
                 }
+                bot.consecutive_low = 0;
+                if bot.attempts >= MAX_ATTEMPTS {
+                    bot.attempts = 0;
+                    bot.cooling_until = now + timings.battery_give_up_cooldown;
+                    tracing::warn!(target: COMP_SDK, bot = %esn, "battery watchdog: charger not reached after repeated attempts, backing off");
+                    return;
+                }
+                bot.attempts += 1;
             }
-            bot.consecutive_low = 0;
-            if bot.attempts >= MAX_ATTEMPTS {
-                bot.attempts = 0;
-                bot.cooling_until = now + timings.battery_give_up_cooldown;
-                tracing::warn!(target: COMP_SDK, bot = %esn, "battery watchdog: charger not reached after repeated attempts, backing off");
-                return;
-            }
-            bot.attempts += 1;
             bot.docking = true;
             energy_low
         };
+        let by_energy = energy_low.is_some();
 
         match energy_low {
             Some(estimate) => {
@@ -251,7 +272,9 @@ impl Watchdog {
         let bot = states.entry(esn.clone()).or_default();
         bot.docking = false;
         bot.sent_home = reached;
-        bot.cooling_until = state.clock().now() + timings.battery_cooldown;
+        if !by_energy {
+            bot.cooling_until = state.clock().now() + timings.battery_cooldown;
+        }
         if reached {
             bot.attempts = 0;
         }
@@ -417,7 +440,7 @@ mod tests {
     use wirepod_core::robot::energy::{DEFAULT_RUNTIME_SECS, EnergyStore, energy_from_volts};
     use wirepod_core::test_support::{FakeConnFactory, FakeRobotConn, ManualWallClock};
     use wirepod_core::wallclock::{WallClock, WallTime};
-    use wirepod_core::{BotInfo, RobotConn, RobotConnFactory};
+    use wirepod_core::{BotInfo, Clock, ManualClock, RobotConn, RobotConnFactory};
     use wirepod_vector::test_support::{FakeRobotHandle, spawn_fake_robot};
 
     use crate::test_support::one_robot;
@@ -429,8 +452,12 @@ mod tests {
     const T0: WallTime = WallTime::new(1_789_862_400, 0);
     /// What his controller reports off the charger: the last on-charger reading.
     const FROZEN: f32 = 4.05;
+    const LOW: i32 = 1;
     const NOMINAL: i32 = 2;
     const FULL: i32 = 3;
+    const COOLDOWN: Duration = Duration::from_secs(600);
+    const GIVE_UP_COOLDOWN: Duration = Duration::from_secs(1800);
+    const POLL: Duration = Duration::from_secs(30);
 
     /// A directory under the system temporary directory, removed when dropped.
     /// Every test that polls saves `energy.json` into one of these.
@@ -460,11 +487,12 @@ mod tests {
         }
     }
 
+    /// Go's cooldowns, on a monotonic clock the test moves by hand.
     async fn fixture(
         addr: SocketAddr,
         dir: &TempDir,
         gohome_percent: i32,
-    ) -> (Arc<AppState>, Arc<ManualWallClock>) {
+    ) -> (Arc<AppState>, Arc<ManualWallClock>, Arc<ManualClock>) {
         let target = addr.to_string();
         let bot_info: BotInfo = serde_json::from_str(&format!(
             concat!(
@@ -478,14 +506,18 @@ mod tests {
         let factory: Arc<dyn RobotConnFactory> =
             Arc::new(TonicConnFactory::with_endpoint_builder(plaintext_builder()));
         let wall = Arc::new(ManualWallClock::new(T0));
+        let clock = Arc::new(ManualClock::new());
         let state = AppState::builder(factory)
             .bot_info(bot_info)
             .timings(Timings {
                 battery_poll: Duration::from_millis(1),
                 battery_rpc: Duration::from_secs(2),
                 battery_dock: Duration::from_secs(2),
+                battery_cooldown: COOLDOWN,
+                battery_give_up_cooldown: GIVE_UP_COOLDOWN,
                 ..Timings::instant()
             })
+            .clock(Arc::clone(&clock) as Arc<dyn Clock>)
             .wall(Arc::clone(&wall) as Arc<dyn WallClock>)
             .energy(dir.energy())
             .build();
@@ -496,7 +528,7 @@ mod tests {
                 .pinger()
                 .note_check(info, &target, state.clock().as_ref())
         });
-        (state, wall)
+        (state, wall, clock)
     }
 
     async fn wait_for_rpc(handle: &FakeRobotHandle, method: &str) {
@@ -511,6 +543,62 @@ mod tests {
 
     fn sent_home(handle: &FakeRobotHandle) -> bool {
         handle.methods().contains(&"drive_on_charger")
+    }
+
+    fn count(handle: &FakeRobotHandle, method: &str) -> usize {
+        handle
+            .methods()
+            .iter()
+            .filter(|called| **called == method)
+            .count()
+    }
+
+    /// Off the charger with his voltage frozen, so the estimate is the only
+    /// trigger, and drained until it has sent him home once. Every drive fails,
+    /// because his charger flags stay down.
+    async fn sent_home_on_the_estimate(
+        dir: &TempDir,
+    ) -> (
+        Arc<AppState>,
+        Arc<ManualWallClock>,
+        FakeRobotHandle,
+        Watchdog,
+    ) {
+        let (addr, handle) = spawn_fake_robot().await;
+        handle.set_battery(NOMINAL, FROZEN);
+        let (state, wall, _clock) = fixture(addr, dir, 25).await;
+        let watchdog = Watchdog::default();
+        watchdog.poll_bot(&state, SERIAL).await;
+        drain_to_25_percent(&watchdog, &state, &wall, &handle).await;
+        assert_eq!(count(&handle, "drive_on_charger"), 1);
+        (state, wall, handle, watchdog)
+    }
+
+    /// Starts the estimate at 100% as he leaves the charger. While the wall
+    /// clock stands still it stays there, so only the voltage can fire.
+    fn hold_the_estimate_full(state: &AppState) {
+        let now_ms = energy::now_ms(state);
+        for (home, level) in [(true, FULL), (false, NOMINAL)] {
+            state.energy().observe(
+                SERIAL,
+                BatteryObservation {
+                    now_ms,
+                    home,
+                    level,
+                    volts: 4.1,
+                },
+            );
+        }
+    }
+
+    /// Fills the voltage trigger's three low readings and reports whether the
+    /// third sent him home.
+    async fn three_polls(watchdog: &Watchdog, state: &AppState, handle: &FakeRobotHandle) -> bool {
+        let before = count(handle, "drive_on_charger");
+        for _ in 0..3 {
+            watchdog.poll_bot(state, SERIAL).await;
+        }
+        count(handle, "drive_on_charger") > before
     }
 
     /// Runs the off-charger estimate down to 25%: one poll half a minute above
@@ -580,7 +668,7 @@ mod tests {
         let (addr, handle) = spawn_fake_robot().await;
         // 3.6V is about 44%, under the 50% threshold, and off the charger.
         handle.set_battery(1, 3.6);
-        let (state, _wall) = fixture(addr, &dir, 50).await;
+        let (state, _wall, _clock) = fixture(addr, &dir, 50).await;
         let cancel = CancellationToken::new();
 
         start(Arc::clone(&state), cancel.clone());
@@ -598,19 +686,8 @@ mod tests {
         let dir = TempDir::new("voltage");
         let (addr, handle) = spawn_fake_robot().await;
         handle.set_battery(NOMINAL, 3.6);
-        let (state, _wall) = fixture(addr, &dir, 50).await;
-        let now_ms = energy::now_ms(&state);
-        for (home, level) in [(true, FULL), (false, NOMINAL)] {
-            state.energy().observe(
-                SERIAL,
-                BatteryObservation {
-                    now_ms,
-                    home,
-                    level,
-                    volts: 4.1,
-                },
-            );
-        }
+        let (state, _wall, _clock) = fixture(addr, &dir, 50).await;
+        hold_the_estimate_full(&state);
         let watchdog = Watchdog::default();
 
         for _ in 0..2 {
@@ -632,7 +709,7 @@ mod tests {
         // In this order, because `set_battery` clears the charger flags.
         handle.set_battery(NOMINAL, FROZEN);
         handle.set_charger(true, true);
-        let (state, wall) = fixture(addr, &dir, 25).await;
+        let (state, wall, _clock) = fixture(addr, &dir, 25).await;
         let watchdog = Watchdog::default();
 
         // First sight on the charger guesses from his voltage.
@@ -661,13 +738,101 @@ mod tests {
         let (addr, handle) = spawn_fake_robot().await;
         // With no voltage his level reads FULL until he docks.
         handle.set_battery(FULL, 0.0);
-        let (state, wall) = fixture(addr, &dir, 25).await;
+        let (state, wall, _clock) = fixture(addr, &dir, 25).await;
         let watchdog = Watchdog::default();
 
         watchdog.poll_bot(&state, SERIAL).await;
         assert!(!sent_home(&handle));
 
         drain_to_25_percent(&watchdog, &state, &wall, &handle).await;
+        handle.shutdown().await;
+    }
+
+    /// The monotonic clock stands still, so a cooldown after the first drive
+    /// would hold the second off.
+    #[tokio::test]
+    async fn a_failed_drive_home_on_the_estimate_is_tried_again_on_the_next_poll() {
+        let dir = TempDir::new("retry");
+        let (state, wall, handle, watchdog) = sent_home_on_the_estimate(&dir).await;
+
+        wall.advance(POLL);
+        watchdog.poll_bot(&state, SERIAL).await;
+        assert_eq!(count(&handle, "drive_on_charger"), 2);
+
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn the_estimate_never_backs_off_however_many_drives_home_fail() {
+        let dir = TempDir::new("no-give-up");
+        let (state, wall, handle, watchdog) = sent_home_on_the_estimate(&dir).await;
+
+        let polls = 2 * MAX_ATTEMPTS as usize;
+        for _ in 0..polls {
+            wall.advance(POLL);
+            watchdog.poll_bot(&state, SERIAL).await;
+        }
+        assert_eq!(count(&handle, "drive_on_charger"), 1 + polls);
+
+        handle.shutdown().await;
+    }
+
+    /// His emergency behaviour outranks SDK control once the flag is up, so the
+    /// watchdog no longer takes control to drive him.
+    #[tokio::test]
+    async fn no_drive_home_starts_while_his_low_battery_flag_is_up() {
+        let dir = TempDir::new("low-flag");
+        let (state, wall, handle, watchdog) = sent_home_on_the_estimate(&dir).await;
+        wall.advance(POLL);
+        watchdog.poll_bot(&state, SERIAL).await;
+        assert_eq!(count(&handle, "drive_on_charger"), 2);
+
+        handle.set_battery(LOW, FROZEN);
+        for _ in 0..3 {
+            wall.advance(POLL);
+            watchdog.poll_bot(&state, SERIAL).await;
+        }
+        assert_eq!(count(&handle, "drive_on_charger"), 2);
+        assert_eq!(count(&handle, "BehaviorControl"), 2);
+
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn the_voltage_trigger_keeps_gos_cooldown_and_give_up() {
+        let dir = TempDir::new("voltage-cooldown");
+        let (addr, handle) = spawn_fake_robot().await;
+        handle.set_battery(NOMINAL, 3.6);
+        let (state, _wall, clock) = fixture(addr, &dir, 50).await;
+        hold_the_estimate_full(&state);
+        let watchdog = Watchdog::default();
+
+        for attempt in 1..=MAX_ATTEMPTS {
+            assert!(
+                three_polls(&watchdog, &state, &handle).await,
+                "attempt {attempt} was not made"
+            );
+            assert!(
+                !three_polls(&watchdog, &state, &handle).await,
+                "attempt {attempt} was repeated inside the cooldown"
+            );
+            clock.advance(COOLDOWN);
+        }
+        assert!(
+            !three_polls(&watchdog, &state, &handle).await,
+            "a fourth attempt instead of the give-up"
+        );
+        clock.advance(GIVE_UP_COOLDOWN - Duration::from_secs(1));
+        assert!(
+            !three_polls(&watchdog, &state, &handle).await,
+            "an attempt inside the give-up"
+        );
+        clock.advance(Duration::from_secs(1));
+        assert!(
+            three_polls(&watchdog, &state, &handle).await,
+            "no attempt after the give-up"
+        );
+
         handle.shutdown().await;
     }
 }
