@@ -32,6 +32,10 @@ pub const DEFAULT_RUNTIME_SECS: u64 = 20 * 60;
 pub const DEFAULT_CHARGE_SECS: u64 = 60 * 60;
 /// His power controller's low-battery line (`syscon/src/analog.cpp:342`).
 pub const LOW_LINE_VOLTS: f32 = 3.62;
+/// The least voltage at which a FULL on the charger is believed. Right after a
+/// deep drain his firmware reports FULL on an empty battery; a real full charge
+/// reads 4.00 to 4.06 V.
+pub const FULL_FLOOR_VOLTS: f32 = 3.9;
 
 const ENERGY_FILE_MODE: u32 = 0o644;
 /// The voltages taken as a real reading rather than a missing one.
@@ -50,6 +54,10 @@ const MIN_LOW_START: f64 = 30.0;
 const MAX_FULL_START: f64 = 70.0;
 const MIN_LEARNED_SECS: u64 = 5 * 60;
 const MAX_LEARNED_SECS: u64 = 6 * 60 * 60;
+/// How far LOW and FULL move what they teach toward what they observed.
+const FIRM_LESSON: f64 = 0.5;
+/// How far a docking reading moves the runtime: less, as it is noisier.
+const DOCK_LESSON: f64 = 0.25;
 
 /// must match getBatteryPercentage in webroot/js/battery.js so the trigger
 /// percent agrees with what the web UI shows
@@ -148,6 +156,8 @@ pub enum EnergyEvent {
         charge: Option<(f64, f64)>,
         charge_minutes: f64,
     },
+    /// A FULL on the charger below [`FULL_FLOOR_VOLTS`], told once a stay.
+    FullIgnored { volts: f32 },
 }
 
 impl fmt::Display for EnergyEvent {
@@ -246,6 +256,10 @@ impl fmt::Display for EnergyEvent {
                     None => write!(f, "; charge time kept at {} min", whole(*charge_minutes)),
                 }
             }
+            Self::FullIgnored { volts } => write!(
+                f,
+                "energy: his battery reports full at {volts:.2}V, too low to be a real charge; ignoring it"
+            ),
         }
     }
 }
@@ -299,6 +313,9 @@ struct Model {
     low_seen: bool,
     /// FULL has been dealt with on this stay.
     full_seen: bool,
+    /// A FULL below the floor has been told on this stay. Not saved, so a
+    /// restart mid-stay may tell it once more.
+    full_ignored: bool,
     /// Loaded from `energy.json` and not observed since.
     restored: bool,
 }
@@ -321,6 +338,7 @@ impl Model {
             guess: true,
             low_seen: false,
             full_seen: false,
+            full_ignored: false,
             restored: false,
         }
     }
@@ -353,6 +371,7 @@ impl Model {
         self.anchor(now_ms, energy);
         if on_charger {
             self.full_seen = false;
+            self.full_ignored = false;
         } else {
             self.low_seen = false;
         }
@@ -366,16 +385,16 @@ impl Model {
         !self.guess && elapsed_s >= MIN_LESSON_SECS
     }
 
-    fn learn_runtime(&mut self, observed_s: f64) -> (f64, f64) {
+    fn learn_runtime(&mut self, observed_s: f64, weight: f64) -> (f64, f64) {
         let old = self.runtime_s;
-        self.runtime_s = blend(old, observed_s);
+        self.runtime_s = blend(old, observed_s, weight);
         self.runtime_learned = true;
         (minutes(old), minutes(self.runtime_s))
     }
 
     fn learn_charge(&mut self, observed_s: f64) -> (f64, f64) {
         let old = self.charge_s;
-        self.charge_s = blend(old, observed_s);
+        self.charge_s = blend(old, observed_s, FIRM_LESSON);
         self.charge_learned = true;
         (minutes(old), minutes(self.charge_s))
     }
@@ -403,7 +422,12 @@ impl Model {
         }
         match (self.on_charger, obs.home) {
             (true, false) => {
-                let energy = self.energy_at(now);
+                let mut energy = self.energy_at(now);
+                // The leaving poll's voltage is the last one from the stay, and a
+                // low one caps a stay that an ignored FULL or the clock overrated.
+                if LIVE_VOLTS.contains(&obs.volts) && obs.volts < FULL_FLOOR_VOLTS {
+                    energy = energy.min(energy_from_volts(obs.volts));
+                }
                 self.start(false, now, energy);
                 self.guess = false;
                 events.push(EnergyEvent::LeftCharger {
@@ -419,7 +443,7 @@ impl Model {
                     let measured = energy_from_volts(obs.volts);
                     let drop = self.anchor_energy - measured;
                     let runtime = (self.can_learn(elapsed_s) && drop >= MIN_DOCK_DROP)
-                        .then(|| self.learn_runtime(elapsed_s * 100.0 / drop));
+                        .then(|| self.learn_runtime(elapsed_s * 100.0 / drop, DOCK_LESSON));
                     (Some(measured), runtime)
                 } else {
                     (None, None)
@@ -445,7 +469,7 @@ impl Model {
             let elapsed_s = self.elapsed_s(now);
             let start = self.anchor_energy;
             let runtime = (self.can_learn(elapsed_s) && start >= MIN_LOW_START)
-                .then(|| self.learn_runtime(elapsed_s * 100.0 / start));
+                .then(|| self.learn_runtime(elapsed_s * 100.0 / start, FIRM_LESSON));
             self.anchor(now, 0.0);
             self.low_seen = true;
             self.guess = false;
@@ -456,6 +480,13 @@ impl Model {
             });
         }
         if self.on_charger && obs.level == LEVEL_FULL && !self.full_seen {
+            if obs.volts < FULL_FLOOR_VOLTS {
+                // Left unseen, so a real FULL later in the stay still counts.
+                if !std::mem::replace(&mut self.full_ignored, true) {
+                    events.push(EnergyEvent::FullIgnored { volts: obs.volts });
+                }
+                return;
+            }
             let elapsed_s = self.elapsed_s(now);
             let start = self.anchor_energy;
             let charge = (self.can_learn(elapsed_s) && start <= MAX_FULL_START)
@@ -514,14 +545,16 @@ impl Model {
             guess: saved.guess,
             low_seen: saved.low_seen,
             full_seen: saved.full_seen,
+            full_ignored: false,
             restored: true,
         }
     }
 }
 
-/// `new = (old + observed) / 2`, held to 5 min ..= 6 h.
-fn blend(old: u64, observed_s: f64) -> u64 {
-    ((old as f64 + observed_s) / 2.0)
+/// `new = old + (observed - old) * weight`, held to 5 min ..= 6 h.
+fn blend(old: u64, observed_s: f64, weight: f64) -> u64 {
+    let old = old as f64;
+    (old + (observed_s - old) * weight)
         .clamp(MIN_LEARNED_SECS as f64, MAX_LEARNED_SECS as f64)
         .round() as u64
 }

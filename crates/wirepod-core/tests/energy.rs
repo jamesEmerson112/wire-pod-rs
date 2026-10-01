@@ -41,11 +41,16 @@ fn on(now_ms: u64, level: i32, volts: f32) -> BatteryObservation {
 }
 
 fn off(now_ms: u64, level: i32) -> BatteryObservation {
+    off_reading(now_ms, level, FROZEN)
+}
+
+/// Off the charger with the reading his last on-charger poll left behind.
+fn off_reading(now_ms: u64, level: i32, volts: f32) -> BatteryObservation {
     BatteryObservation {
         now_ms,
         home: false,
         level,
-        volts: FROZEN,
+        volts,
     }
 }
 
@@ -215,7 +220,7 @@ fn full_teaches_the_charge_time_once_a_stay_and_not_from_a_stay_that_started_hig
 fn full_in_the_docking_poll_teaches_nothing() {
     let store = store();
     left_full(&store);
-    let events = store.observe(SERIAL, on(at(100), FULL, 3.7));
+    let events = store.observe(SERIAL, on(at(100), FULL, 4.05));
     let [
         EnergyEvent::ReachedCharger { .. },
         EnergyEvent::Full { charge, .. },
@@ -248,10 +253,11 @@ fn a_docking_reading_with_voltage_to_spare_lengthens_the_runtime_after_a_long_tr
         panic!("{events:?}");
     };
     assert_eq!((*off_minutes, *estimate, *reading), (30.0, 0.0, measured));
-    // Thirty minutes spent 100 - measured points, blended with the old 20.
+    // Thirty minutes spent 100 - measured points, a quarter of the way from
+    // the old 20.
     let taught = 30.0 * 100.0 / (100.0 - measured);
     assert_eq!(*old, 20.0);
-    assert!((new - (20.0 + taught) / 2.0).abs() < 0.02, "{new}");
+    assert!((new - (20.0 + (taught - 20.0) / 4.0)).abs() < 0.02, "{new}");
     let snapshot = store.snapshot(SERIAL, at(90)).unwrap();
     assert!(snapshot.on_charger && snapshot.runtime_learned);
     assert_eq!(snapshot.energy_percent, measured);
@@ -289,6 +295,150 @@ fn a_docking_reading_teaches_nothing_after_a_short_trip_or_out_of_range() {
     let snapshot = unusable.snapshot(SERIAL, at(90)).unwrap();
     assert!(!snapshot.runtime_learned);
     assert_eq!(snapshot.energy_percent, 0.0);
+}
+
+/// LOW moves the runtime half of the way to what it saw, and a docking reading
+/// a quarter of the way.
+#[test]
+fn a_docking_reading_moves_the_runtime_a_quarter_of_the_way_and_low_half_of_it() {
+    let store = store();
+    left_full(&store);
+
+    // Forty minutes from full to LOW teaches 40 against the old 20.
+    assert_eq!(
+        store.observe(SERIAL, off(at(100), LOW)),
+        [EnergyEvent::Low {
+            off_minutes: 40.0,
+            runtime: Some((20.0, 30.0)),
+            runtime_minutes: 30.0,
+        }]
+    );
+
+    // Docked empty with no usable reading, charged full, and off at 100%.
+    store.observe(SERIAL, on(at(110), NOMINAL, 0.0));
+    store.observe(SERIAL, on(at(170), FULL, 4.05));
+    store.observe(SERIAL, off(at(170), NOMINAL));
+
+    // Twenty minutes spent 100 - measured points.
+    let measured = energy_from_volts(3.85);
+    let taught = 20.0 * 100.0 / (100.0 - measured);
+    let events = store.observe(SERIAL, on(at(190), NOMINAL, 3.85));
+    let [
+        EnergyEvent::ReachedCharger {
+            runtime: Some((old, new)),
+            ..
+        },
+    ] = events.as_slice()
+    else {
+        panic!("{events:?}");
+    };
+    assert_eq!(*old, 30.0);
+    assert!((new - (30.0 + (taught - 30.0) / 4.0)).abs() < 0.02, "{new}");
+}
+
+/// Right after a deep drain his firmware reports FULL on an empty battery.
+#[test]
+fn a_full_below_the_floor_is_ignored_and_told_once_a_stay() {
+    let store = store();
+    left_full(&store);
+    store.observe(SERIAL, off(at(90), LOW));
+
+    let events = store.observe(SERIAL, on(at(100), FULL, 3.60));
+    assert_eq!(
+        events,
+        [
+            EnergyEvent::ReachedCharger {
+                off_minutes: 10.0,
+                estimate: 0.0,
+                measured: Some(0.0),
+                volts: 3.60,
+                runtime: None,
+            },
+            EnergyEvent::FullIgnored { volts: 3.60 },
+        ]
+    );
+    assert_eq!(
+        events[1].to_string(),
+        "energy: his battery reports full at 3.60V, too low to be a real charge; ignoring it"
+    );
+    assert!(store.observe(SERIAL, on(at(103), FULL, 3.61)).is_empty());
+
+    // Six minutes of a sixty-minute charge from empty, not 100%.
+    let snapshot = store.snapshot(SERIAL, at(106)).unwrap();
+    assert!(close(snapshot.energy_percent, 10.0));
+    assert!(!snapshot.charge_learned && close(snapshot.charge_minutes, 60.0));
+
+    // A FULL at 4.0V later in the same stay is a real one.
+    assert_eq!(
+        store.observe(SERIAL, on(at(150), FULL, 4.0)),
+        [EnergyEvent::Full {
+            on_minutes: 50.0,
+            charge: Some((60.0, 55.0)),
+            charge_minutes: 55.0,
+        }]
+    );
+    assert_eq!(
+        store.snapshot(SERIAL, at(150)).unwrap().energy_percent,
+        100.0
+    );
+}
+
+/// The 16:22 departure: revived on the charger at 3.60V, a false FULL, and
+/// off nine minutes later at 3.62V with his low-battery flag a minute after.
+#[test]
+fn leaving_below_the_floor_after_an_ignored_full_starts_the_trip_near_empty() {
+    let store = store();
+    left_full(&store);
+    store.observe(SERIAL, off(at(90), LOW));
+    store.observe(SERIAL, on(at(100), FULL, 3.60));
+    assert!(store.observe(SERIAL, on(at(109), FULL, 3.62)).is_empty());
+    assert!(close(
+        store.snapshot(SERIAL, at(109)).unwrap().energy_percent,
+        15.0
+    ));
+
+    assert_eq!(
+        store.observe(SERIAL, off_reading(at(109), FULL, 3.62)),
+        [EnergyEvent::LeftCharger {
+            energy: 0.0,
+            minutes_left: 0.0,
+            runtime_minutes: 25.0,
+        }]
+    );
+    assert_eq!(
+        store.observe(SERIAL, off_reading(at(110), LOW, 3.62)),
+        [EnergyEvent::Low {
+            off_minutes: 1.0,
+            runtime: None,
+            runtime_minutes: 25.0,
+        }]
+    );
+
+    // The next stay tells its own ignored FULL.
+    let events = store.observe(SERIAL, on(at(120), FULL, 3.65));
+    assert_eq!(
+        events.last(),
+        Some(&EnergyEvent::FullIgnored { volts: 3.65 })
+    );
+}
+
+/// A real full charge rests at 4.00 to 4.06V, and leaving there keeps 100%.
+#[test]
+fn leaving_above_the_floor_after_a_real_full_starts_at_a_hundred() {
+    let store = store();
+    left_full(&store);
+    store.observe(SERIAL, off(at(90), LOW));
+    store.observe(SERIAL, on(at(100), NOMINAL, 0.0));
+    store.observe(SERIAL, on(at(150), FULL, 4.06));
+
+    assert_eq!(
+        store.observe(SERIAL, off_reading(at(160), NOMINAL, 4.06)),
+        [EnergyEvent::LeftCharger {
+            energy: 100.0,
+            minutes_left: 25.0,
+            runtime_minutes: 25.0,
+        }]
+    );
 }
 
 #[test]
@@ -420,6 +570,48 @@ async fn a_restart_resumes_from_energy_json_or_notices_a_change_while_down() {
     assert!(close(snapshot.energy_percent, 75.0));
 }
 
+/// A mid-stay model as the code before the FULL floor wrote it loads, starts
+/// with no FULL told on its stay, and saves back unchanged.
+#[tokio::test]
+async fn an_energy_json_in_the_current_format_still_loads() {
+    let dir = TempDir::new("current-format");
+    let file = dir.0.join("energy.json");
+    let saved = format!(
+        concat!(
+            r#"{{"00303f28":{{"runtime_secs":1140,"runtime_learned":true,"#,
+            r#""charge_secs":3840,"charge_learned":true,"on_charger":true,"#,
+            r#""anchor_ms":{},"anchor_energy_tenths":250,"guess":false,"#,
+            r#""low_seen":false,"full_seen":false}}}}"#
+        ),
+        at(100)
+    );
+    std::fs::write(&file, &saved).unwrap();
+    let store = EnergyStore::load(&DataDir::rooted(&dir.0)).await;
+
+    // Sixteen minutes of a 64-minute charge from 25%.
+    let snapshot = store.snapshot(SERIAL, at(116)).expect("loaded");
+    assert!(!snapshot.known && snapshot.on_charger && !snapshot.guess);
+    assert_eq!(snapshot.energy_percent, 50.0);
+    assert_eq!(
+        (snapshot.runtime_minutes, snapshot.charge_minutes),
+        (19.0, 64.0)
+    );
+    assert!(snapshot.runtime_learned && snapshot.charge_learned);
+    assert_eq!(
+        store.observe(SERIAL, on(at(116), FULL, 3.62)),
+        [
+            EnergyEvent::Resumed {
+                on_charger: true,
+                energy: 50.0,
+            },
+            EnergyEvent::FullIgnored { volts: 3.62 },
+        ]
+    );
+
+    store.save().await.expect("save");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), saved);
+}
+
 #[tokio::test]
 async fn an_unreadable_energy_json_starts_empty() {
     let dir = TempDir::new("unreadable");
@@ -535,6 +727,10 @@ fn every_event_reads_as_the_log_line() {
                 charge_minutes: 55.0,
             },
             "energy: charged full after 10 min on the charger; charge time kept at 55 min",
+        ),
+        (
+            EnergyEvent::FullIgnored { volts: 3.62 },
+            "energy: his battery reports full at 3.62V, too low to be a real charge; ignoring it",
         ),
     ];
     for (event, line) in lines {
